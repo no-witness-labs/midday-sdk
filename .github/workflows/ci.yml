@@ -33,4 +33,4 @@ jobs:
         run: pnpm build
 
       - name: Generate docs
-        run: pnpm docs
+        run: pnpm docgen

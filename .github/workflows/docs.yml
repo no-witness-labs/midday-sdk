@@ -37,7 +37,7 @@ jobs:
         run: pnpm build
 
       - name: Generate docs (HTML)
-        run: pnpm docs:html
+        run: pnpm docgen:html
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
