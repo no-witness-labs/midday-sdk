@@ -1,0 +1,85 @@
+{
+  "name": "@no-witness-labs/midday-sdk",
+  "version": "0.1.0",
+  "description": "Developer-friendly SDK for building dapps on Midnight Network",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "docs",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist docs",
+    "type-check": "tsc --noEmit",
+    "lint": "eslint src/",
+    "docgen": "typedoc",
+    "docgen:html": "typedoc --options typedoc.html.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "changeset": "changeset",
+    "changeset:version": "changeset version",
+    "changeset:publish": "pnpm build && changeset publish",
+    "prepublishOnly": "pnpm clean && pnpm build"
+  },
+  "dependencies": {
+    "@midnight-ntwrk/ledger-v6": "6.1.0-alpha.6",
+    "@midnight-ntwrk/midnight-js-contracts": "3.0.0-alpha.11",
+    "@midnight-ntwrk/midnight-js-http-client-proof-provider": "3.0.0-alpha.11",
+    "@midnight-ntwrk/midnight-js-indexer-public-data-provider": "3.0.0-alpha.11",
+    "@midnight-ntwrk/midnight-js-level-private-state-provider": "3.0.0-alpha.11",
+    "@midnight-ntwrk/midnight-js-network-id": "3.0.0-alpha.11",
+    "@midnight-ntwrk/midnight-js-node-zk-config-provider": "3.0.0-alpha.11",
+    "@midnight-ntwrk/midnight-js-types": "3.0.0-alpha.11",
+    "@midnight-ntwrk/wallet-sdk-dust-wallet": "1.0.0-beta.11",
+    "@midnight-ntwrk/wallet-sdk-facade": "1.0.0-beta.12",
+    "@midnight-ntwrk/wallet-sdk-hd": "3.0.0-beta.7",
+    "@midnight-ntwrk/wallet-sdk-shielded": "1.0.0-beta.12",
+    "@midnight-ntwrk/wallet-sdk-unshielded-wallet": "1.0.0-beta.14",
+    "pino": "^8.16.0",
+    "pino-pretty": "^10.2.3",
+    "rxjs": "^7.8.1"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.28.1",
+    "typedoc": "^0.28.7",
+    "typedoc-plugin-markdown": "^4.6.3",
+    "@eslint/js": "^9.34.0",
+    "@types/node": "^22.0.0",
+    "eslint": "^9.34.0",
+    "typescript": "^5.6.0",
+    "typescript-eslint": "^8.33.0",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "packageManager": "pnpm@9.0.0",
+  "keywords": [
+    "midnight",
+    "midnight-network",
+    "zk-proof",
+    "blockchain",
+    "privacy",
+    "sdk"
+  ],
+  "author": "No Witness Labs",
+  "license": "MIT",
+  "homepage": "https://github.com/no-witness-labs/midday-sdk#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/no-witness-labs/midday-sdk.git"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}
