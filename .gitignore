@@ -4,3 +4,4 @@ docs/
 .data/
 *.log
 .DS_Store
+.npmrc
