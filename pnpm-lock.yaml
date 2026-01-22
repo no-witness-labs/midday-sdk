@@ -47,6 +47,9 @@ importers:
       '@midnight-ntwrk/wallet-sdk-unshielded-wallet':
         specifier: 1.0.0-beta.14
         version: 1.0.0-beta.14(ws@8.19.0)
+      dockerode:
+        specifier: ^4.0.7
+        version: 4.0.9
       pino:
         specifier: ^8.16.0
         version: 8.21.0
@@ -56,6 +59,9 @@ importers:
       rxjs:
         specifier: ^7.8.1
         version: 7.8.2
+      ws:
+        specifier: ^8.18.0
+        version: 8.19.0
     devDependencies:
       '@changesets/cli':
         specifier: ^2.28.1
@@ -63,9 +69,15 @@ importers:
       '@eslint/js':
         specifier: ^9.34.0
         version: 9.39.2
+      '@types/dockerode':
+        specifier: ^3.3.43
+        version: 3.3.47
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.7
+      '@types/ws':
+        specifier: ^8.5.10
+        version: 8.18.1
       eslint:
         specifier: ^9.34.0
         version: 9.39.2
@@ -978,6 +990,9 @@ packages:
 
   '@types/unist@3.0.3':
     resolution: {integrity: sha512-ko/gIFJRv177XgZsZcBwnqJN5x/Gien8qNOn0D5bQU/zAzVf9Zt3BlcUiLqhV9y4ARk0GbT3tnUiPNgnTXzc/Q==}
+
+  '@types/ws@8.18.1':
+    resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
 
   '@types/zen-observable@0.8.3':
     resolution: {integrity: sha512-fbF6oTd4sGGy0xjHPKAt+eS2CrxJ3+6gQ3FGcBoIJR2TLAyCkCyI8JqZNy+FeON0AhVgNJoUumVoZQjBFUqHkw==}
@@ -3898,6 +3913,10 @@ snapshots:
       '@types/node': 18.19.130
 
   '@types/unist@3.0.3': {}
+
+  '@types/ws@8.18.1':
+    dependencies:
+      '@types/node': 22.19.7
 
   '@types/zen-observable@0.8.3': {}
 
