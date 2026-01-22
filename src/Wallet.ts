@@ -81,3 +81,25 @@ export async function init(seed: string, networkConfig: NetworkConfig): Promise<
 export async function waitForSync(walletContext: WalletContext): Promise<void> {
   await Rx.firstValueFrom(walletContext.wallet.state().pipe(Rx.filter((s) => s.isSynced)));
 }
+
+/**
+ * Derive wallet address from seed without starting wallet connection.
+ * Useful for displaying addresses or checking balances via indexer.
+ */
+export function deriveAddress(seed: string, networkId: string): string {
+  const seedBuffer = Buffer.from(seed, 'hex');
+
+  const hdWallet = HDWallet.fromSeed(Uint8Array.from(seedBuffer));
+  if (hdWallet.type !== 'seedOk') throw new Error('Failed to initialize HDWallet');
+
+  const derivationResult = hdWallet.hdWallet
+    .selectAccount(0)
+    .selectRoles([Roles.NightExternal])
+    .deriveKeysAt(0);
+
+  if (derivationResult.type !== 'keysDerived') throw new Error('Failed to derive keys');
+  hdWallet.hdWallet.clear();
+
+  const unshieldedKeystore = createKeystore(derivationResult.keys[Roles.NightExternal], networkId as 'undeployed');
+  return unshieldedKeystore.getBech32Address().asString();
+}

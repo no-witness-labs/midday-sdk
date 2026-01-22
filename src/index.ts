@@ -20,6 +20,9 @@ export * as Config from './Config.js';
 export * as Wallet from './Wallet.js';
 export * as Providers from './Providers.js';
 
+// Re-export ledger utilities for balance checking
+export { nativeToken } from '@midnight-ntwrk/ledger-v6';
+
 // Re-export commonly used types for convenience
 export type { ClientConfig, MidnightClient, ContractBuilder, ConnectedContract, CallResult, FinalizedTxData } from './Client.js';
 export type { NetworkConfig } from './Config.js';

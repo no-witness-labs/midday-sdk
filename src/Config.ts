@@ -21,7 +21,13 @@ export const NETWORKS: Record<string, NetworkConfig> = {
     node: 'ws://localhost:9944',
     proofServer: 'http://localhost:6300',
   },
-  // Add testnet/mainnet configs when available
+  preview: {
+    networkId: 'preview',
+    indexer: 'https://indexer.preview.midnight.network/api/v3/graphql',
+    indexerWS: 'wss://indexer.preview.midnight.network/api/v3/graphql/ws',
+    node: 'wss://rpc.preview.midnight.network',
+    proofServer: 'http://localhost:6300',
+  },
 } as const;
 
 /**
