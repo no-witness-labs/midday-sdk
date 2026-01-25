@@ -31,26 +31,15 @@ export const NETWORKS: Record<string, NetworkConfig> = {
 } as const;
 
 /**
- * Get network configuration from environment or defaults
+ * Get network configuration by name.
+ *
+ * Note: Environment variable overrides have been removed for browser compatibility.
+ * Use explicit configuration via Client.create() options instead.
+ *
+ * @param network - Network name ('local' or 'preview')
+ * @returns Network configuration
  */
 export function getNetworkConfig(network: string = 'local'): NetworkConfig {
-  // Check for environment variable overrides first
-  if (
-    process.env.MIDNIGHT_INDEXER ||
-    process.env.MIDNIGHT_INDEXER_WS ||
-    process.env.MIDNIGHT_NODE ||
-    process.env.MIDNIGHT_PROOF_SERVER
-  ) {
-    return {
-      networkId: process.env.MIDNIGHT_NETWORK_ID || 'undeployed',
-      indexer: process.env.MIDNIGHT_INDEXER || NETWORKS.local.indexer,
-      indexerWS: process.env.MIDNIGHT_INDEXER_WS || NETWORKS.local.indexerWS,
-      node: process.env.MIDNIGHT_NODE || NETWORKS.local.node,
-      proofServer: process.env.MIDNIGHT_PROOF_SERVER || NETWORKS.local.proofServer,
-    };
-  }
-
-  // Use predefined network config
   const config = NETWORKS[network];
   if (!config) {
     throw new Error(`Unknown network: ${network}. Available: ${Object.keys(NETWORKS).join(', ')}`);

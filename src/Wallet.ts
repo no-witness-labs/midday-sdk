@@ -21,6 +21,7 @@ import {
 } from '@midnight-ntwrk/wallet-sdk-unshielded-wallet';
 
 import type { NetworkConfig } from './Config.js';
+import { hexToBytes } from './utils/hex.js';
 
 export interface WalletContext {
   wallet: WalletFacade;
@@ -30,7 +31,7 @@ export interface WalletContext {
 }
 
 export async function init(seed: string, networkConfig: NetworkConfig): Promise<WalletContext> {
-  const seedBuffer = Buffer.from(seed, 'hex');
+  const seedBytes = hexToBytes(seed);
 
   const configuration = {
     networkId: networkConfig.networkId as 'undeployed',
@@ -47,7 +48,7 @@ export async function init(seed: string, networkConfig: NetworkConfig): Promise<
     indexerUrl: networkConfig.indexerWS,
   };
 
-  const hdWallet = HDWallet.fromSeed(Uint8Array.from(seedBuffer));
+  const hdWallet = HDWallet.fromSeed(seedBytes);
   if (hdWallet.type !== 'seedOk') throw new Error('Failed to initialize HDWallet');
 
   const derivationResult = hdWallet.hdWallet
@@ -87,9 +88,9 @@ export async function waitForSync(walletContext: WalletContext): Promise<void> {
  * Useful for displaying addresses or checking balances via indexer.
  */
 export function deriveAddress(seed: string, networkId: string): string {
-  const seedBuffer = Buffer.from(seed, 'hex');
+  const seedBytes = hexToBytes(seed);
 
-  const hdWallet = HDWallet.fromSeed(Uint8Array.from(seedBuffer));
+  const hdWallet = HDWallet.fromSeed(seedBytes);
   if (hdWallet.type !== 'seedOk') throw new Error('Failed to initialize HDWallet');
 
   const derivationResult = hdWallet.hdWallet

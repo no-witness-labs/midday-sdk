@@ -2,36 +2,49 @@
  * High-level client for interacting with Midnight Network contracts.
  *
  * Provides a simple API for deploying, joining, and calling contracts.
+ * Supports both seed-based (Node.js/browser) and wallet-based (browser) initialization.
  *
  * @since 0.1.0
  * @module
  */
 
-import * as path from 'path';
-import * as fs from 'fs';
-import { fileURLToPath } from 'url';
 import { deployContract, findDeployedContract } from '@midnight-ntwrk/midnight-js-contracts';
-import pino, { type Logger } from 'pino';
-import { build as buildPretty, type PinoPretty } from 'pino-pretty';
+import type { ZKConfigProvider, PrivateStateProvider } from '@midnight-ntwrk/midnight-js-types';
 
 import * as Config from './Config.js';
 import * as Wallet from './Wallet.js';
 import * as Providers from './Providers.js';
 import type { NetworkConfig } from './Config.js';
-import type { ContractProviders, StorageConfig } from './Providers.js';
+import type { ContractProviders, StorageConfig, CreateProvidersOptions } from './Providers.js';
 import type { WalletContext } from './Wallet.js';
+import type { WalletConnection } from './wallet/connector.js';
+import { createWalletProviders } from './wallet/provider.js';
 
 // =============================================================================
 // Types
 // =============================================================================
+
+/**
+ * Logger interface for client operations.
+ */
+export interface Logger {
+  info(message: string): void;
+  warn(message: string): void;
+  error(message: string): void;
+  debug(message: string): void;
+}
 
 export interface ClientConfig {
   /** Network to connect to (default: 'local') */
   network?: string;
   /** Custom network configuration (overrides network preset) */
   networkConfig?: NetworkConfig;
-  /** Wallet seed (defaults to dev wallet for local) */
+  /** Wallet seed (required for non-local networks) */
   seed?: string;
+  /** ZK configuration provider (required) */
+  zkConfigProvider: ZKConfigProvider<string>;
+  /** Private state provider (required) */
+  privateStateProvider: PrivateStateProvider;
   /** Storage configuration */
   storage?: StorageConfig;
   /** Enable logging (default: true) */
@@ -39,16 +52,13 @@ export interface ClientConfig {
 }
 
 export interface ContractFromOptions {
-  /**
-   * Base for path resolution:
-   * - undefined/'cwd': relative to process.cwd() (default)
-   * - 'project': relative to project root (finds package.json)
-   * - string (URL): relative to caller's import.meta.url
-   */
-  from?: string | 'project' | 'cwd';
+  /** Contract module (required in browser) */
+  module?: ContractModule;
+  /** URL to fetch ZK config from (for HttpZkConfigProvider) */
+  zkConfigUrl?: string;
   /** Witnesses for the contract */
   witnesses?: Record<string, unknown>;
-  /** Override privateStateId (defaults to directory name) */
+  /** Override privateStateId (defaults to contract name) */
   privateStateId?: string;
 }
 
@@ -63,15 +73,15 @@ export interface JoinOptions {
 }
 
 export interface MidnightClient {
-  /** Raw wallet context for advanced use */
-  readonly wallet: WalletContext;
+  /** Raw wallet context for advanced use (null if using wallet connector) */
+  readonly wallet: WalletContext | null;
   /** Network configuration */
   readonly networkConfig: NetworkConfig;
   /** Logger instance */
   readonly logger: Logger;
 
-  /** Load a contract from a build directory path */
-  contractFrom(basePath: string, options?: ContractFromOptions): Promise<ContractBuilder>;
+  /** Load a contract from module */
+  contractFrom(options: ContractFromOptions): Promise<ContractBuilder>;
 
   /** Wait for a transaction to be finalized on-chain by its hash */
   waitForTx(txHash: string): Promise<FinalizedTxData>;
@@ -92,10 +102,14 @@ export interface ContractBuilder {
   join(address: string, options?: JoinOptions): Promise<ConnectedContract>;
 }
 
+export interface ContractModule {
+  Contract: new (witnesses: unknown) => unknown;
+  ledger: (state: unknown) => unknown;
+}
+
 export interface LoadedContractModule {
   Contract: new (witnesses: unknown) => unknown;
   ledger: (state: unknown) => unknown;
-  zkConfigPath: string;
   privateStateId: string;
   witnesses: Record<string, unknown>;
 }
@@ -135,51 +149,25 @@ export interface CallResult {
 }
 
 // =============================================================================
-// Path Resolution
-// =============================================================================
-
-function findProjectRoot(startDir: string = process.cwd()): string {
-  let current = startDir;
-  while (current !== path.dirname(current)) {
-    if (fs.existsSync(path.join(current, 'package.json'))) {
-      return current;
-    }
-    current = path.dirname(current);
-  }
-  throw new Error('Could not find project root (no package.json found)');
-}
-
-function resolvePath(basePath: string, options?: ContractFromOptions): string {
-  if (path.isAbsolute(basePath)) {
-    return basePath;
-  }
-
-  const from = options?.from ?? 'cwd';
-
-  if (from === 'cwd') {
-    return path.resolve(process.cwd(), basePath);
-  }
-
-  if (from === 'project') {
-    const projectRoot = findProjectRoot();
-    return path.resolve(projectRoot, basePath);
-  }
-
-  // Assume it's an import.meta.url
-  const callerDir = path.dirname(fileURLToPath(from));
-  return path.resolve(callerDir, basePath);
-}
-
-// =============================================================================
 // Logger
 // =============================================================================
 
 function createLogger(enabled: boolean): Logger {
   if (!enabled) {
-    return pino.default({ level: 'silent' });
+    return {
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      debug: () => {},
+    };
   }
-  const pretty: PinoPretty.PrettyStream = buildPretty({ colorize: true, sync: true });
-  return pino.default({ level: 'info' }, pretty);
+
+  return {
+    info: (message: string) => console.log(`[INFO] ${message}`),
+    warn: (message: string) => console.warn(`[WARN] ${message}`),
+    error: (message: string) => console.error(`[ERROR] ${message}`),
+    debug: (message: string) => console.debug(`[DEBUG] ${message}`),
+  };
 }
 
 // =============================================================================
@@ -187,47 +175,38 @@ function createLogger(enabled: boolean): Logger {
 // =============================================================================
 
 /**
- * Create a Midnight client for interacting with contracts
+ * Create a Midnight client for interacting with contracts using a seed.
  *
  * @example
  * ```typescript
  * import * as Midday from '@no-witness-labs/midday-sdk';
  *
- * // Simple - local network with dev wallet
- * const client = await Midday.Client.create();
- *
- * // Custom seed
  * const client = await Midday.Client.create({
- *   seed: 'your-64-char-hex-seed'
+ *   seed: 'your-64-char-hex-seed',
+ *   networkConfig: Midday.Config.NETWORKS.local,
+ *   zkConfigProvider: new Midday.HttpZkConfigProvider('http://localhost:3000/zk'),
+ *   privateStateProvider: Midday.indexedDBPrivateStateProvider({ privateStateStoreName: 'my-app' }),
  * });
  *
- * // Custom network endpoints via env vars or config
- * const client = await Midday.Client.create({
- *   networkConfig: {
- *     networkId: 'testnet',
- *     indexer: 'https://indexer.testnet.midnight.network/graphql',
- *     indexerWS: 'wss://indexer.testnet.midnight.network/graphql/ws',
- *     node: 'wss://node.testnet.midnight.network',
- *     proofServer: 'https://proof.testnet.midnight.network',
- *   }
+ * const counter = await client.contractFrom({
+ *   module: await import('./contracts/counter/index.js'),
+ *   privateStateId: 'counter',
  * });
  *
- * // Load and deploy a contract
- * const counter = await (await client.contractFrom('build/simple-counter')).deploy();
- *
- * // Call actions
+ * await counter.deploy();
  * await counter.call('increment');
- *
- * // Read state
- * const state = await counter.ledgerState();
- * console.log(state.counter);
- *
- * // Join existing contract
- * const existing = await (await client.contractFrom('build/simple-counter')).join(address);
  * ```
  */
-export async function create(config: ClientConfig = {}): Promise<MidnightClient> {
-  const { network = 'local', networkConfig: customNetworkConfig, seed, storage, logging = true } = config;
+export async function create(config: ClientConfig): Promise<MidnightClient> {
+  const {
+    network = 'local',
+    networkConfig: customNetworkConfig,
+    seed,
+    zkConfigProvider,
+    privateStateProvider,
+    storage,
+    logging = true,
+  } = config;
 
   const logger = createLogger(logging);
 
@@ -237,7 +216,7 @@ export async function create(config: ClientConfig = {}): Promise<MidnightClient>
   // Resolve seed (use dev wallet only for local network)
   const walletSeed = seed ?? (network === 'local' ? Config.DEV_WALLET_SEED : undefined);
   if (!walletSeed) {
-    throw new Error('Wallet seed is required for non-local networks. Provide via config.seed or MIDNIGHT_WALLET_SEED env var.');
+    throw new Error('Wallet seed is required for non-local networks. Provide via config.seed.');
   }
 
   // Initialize wallet
@@ -246,40 +225,161 @@ export async function create(config: ClientConfig = {}): Promise<MidnightClient>
   await Wallet.waitForSync(walletContext);
   logger.info('Wallet synced');
 
+  const providerOptions: CreateProvidersOptions = {
+    networkConfig,
+    zkConfigProvider,
+    privateStateProvider,
+    storageConfig: storage,
+  };
+
+  return createClientInternal(walletContext, null, providerOptions, logger);
+}
+
+/**
+ * Create a Midnight client from a connected wallet (browser).
+ *
+ * @example
+ * ```typescript
+ * import * as Midday from '@no-witness-labs/midday-sdk';
+ *
+ * // Connect to Lace wallet
+ * const connection = await Midday.connectWallet('testnet');
+ *
+ * // Create client from wallet
+ * const client = await Midday.Client.fromWallet(connection, {
+ *   zkConfigProvider: new Midday.HttpZkConfigProvider('https://cdn.example.com/zk'),
+ *   privateStateProvider: Midday.indexedDBPrivateStateProvider({ privateStateStoreName: 'my-app' }),
+ * });
+ * ```
+ */
+export async function fromWallet(
+  connection: WalletConnection,
+  config: {
+    zkConfigProvider: ZKConfigProvider<string>;
+    privateStateProvider: PrivateStateProvider;
+    logging?: boolean;
+  },
+): Promise<MidnightClient> {
+  const { zkConfigProvider, privateStateProvider, logging = true } = config;
+  const logger = createLogger(logging);
+
+  // Create network config from wallet URIs
+  const networkConfig: NetworkConfig = {
+    networkId: 'testnet', // Will be overridden by wallet
+    indexer: connection.uris.indexerUri,
+    indexerWS: connection.uris.indexerWsUri,
+    node: connection.uris.substrateNodeUri,
+    proofServer: connection.uris.proverServerUri,
+  };
+
+  // Create wallet providers from connection
+  const { walletProvider, midnightProvider } = createWalletProviders(connection.wallet, {
+    coinPublicKey: connection.coinPublicKey,
+    encryptionPublicKey: connection.encryptionPublicKey,
+  });
+
+  const providerOptions: CreateProvidersOptions = {
+    networkConfig,
+    zkConfigProvider,
+    privateStateProvider,
+  };
+
+  // Create providers using the wallet providers
+  const providers = Providers.createFromWalletProviders(walletProvider, midnightProvider, providerOptions);
+
+  logger.info('Connected to wallet');
+
   return {
-    wallet: walletContext,
+    wallet: null,
     networkConfig,
     logger,
 
-    async contractFrom(basePath: string, options?: ContractFromOptions): Promise<ContractBuilder> {
-      const zkConfigPath = resolvePath(basePath, options);
-
-      if (!fs.existsSync(zkConfigPath)) {
-        throw new Error(`Contract path not found: ${zkConfigPath}`);
+    async contractFrom(options: ContractFromOptions): Promise<ContractBuilder> {
+      if (!options.module) {
+        throw new Error('Contract module is required. Import and pass the contract module.');
       }
-
-      const contractPath = path.join(zkConfigPath, 'contract', 'index.js');
-      if (!fs.existsSync(contractPath)) {
-        throw new Error(`Contract module not found: ${contractPath}`);
-      }
-
-      const contractModule = await import(contractPath);
 
       const module: LoadedContractModule = {
-        Contract: contractModule.Contract,
-        ledger: contractModule.ledger,
-        zkConfigPath,
-        privateStateId: options?.privateStateId ?? path.basename(zkConfigPath),
-        witnesses: options?.witnesses ?? {},
+        Contract: options.module.Contract,
+        ledger: options.module.ledger,
+        privateStateId: options.privateStateId ?? 'contract',
+        witnesses: options.witnesses ?? {},
       };
-
-      const providers = Providers.create(walletContext, zkConfigPath, networkConfig, storage);
 
       return createContractBuilder(module, providers, logger);
     },
 
     async waitForTx(txHash: string): Promise<FinalizedTxData> {
-      const providers = Providers.create(walletContext, process.cwd(), networkConfig, storage);
+      const data = await providers.publicDataProvider.watchForTxData(txHash);
+      return {
+        txHash: data.txHash,
+        blockHeight: data.blockHeight,
+        blockHash: data.blockHash,
+      };
+    },
+  };
+}
+
+/**
+ * Internal client factory.
+ */
+function createClientInternal(
+  walletContext: WalletContext | null,
+  walletProviders: { walletProvider: Providers.ContractProviders['walletProvider']; midnightProvider: Providers.ContractProviders['midnightProvider'] } | null,
+  providerOptions: CreateProvidersOptions,
+  logger: Logger,
+): MidnightClient {
+  const { networkConfig } = providerOptions;
+
+  return {
+    wallet: walletContext,
+    networkConfig,
+    logger,
+
+    async contractFrom(options: ContractFromOptions): Promise<ContractBuilder> {
+      if (!options.module) {
+        throw new Error('Contract module is required. Import and pass the contract module.');
+      }
+
+      const module: LoadedContractModule = {
+        Contract: options.module.Contract,
+        ledger: options.module.ledger,
+        privateStateId: options.privateStateId ?? 'contract',
+        witnesses: options.witnesses ?? {},
+      };
+
+      let providers: ContractProviders;
+
+      if (walletContext) {
+        providers = Providers.create(walletContext, providerOptions);
+      } else if (walletProviders) {
+        providers = Providers.createFromWalletProviders(
+          walletProviders.walletProvider,
+          walletProviders.midnightProvider,
+          providerOptions,
+        );
+      } else {
+        throw new Error('Either walletContext or walletProviders must be provided');
+      }
+
+      return createContractBuilder(module, providers, logger);
+    },
+
+    async waitForTx(txHash: string): Promise<FinalizedTxData> {
+      let providers: ContractProviders;
+
+      if (walletContext) {
+        providers = Providers.create(walletContext, providerOptions);
+      } else if (walletProviders) {
+        providers = Providers.createFromWalletProviders(
+          walletProviders.walletProvider,
+          walletProviders.midnightProvider,
+          providerOptions,
+        );
+      } else {
+        throw new Error('Either walletContext or walletProviders must be provided');
+      }
+
       const data = await providers.publicDataProvider.watchForTxData(txHash);
       return {
         txHash: data.txHash,

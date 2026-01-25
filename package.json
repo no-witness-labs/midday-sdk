@@ -36,19 +36,19 @@
     "prepublishOnly": "pnpm clean && pnpm build"
   },
   "dependencies": {
+    "@midnight-ntwrk/dapp-connector-api": "3.0.0",
     "@midnight-ntwrk/ledger-v6": "6.1.0-alpha.6",
     "@midnight-ntwrk/midnight-js-contracts": "3.0.0-alpha.11",
     "@midnight-ntwrk/midnight-js-http-client-proof-provider": "3.0.0-alpha.11",
     "@midnight-ntwrk/midnight-js-indexer-public-data-provider": "3.0.0-alpha.11",
-    "@midnight-ntwrk/midnight-js-level-private-state-provider": "3.0.0-alpha.11",
     "@midnight-ntwrk/midnight-js-network-id": "3.0.0-alpha.11",
-    "@midnight-ntwrk/midnight-js-node-zk-config-provider": "3.0.0-alpha.11",
     "@midnight-ntwrk/midnight-js-types": "3.0.0-alpha.11",
     "@midnight-ntwrk/wallet-sdk-dust-wallet": "1.0.0-beta.11",
     "@midnight-ntwrk/wallet-sdk-facade": "1.0.0-beta.12",
     "@midnight-ntwrk/wallet-sdk-hd": "3.0.0-beta.7",
     "@midnight-ntwrk/wallet-sdk-shielded": "1.0.0-beta.12",
     "@midnight-ntwrk/wallet-sdk-unshielded-wallet": "1.0.0-beta.14",
+    "browser-level": "^1.0.1",
     "dockerode": "^4.0.7",
     "effect": "^3.19.15",
     "pino": "^8.16.0",
@@ -70,7 +70,7 @@
     "vitest": "^3.2.4"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=18.0.0"
   },
   "packageManager": "pnpm@9.0.0",
   "keywords": [
@@ -79,7 +79,9 @@
     "zk-proof",
     "blockchain",
     "privacy",
-    "sdk"
+    "sdk",
+    "browser",
+    "wallet"
   ],
   "author": "No Witness Labs",
   "license": "MIT",
