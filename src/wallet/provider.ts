@@ -8,18 +8,20 @@
  */
 
 import type { WalletProvider, MidnightProvider, BalancedProvingRecipe } from '@midnight-ntwrk/midnight-js-types';
-import * as ledger from '@midnight-ntwrk/ledger-v6';
+import { NOTHING_TO_PROVE } from '@midnight-ntwrk/midnight-js-types';
+import { Transaction, type FinalizedTransaction, type TransactionId, type UnprovenTransaction } from '@midnight-ntwrk/ledger-v6';
+import { getNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 
-import type { DAppConnectorWalletAPI } from './connector.js';
-import { hexToBytes } from '../utils/hex.js';
+import type { ConnectedAPI, ShieldedAddresses } from './connector.js';
+import { bytesToHex, hexToBytes } from '../utils/hex.js';
 
 /**
  * Wallet keys needed for provider creation.
  */
 export interface WalletKeys {
-  /** Coin public key as hex or bech32m string */
+  /** Coin public key (Bech32m string) */
   coinPublicKey: string;
-  /** Encryption public key as hex or bech32m string */
+  /** Encryption public key (Bech32m string) */
   encryptionPublicKey: string;
 }
 
@@ -34,50 +36,68 @@ export interface WalletProviders {
 }
 
 /**
- * Create providers from a connected wallet.
+ * Create providers from a connected wallet (v4 API).
  *
  * These providers use the wallet extension to balance and submit transactions.
  *
- * @param wallet - Connected wallet API from DAppConnector
- * @param keys - Public keys from wallet state
+ * @param wallet - Connected wallet API from DAppConnector v4
+ * @param addresses - Shielded addresses from wallet
  * @returns WalletProvider and MidnightProvider
  *
  * @example
  * ```typescript
- * const connection = await connectWallet();
+ * const connection = await connectWallet('testnet');
  * const { walletProvider, midnightProvider } = createWalletProviders(
  *   connection.wallet,
- *   {
- *     coinPublicKey: connection.coinPublicKey,
- *     encryptionPublicKey: connection.encryptionPublicKey,
- *   }
+ *   connection.addresses,
  * );
  * ```
  */
-export function createWalletProviders(wallet: DAppConnectorWalletAPI, keys: WalletKeys): WalletProviders {
-  // The keys from the wallet are bech32m encoded, we need to handle both hex and bech32m
-  // For now, we'll use them as-is since the wallet provider just needs to return them
-  const coinPublicKeyBytes = tryParsePublicKey(keys.coinPublicKey);
-  const encryptionPublicKeyBytes = tryParsePublicKey(keys.encryptionPublicKey);
-
+export function createWalletProviders(wallet: ConnectedAPI, addresses: ShieldedAddresses): WalletProviders {
   const walletProvider: WalletProvider = {
-    getCoinPublicKey: () => coinPublicKeyBytes as unknown as ledger.CoinPublicKey,
-    getEncryptionPublicKey: () => encryptionPublicKeyBytes as unknown as ledger.EncPublicKey,
-    balanceTx: async (
-      tx: ledger.UnprovenTransaction,
-      newCoins?: unknown[],
-      _ttl?: Date,
-    ): Promise<BalancedProvingRecipe> => {
-      // Use the new balanceAndProveTransaction API
-      const result = await wallet.balanceAndProveTransaction(tx, newCoins ?? []);
-      return result as unknown as BalancedProvingRecipe;
+    getCoinPublicKey: () => addresses.shieldedCoinPublicKey as unknown as ReturnType<WalletProvider['getCoinPublicKey']>,
+    getEncryptionPublicKey: () =>
+      addresses.shieldedEncryptionPublicKey as unknown as ReturnType<WalletProvider['getEncryptionPublicKey']>,
+
+    async balanceTx(tx: UnprovenTransaction, _newCoins?: unknown[], _ttl?: Date): Promise<BalancedProvingRecipe> {
+      // Serialize the transaction to hex string
+      const txBytes = tx.serialize();
+      const serializedTx = bytesToHex(txBytes);
+
+      // Use wallet's balance API
+      const result = await wallet.balanceUnsealedTransaction(serializedTx);
+
+      // Deserialize the returned transaction - markers for FinalizedTransaction
+      const resultBytes = hexToBytes(result.tx);
+      const networkId = getNetworkId();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const transaction = (Transaction as any).deserialize(
+        { SignatureEnabled: true },
+        { Proof: true },
+        { Binding: true },
+        resultBytes,
+        networkId,
+      ) as FinalizedTransaction;
+
+      // Return as NothingToProve since the wallet handles proving
+      return {
+        type: NOTHING_TO_PROVE,
+        transaction,
+      };
     },
   };
 
   const midnightProvider: MidnightProvider = {
-    submitTx: async (tx: ledger.FinalizedTransaction) => {
-      const txId = await wallet.submitTransaction(tx);
-      return txId as unknown as ledger.TransactionId;
+    async submitTx(tx: FinalizedTransaction): Promise<TransactionId> {
+      // Serialize the transaction to hex string
+      const txBytes = tx.serialize();
+      const serializedTx = bytesToHex(txBytes);
+
+      // Submit via wallet
+      await wallet.submitTransaction(serializedTx);
+
+      // Return the hex string as TransactionId
+      return serializedTx as TransactionId;
     },
   };
 
@@ -85,18 +105,4 @@ export function createWalletProviders(wallet: DAppConnectorWalletAPI, keys: Wall
     walletProvider,
     midnightProvider,
   };
-}
-
-/**
- * Try to parse a public key from hex or bech32m format.
- */
-function tryParsePublicKey(key: string): Uint8Array {
-  // If it looks like hex (64 chars for 32 bytes), parse as hex
-  if (/^[0-9a-fA-F]{64}$/.test(key)) {
-    return hexToBytes(key);
-  }
-
-  // Otherwise, assume it's bech32m and return as-is for the wallet to handle
-  // The midnight wallet SDK should handle bech32m encoded keys
-  return new TextEncoder().encode(key);
 }

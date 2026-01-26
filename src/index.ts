@@ -48,11 +48,26 @@ export { parseShieldedAddress, hexToPublicKey, type ParsedAddress } from './util
 export { createCoin, createCustomCoin, getNativeTokenColor, type CoinInfo } from './utils/coin.js';
 
 // Wallet connector (browser)
-export { connectWallet, disconnectWallet, isWalletAvailable, type WalletConnection } from './wallet/connector.js';
+export {
+  connectWallet,
+  disconnectWallet,
+  isWalletAvailable,
+  getWalletProvingProvider,
+  type WalletConnection,
+  type ShieldedAddresses,
+  type InitialAPI,
+  type ConnectedAPI,
+  type Configuration,
+  type ProvingProvider,
+  type KeyMaterialProvider,
+} from './wallet/connector.js';
 export { createWalletProviders, type WalletKeys, type WalletProviders } from './wallet/provider.js';
 
 // Providers
 export { HttpZkConfigProvider, type ZkConfig } from './providers/HttpZkConfigProvider.js';
+
+// Re-export FetchZkConfigProvider for browser use
+export { FetchZkConfigProvider } from '@midnight-ntwrk/midnight-js-fetch-zk-config-provider';
 export {
   indexedDBPrivateStateProvider,
   inMemoryPrivateStateProvider,

@@ -263,20 +263,17 @@ export async function fromWallet(
   const { zkConfigProvider, privateStateProvider, logging = true } = config;
   const logger = createLogger(logging);
 
-  // Create network config from wallet URIs
+  // Create network config from wallet configuration
   const networkConfig: NetworkConfig = {
-    networkId: 'testnet', // Will be overridden by wallet
-    indexer: connection.uris.indexerUri,
-    indexerWS: connection.uris.indexerWsUri,
-    node: connection.uris.substrateNodeUri,
-    proofServer: connection.uris.proverServerUri,
+    networkId: connection.config.networkId,
+    indexer: connection.config.indexerUri,
+    indexerWS: connection.config.indexerWsUri,
+    node: connection.config.substrateNodeUri,
+    proofServer: connection.config.proverServerUri ?? '',
   };
 
   // Create wallet providers from connection
-  const { walletProvider, midnightProvider } = createWalletProviders(connection.wallet, {
-    coinPublicKey: connection.coinPublicKey,
-    encryptionPublicKey: connection.encryptionPublicKey,
-  });
+  const { walletProvider, midnightProvider } = createWalletProviders(connection.wallet, connection.addresses);
 
   const providerOptions: CreateProvidersOptions = {
     networkConfig,

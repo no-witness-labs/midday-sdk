@@ -36,9 +36,10 @@
     "prepublishOnly": "pnpm clean && pnpm build"
   },
   "dependencies": {
-    "@midnight-ntwrk/dapp-connector-api": "3.0.0",
+    "@midnight-ntwrk/dapp-connector-api": "4.0.0-beta.2",
     "@midnight-ntwrk/ledger-v6": "6.1.0-alpha.6",
     "@midnight-ntwrk/midnight-js-contracts": "3.0.0-alpha.11",
+    "@midnight-ntwrk/midnight-js-fetch-zk-config-provider": "3.0.0-alpha.11",
     "@midnight-ntwrk/midnight-js-http-client-proof-provider": "3.0.0-alpha.11",
     "@midnight-ntwrk/midnight-js-indexer-public-data-provider": "3.0.0-alpha.11",
     "@midnight-ntwrk/midnight-js-network-id": "3.0.0-alpha.11",

@@ -1,112 +1,107 @@
 /**
  * Wallet connector for Lace wallet integration in browser.
  *
- * Connects to the Lace browser extension via DAppConnectorAPI.
+ * Connects to the Lace browser extension via DAppConnectorAPI v4.
  *
  * @since 0.2.0
  * @module
  */
 
+// Types based on @midnight-ntwrk/dapp-connector-api v4
+// Defined locally to avoid import issues with type-only exports
+
 /**
- * Wallet state exposed by the DApp Connector.
+ * Key material provider for proving.
  */
-export interface DAppConnectorWalletState {
-  /** Bech32m encoded address */
-  address: string;
-  /** Bech32m encoded coin public key */
-  coinPublicKey: string;
-  /** Bech32m encoded encryption public key */
-  encryptionPublicKey: string;
-  /** @deprecated Legacy hex address */
-  addressLegacy?: string;
-  /** @deprecated Legacy hex coin public key */
-  coinPublicKeyLegacy?: string;
-  /** @deprecated Legacy hex encryption public key */
-  encryptionPublicKeyLegacy?: string;
+export interface KeyMaterialProvider {
+  getZKIR(circuitKeyLocation: string): Promise<Uint8Array>;
+  getProverKey(circuitKeyLocation: string): Promise<Uint8Array>;
+  getVerifierKey(circuitKeyLocation: string): Promise<Uint8Array>;
 }
 
 /**
- * Service URIs provided by the wallet.
+ * Proving provider from wallet.
  */
-export interface ServiceUriConfig {
-  /** Indexer URI */
+export interface ProvingProvider {
+  check(serializedPreimage: Uint8Array, keyLocation: string): Promise<(bigint | undefined)[]>;
+  prove(serializedPreimage: Uint8Array, keyLocation: string, overwriteBindingInput?: bigint): Promise<Uint8Array>;
+}
+
+/**
+ * Network configuration from wallet.
+ */
+export interface Configuration {
   indexerUri: string;
-  /** Indexer WebSocket URI */
   indexerWsUri: string;
-  /** Prover Server URI */
-  proverServerUri: string;
-  /** Substrate Node URI */
+  proverServerUri?: string;
   substrateNodeUri: string;
+  networkId: string;
 }
 
 /**
- * Wallet API exposed by the DApp Connector.
+ * Initial API for wallet connection.
  */
-export interface DAppConnectorWalletAPI {
-  /** Get wallet state */
-  state: () => Promise<DAppConnectorWalletState>;
-  /** Balance and prove a transaction */
-  balanceAndProveTransaction: (tx: unknown, newCoins: unknown[]) => Promise<unknown>;
-  /** Submit a transaction */
-  submitTransaction: (tx: unknown) => Promise<string>;
-  /** @deprecated Use balanceAndProveTransaction instead */
-  balanceTransaction?: (tx: unknown, newCoins: unknown[], ttl: Date) => Promise<unknown>;
-  /** @deprecated Use balanceAndProveTransaction instead */
-  proveTransaction?: (tx: unknown) => Promise<unknown>;
-}
-
-/**
- * DApp Connector API Definition.
- */
-export interface DAppConnectorAPI {
-  /** Wallet name */
+export interface InitialAPI {
+  rdns: string;
   name: string;
-  /** API version (semver) */
+  icon: string;
   apiVersion: string;
-  /** Check if wallet has authorized the dapp */
-  isEnabled: () => Promise<boolean>;
-  /** Get service URIs */
-  serviceUriConfig: () => Promise<ServiceUriConfig>;
-  /** Request wallet access */
-  enable: () => Promise<DAppConnectorWalletAPI>;
+  connect: (networkId: string) => Promise<ConnectedAPI>;
+}
+
+/**
+ * Connected wallet API.
+ */
+export interface ConnectedAPI {
+  getShieldedBalances(): Promise<Record<string, bigint>>;
+  getUnshieldedBalances(): Promise<Record<string, bigint>>;
+  getDustBalance(): Promise<{ cap: bigint; balance: bigint }>;
+  getShieldedAddresses(): Promise<{
+    shieldedAddress: string;
+    shieldedCoinPublicKey: string;
+    shieldedEncryptionPublicKey: string;
+  }>;
+  getUnshieldedAddress(): Promise<{ unshieldedAddress: string }>;
+  getDustAddress(): Promise<{ dustAddress: string }>;
+  balanceUnsealedTransaction(tx: string): Promise<{ tx: string }>;
+  balanceSealedTransaction(tx: string): Promise<{ tx: string }>;
+  submitTransaction(tx: string): Promise<string>;
+  getProvingProvider(keyMaterialProvider: KeyMaterialProvider): Promise<ProvingProvider>;
+  getConfiguration(): Promise<Configuration>;
+  hintUsage(methodNames: string[]): Promise<void>;
 }
 
 declare global {
   interface Window {
     midnight?: {
-      mnLace?: DAppConnectorAPI;
-      [key: string]: DAppConnectorAPI | undefined;
+      mnLace?: InitialAPI;
+      [key: string]: InitialAPI | undefined;
     };
   }
+}
+
+/**
+ * Shielded addresses returned by wallet.
+ */
+export interface ShieldedAddresses {
+  shieldedAddress: string;
+  shieldedCoinPublicKey: string;
+  shieldedEncryptionPublicKey: string;
 }
 
 /**
  * Result of connecting to a wallet.
  */
 export interface WalletConnection {
-  /** Connected wallet API */
-  wallet: DAppConnectorWalletAPI;
-  /** Network service URIs */
-  uris: ServiceUriConfig;
-  /** Coin public key as bech32m string */
+  wallet: ConnectedAPI;
+  config: Configuration;
+  addresses: ShieldedAddresses;
   coinPublicKey: string;
-  /** Encryption public key as bech32m string */
   encryptionPublicKey: string;
 }
 
 /**
  * Check if running in browser with Lace wallet available.
- *
- * @returns true if Lace wallet extension is detected
- *
- * @example
- * ```typescript
- * if (isWalletAvailable()) {
- *   const connection = await connectWallet();
- * } else {
- *   console.log('Please install Lace wallet');
- * }
- * ```
  */
 export function isWalletAvailable(): boolean {
   return typeof window !== 'undefined' && !!window.midnight?.mnLace;
@@ -114,12 +109,8 @@ export function isWalletAvailable(): boolean {
 
 /**
  * Wait for the wallet extension to be injected.
- *
- * @param timeout - Maximum time to wait in milliseconds (default: 5000)
- * @returns The DAppConnectorAPI once available
- * @throws Error if wallet not found within timeout
  */
-async function waitForWallet(timeout: number = 5000): Promise<DAppConnectorAPI> {
+async function waitForWallet(timeout: number = 5000): Promise<InitialAPI> {
   const start = Date.now();
 
   while (Date.now() - start < timeout) {
@@ -133,64 +124,68 @@ async function waitForWallet(timeout: number = 5000): Promise<DAppConnectorAPI> 
 }
 
 /**
+ * Check if API version is compatible.
+ */
+function isVersionCompatible(version: string, required: string): boolean {
+  const [major] = version.split('.').map(Number);
+  const [requiredMajor] = required.split('.').map(Number);
+  return major >= requiredMajor;
+}
+
+/**
  * Connect to the Lace wallet in browser.
- *
- * Opens a connection dialog in the user's Lace wallet extension.
- * User must approve the connection.
  *
  * @param networkId - Network to connect to (default: 'testnet')
  * @returns WalletConnection with wallet API and keys
- * @throws Error if not in browser or wallet unavailable
  *
  * @example
  * ```typescript
- * // Connect to Lace wallet
  * const connection = await connectWallet('testnet');
- *
- * // Use connection to create client
- * const client = await Midday.Client.fromWallet(connection);
- *
- * console.log('Coin key:', connection.coinPublicKey);
- * console.log('Encryption key:', connection.encryptionPublicKey);
+ * const client = await Midday.Client.fromWallet(connection, {
+ *   zkConfigProvider: new Midday.FetchZkConfigProvider(window.location.origin, fetch.bind(window)),
+ *   privateStateProvider: Midday.indexedDBPrivateStateProvider({ privateStateStoreName: 'my-app' }),
+ * });
  * ```
  */
-export async function connectWallet(_networkId: string = 'testnet'): Promise<WalletConnection> {
+export async function connectWallet(networkId: string = 'testnet'): Promise<WalletConnection> {
   if (typeof window === 'undefined') {
     throw new Error('connectWallet() can only be used in browser environment');
   }
 
   const connector = await waitForWallet();
 
-  // Check API version compatibility
-  const [major] = connector.apiVersion.split('.').map(Number);
-  if (major < 2) {
-    throw new Error(`Unsupported wallet API version: ${connector.apiVersion}. Please update Lace.`);
+  if (!isVersionCompatible(connector.apiVersion, '4.0')) {
+    throw new Error(
+      `Incompatible wallet API version: ${connector.apiVersion}. Requires 4.x or higher. Please update Lace.`,
+    );
   }
 
-  // Enable wallet access
-  const wallet = await connector.enable();
-
-  // Get service URIs for the network
-  const uris = await connector.serviceUriConfig();
-
-  // Get wallet state to extract keys
-  const state = await wallet.state();
+  const wallet = await connector.connect(networkId);
+  const config = await wallet.getConfiguration();
+  const addresses = await wallet.getShieldedAddresses();
 
   return {
     wallet,
-    uris,
-    coinPublicKey: state.coinPublicKey,
-    encryptionPublicKey: state.encryptionPublicKey,
+    config,
+    addresses,
+    coinPublicKey: addresses.shieldedCoinPublicKey,
+    encryptionPublicKey: addresses.shieldedEncryptionPublicKey,
   };
 }
 
 /**
+ * Get a proving provider from the connected wallet.
+ */
+export async function getWalletProvingProvider(
+  wallet: ConnectedAPI,
+  zkConfigProvider: KeyMaterialProvider,
+): Promise<ProvingProvider> {
+  return wallet.getProvingProvider(zkConfigProvider);
+}
+
+/**
  * Disconnect from the wallet (if supported).
- *
- * Note: Some wallet implementations may not support explicit disconnect.
  */
 export async function disconnectWallet(): Promise<void> {
   // Currently Lace doesn't expose a disconnect API
-  // The connection persists until the page is closed
-  // This function is provided for future compatibility
 }
