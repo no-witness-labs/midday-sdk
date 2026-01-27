@@ -50,7 +50,7 @@
               for f in compactc compactc.bin zkir format-compact fixup-compact; do
                 [ -f "$f" ] && cp "$f" $out/bin/
               done
-              chmod +x $out/bin/*
+              find "$out/bin" -type f -exec chmod +x {} +
             '';
 
             meta = {
