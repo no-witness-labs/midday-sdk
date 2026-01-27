@@ -41,6 +41,10 @@
               stripRoot = false;
             };
 
+            # Skip configure/build phases - these are prebuilt binaries
+            dontConfigure = true;
+            dontBuild = true;
+
             installPhase = ''
               mkdir -p $out/bin
               for f in compactc compactc.bin zkir format-compact fixup-compact; do
