@@ -5,3 +5,4 @@ docs/
 *.log
 .DS_Store
 .npmrc
+.direnv/
