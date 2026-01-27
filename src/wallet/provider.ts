@@ -2,18 +2,22 @@
  * Provider factory for wallet-connected clients.
  *
  * Creates WalletProvider and MidnightProvider from a connected wallet.
+ * Provides dual API: Effect-based and Promise-based.
  *
  * @since 0.2.0
  * @module
  */
 
+import { Effect } from 'effect';
 import type { WalletProvider, MidnightProvider, BalancedProvingRecipe } from '@midnight-ntwrk/midnight-js-types';
 import { NOTHING_TO_PROVE } from '@midnight-ntwrk/midnight-js-types';
 import { Transaction, type FinalizedTransaction, type TransactionId, type UnprovenTransaction } from '@midnight-ntwrk/ledger-v6';
 import { getNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 
 import type { ConnectedAPI, ShieldedAddresses } from './connector.js';
+import { ProviderError } from '../errors/index.js';
 import { bytesToHex, hexToBytes } from '../utils/hex.js';
+import { runEffectPromise } from '../utils/effect-runtime.js';
 
 /**
  * Wallet keys needed for provider creation.
@@ -34,6 +38,87 @@ export interface WalletProviders {
   /** Provider for transaction submission */
   midnightProvider: MidnightProvider;
 }
+
+/**
+ * Effect-based interface for wallet provider operations.
+ */
+export interface WalletProviderEffect {
+  readonly balanceTx: (wallet: ConnectedAPI, tx: UnprovenTransaction) => Effect.Effect<BalancedProvingRecipe, ProviderError>;
+  readonly submitTx: (wallet: ConnectedAPI, tx: FinalizedTransaction) => Effect.Effect<TransactionId, ProviderError>;
+}
+
+// =============================================================================
+// Effect API
+// =============================================================================
+
+function balanceTxEffect(wallet: ConnectedAPI, tx: UnprovenTransaction): Effect.Effect<BalancedProvingRecipe, ProviderError> {
+  return Effect.tryPromise({
+    try: async () => {
+      // Serialize the transaction to hex string
+      const txBytes = tx.serialize();
+      const serializedTx = bytesToHex(txBytes);
+
+      // Use wallet's balance API
+      const result = await wallet.balanceUnsealedTransaction(serializedTx);
+
+      // Deserialize the returned transaction - markers for FinalizedTransaction
+      const resultBytes = hexToBytes(result.tx);
+      const networkId = getNetworkId();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const transaction = (Transaction as any).deserialize(
+        { SignatureEnabled: true },
+        { Proof: true },
+        { Binding: true },
+        resultBytes,
+        networkId,
+      ) as FinalizedTransaction;
+
+      // Return as NothingToProve since the wallet handles proving
+      return {
+        type: NOTHING_TO_PROVE,
+        transaction,
+      } as BalancedProvingRecipe;
+    },
+    catch: (cause) =>
+      new ProviderError({
+        cause,
+        message: `Failed to balance transaction: ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
+}
+
+function submitTxEffect(wallet: ConnectedAPI, tx: FinalizedTransaction): Effect.Effect<TransactionId, ProviderError> {
+  return Effect.tryPromise({
+    try: async () => {
+      // Serialize the transaction to hex string
+      const txBytes = tx.serialize();
+      const serializedTx = bytesToHex(txBytes);
+
+      // Submit via wallet
+      await wallet.submitTransaction(serializedTx);
+
+      // Return the hex string as TransactionId
+      return serializedTx as TransactionId;
+    },
+    catch: (cause) =>
+      new ProviderError({
+        cause,
+        message: `Failed to submit transaction: ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
+}
+
+/**
+ * Effect-based API for wallet provider operations.
+ */
+export const WalletProviderEffectAPI: WalletProviderEffect = {
+  balanceTx: balanceTxEffect,
+  submitTx: submitTxEffect,
+};
+
+// =============================================================================
+// Promise API (backwards compatible)
+// =============================================================================
 
 /**
  * Create providers from a connected wallet (v4 API).
@@ -60,44 +145,13 @@ export function createWalletProviders(wallet: ConnectedAPI, addresses: ShieldedA
       addresses.shieldedEncryptionPublicKey as unknown as ReturnType<WalletProvider['getEncryptionPublicKey']>,
 
     async balanceTx(tx: UnprovenTransaction, _newCoins?: unknown[], _ttl?: Date): Promise<BalancedProvingRecipe> {
-      // Serialize the transaction to hex string
-      const txBytes = tx.serialize();
-      const serializedTx = bytesToHex(txBytes);
-
-      // Use wallet's balance API
-      const result = await wallet.balanceUnsealedTransaction(serializedTx);
-
-      // Deserialize the returned transaction - markers for FinalizedTransaction
-      const resultBytes = hexToBytes(result.tx);
-      const networkId = getNetworkId();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const transaction = (Transaction as any).deserialize(
-        { SignatureEnabled: true },
-        { Proof: true },
-        { Binding: true },
-        resultBytes,
-        networkId,
-      ) as FinalizedTransaction;
-
-      // Return as NothingToProve since the wallet handles proving
-      return {
-        type: NOTHING_TO_PROVE,
-        transaction,
-      };
+      return runEffectPromise(balanceTxEffect(wallet, tx));
     },
   };
 
   const midnightProvider: MidnightProvider = {
     async submitTx(tx: FinalizedTransaction): Promise<TransactionId> {
-      // Serialize the transaction to hex string
-      const txBytes = tx.serialize();
-      const serializedTx = bytesToHex(txBytes);
-
-      // Submit via wallet
-      await wallet.submitTransaction(serializedTx);
-
-      // Return the hex string as TransactionId
-      return serializedTx as TransactionId;
+      return runEffectPromise(submitTxEffect(wallet, tx));
     },
   };
 
@@ -106,3 +160,8 @@ export function createWalletProviders(wallet: ConnectedAPI, addresses: ShieldedA
     midnightProvider,
   };
 }
+
+/**
+ * Effect-based API export.
+ */
+export { WalletProviderEffectAPI as Effect };

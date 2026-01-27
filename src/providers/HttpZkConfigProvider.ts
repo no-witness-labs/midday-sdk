@@ -4,10 +4,13 @@
  * Fetches ZK circuit artifacts (ZKIR, prover keys, verifier keys) via HTTP.
  * Works in both browser and Node.js environments.
  *
+ * Provides dual API: Effect-based and Promise-based.
+ *
  * @since 0.2.0
  * @module
  */
 
+import { Effect } from 'effect';
 import {
   ZKConfigProvider,
   type ProverKey,
@@ -17,6 +20,9 @@ import {
   createVerifierKey,
   createZKIR,
 } from '@midnight-ntwrk/midnight-js-types';
+
+import { ZkConfigError } from '../errors/index.js';
+import { runEffectPromise } from '../utils/effect-runtime.js';
 
 /**
  * ZK configuration loaded from HTTP endpoints.
@@ -28,6 +34,15 @@ export interface ZkConfig {
   proverKey: ProverKey;
   /** Verifier key bytes */
   verifierKey: VerifierKey;
+}
+
+/**
+ * Effect-based interface for ZK config provider.
+ */
+export interface ZkConfigProviderEffect<K extends string = string> {
+  readonly getZKIR: (circuitId: K) => Effect.Effect<ZKIR, ZkConfigError>;
+  readonly getProverKey: (circuitId: K) => Effect.Effect<ProverKey, ZkConfigError>;
+  readonly getVerifierKey: (circuitId: K) => Effect.Effect<VerifierKey, ZkConfigError>;
 }
 
 /**
@@ -44,17 +59,22 @@ export interface ZkConfig {
  * ```typescript
  * const zkConfig = new HttpZkConfigProvider('https://cdn.example.com/contracts/counter');
  *
- * // Fetches from:
- * // - https://cdn.example.com/contracts/counter/increment/zkir
- * // - https://cdn.example.com/contracts/counter/increment/prover-key
- * // - https://cdn.example.com/contracts/counter/increment/verifier-key
- * const config = await zkConfig.get('increment');
+ * // Effect-based usage
+ * const zkir = yield* zkConfig.Effect.getZKIR('increment');
+ *
+ * // Promise-based usage
+ * const zkir = await zkConfig.getZKIR('increment');
  * ```
  */
 export class HttpZkConfigProvider<K extends string = string> extends ZKConfigProvider<K> {
   private readonly baseUrl: string;
   private readonly fetchFn: typeof fetch;
   private readonly cache: Map<string, ZkConfig> = new Map();
+
+  /**
+   * Effect-based API for ZK config operations.
+   */
+  readonly Effect: ZkConfigProviderEffect<K>;
 
   /**
    * Create a new HTTP ZK config provider.
@@ -67,7 +87,76 @@ export class HttpZkConfigProvider<K extends string = string> extends ZKConfigPro
     // Remove trailing slash if present
     this.baseUrl = baseUrl.replace(/\/$/, '');
     this.fetchFn = fetchFn ?? fetch;
+
+    // Initialize Effect API
+    this.Effect = {
+      getZKIR: (circuitId: K) => this.getZKIREffect(circuitId),
+      getProverKey: (circuitId: K) => this.getProverKeyEffect(circuitId),
+      getVerifierKey: (circuitId: K) => this.getVerifierKeyEffect(circuitId),
+    };
   }
+
+  // ===========================================================================
+  // Effect API (internal)
+  // ===========================================================================
+
+  private getZKIREffect(circuitId: K): Effect.Effect<ZKIR, ZkConfigError> {
+    return Effect.gen(this, function* () {
+      const cached = this.cache.get(circuitId);
+      if (cached) {
+        return cached.zkir;
+      }
+
+      const bytes = yield* this.fetchBytesEffect(`${this.baseUrl}/${circuitId}/zkir`);
+      return createZKIR(bytes);
+    });
+  }
+
+  private getProverKeyEffect(circuitId: K): Effect.Effect<ProverKey, ZkConfigError> {
+    return Effect.gen(this, function* () {
+      const cached = this.cache.get(circuitId);
+      if (cached) {
+        return cached.proverKey;
+      }
+
+      const bytes = yield* this.fetchBytesEffect(`${this.baseUrl}/${circuitId}/prover-key`);
+      return createProverKey(bytes);
+    });
+  }
+
+  private getVerifierKeyEffect(circuitId: K): Effect.Effect<VerifierKey, ZkConfigError> {
+    return Effect.gen(this, function* () {
+      const cached = this.cache.get(circuitId);
+      if (cached) {
+        return cached.verifierKey;
+      }
+
+      const bytes = yield* this.fetchBytesEffect(`${this.baseUrl}/${circuitId}/verifier-key`);
+      return createVerifierKey(bytes);
+    });
+  }
+
+  private fetchBytesEffect(url: string): Effect.Effect<Uint8Array, ZkConfigError> {
+    return Effect.tryPromise({
+      try: async () => {
+        const response = await this.fetchFn(url);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status} ${response.statusText}`);
+        }
+        const buffer = await response.arrayBuffer();
+        return new Uint8Array(buffer);
+      },
+      catch: (cause) =>
+        new ZkConfigError({
+          cause,
+          message: `Failed to fetch ZK config from ${url}: ${cause instanceof Error ? cause.message : String(cause)}`,
+        }),
+    });
+  }
+
+  // ===========================================================================
+  // Promise API (for ZKConfigProvider compatibility)
+  // ===========================================================================
 
   /**
    * Get the ZKIR for a circuit.
@@ -76,13 +165,7 @@ export class HttpZkConfigProvider<K extends string = string> extends ZKConfigPro
    * @returns ZKIR bytes
    */
   async getZKIR(circuitId: K): Promise<ZKIR> {
-    const cached = this.cache.get(circuitId);
-    if (cached) {
-      return cached.zkir;
-    }
-
-    const bytes = await this.fetchBytes(`${this.baseUrl}/${circuitId}/zkir`);
-    return createZKIR(bytes);
+    return runEffectPromise(this.getZKIREffect(circuitId));
   }
 
   /**
@@ -92,13 +175,7 @@ export class HttpZkConfigProvider<K extends string = string> extends ZKConfigPro
    * @returns Prover key bytes
    */
   async getProverKey(circuitId: K): Promise<ProverKey> {
-    const cached = this.cache.get(circuitId);
-    if (cached) {
-      return cached.proverKey;
-    }
-
-    const bytes = await this.fetchBytes(`${this.baseUrl}/${circuitId}/prover-key`);
-    return createProverKey(bytes);
+    return runEffectPromise(this.getProverKeyEffect(circuitId));
   }
 
   /**
@@ -108,13 +185,7 @@ export class HttpZkConfigProvider<K extends string = string> extends ZKConfigPro
    * @returns Verifier key bytes
    */
   async getVerifierKey(circuitId: K): Promise<VerifierKey> {
-    const cached = this.cache.get(circuitId);
-    if (cached) {
-      return cached.verifierKey;
-    }
-
-    const bytes = await this.fetchBytes(`${this.baseUrl}/${circuitId}/verifier-key`);
-    return createVerifierKey(bytes);
+    return runEffectPromise(this.getVerifierKeyEffect(circuitId));
   }
 
   /**
@@ -128,19 +199,5 @@ export class HttpZkConfigProvider<K extends string = string> extends ZKConfigPro
     } else {
       this.cache.clear();
     }
-  }
-
-  /**
-   * Fetch bytes from a URL.
-   */
-  private async fetchBytes(url: string): Promise<Uint8Array> {
-    const response = await this.fetchFn(url);
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch ${url}: ${response.status} ${response.statusText}`);
-    }
-
-    const buffer = await response.arrayBuffer();
-    return new Uint8Array(buffer);
   }
 }

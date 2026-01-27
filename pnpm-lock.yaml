@@ -8,6 +8,12 @@ importers:
 
   .:
     dependencies:
+      '@effect/platform':
+        specifier: ^0.77.0
+        version: 0.77.7(effect@3.19.14)
+      '@effect/schema':
+        specifier: ^0.75.0
+        version: 0.75.5(effect@3.19.14)
       '@midnight-ntwrk/dapp-connector-api':
         specifier: 4.0.0-beta.2
         version: 4.0.0-beta.2
@@ -50,6 +56,9 @@ importers:
       browser-level:
         specifier: ^1.0.1
         version: 1.0.1
+      effect:
+        specifier: ^3.12.0
+        version: 3.19.14
       rxjs:
         specifier: ^7.8.1
         version: 7.8.2
@@ -164,10 +173,21 @@ packages:
   '@changesets/write@0.4.0':
     resolution: {integrity: sha512-CdTLvIOPiCNuH71pyDu3rA+Q0n65cmAbXnwWH84rKGiFumFzkmHNT8KHTMEchcxN+Kl8I54xGUhJ7l3E7X396Q==}
 
+  '@effect/platform@0.77.7':
+    resolution: {integrity: sha512-a4NPwOpKnGgpG45bitHciPXV6rIp+BboQf5La/OpeiRfpWwol75hIlQ7XKVrx43ujHg4gNyOWSaXZspBz7ubUQ==}
+    peerDependencies:
+      effect: ^3.13.7
+
   '@effect/platform@0.90.10':
     resolution: {integrity: sha512-QhDPgCaLfIMQKOCoCPQvRUS+Y34iYJ07jdZ/CBAvYFvg/iUBebsmFuHL63RCD/YZH9BuK/kqqLYAA3M0fmUEgg==}
     peerDependencies:
       effect: ^3.17.13
+
+  '@effect/schema@0.75.5':
+    resolution: {integrity: sha512-TQInulTVCuF+9EIbJpyLP6dvxbQJMphrnRqgexm/Ze39rSjfhJuufF7XvU3SxTgg3HnL7B/kpORTJbHhlE6thw==}
+    deprecated: this package has been merged into the main effect package
+    peerDependencies:
+      effect: ^3.9.2
 
   '@esbuild/aix-ppc64@0.27.2':
     resolution: {integrity: sha512-GZMB+a0mOMZs4MpDbj8RJp4cw+w1WV5NYD6xzgvzUJ5Ek2jerwfO2eADyI6ExDSUED+1X8aMbegahsJi+8mgpw==}
@@ -2709,12 +2729,23 @@ snapshots:
       human-id: 4.1.3
       prettier: 2.8.8
 
+  '@effect/platform@0.77.7(effect@3.19.14)':
+    dependencies:
+      effect: 3.19.14
+      find-my-way-ts: 0.1.6
+      multipasta: 0.2.7
+
   '@effect/platform@0.90.10(effect@3.19.14)':
     dependencies:
       effect: 3.19.14
       find-my-way-ts: 0.1.6
       msgpackr: 1.11.8
       multipasta: 0.2.7
+
+  '@effect/schema@0.75.5(effect@3.19.14)':
+    dependencies:
+      effect: 3.19.14
+      fast-check: 3.23.2
 
   '@esbuild/aix-ppc64@0.27.2':
     optional: true

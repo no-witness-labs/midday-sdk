@@ -2,10 +2,15 @@
  * Wallet connector for Lace wallet integration in browser.
  *
  * Connects to the Lace browser extension via DAppConnectorAPI v4.
+ * Provides dual API: Effect-based and Promise-based.
  *
  * @since 0.2.0
  * @module
  */
+
+import { Effect } from 'effect';
+import { WalletError } from '../errors/index.js';
+import { runEffect, runEffectPromise } from '../utils/effect-runtime.js';
 
 // Types based on @midnight-ntwrk/dapp-connector-api v4
 // Defined locally to avoid import issues with type-only exports
@@ -101,35 +106,145 @@ export interface WalletConnection {
 }
 
 /**
- * Check if running in browser with Lace wallet available.
+ * Effect-based interface for wallet connector.
  */
-export function isWalletAvailable(): boolean {
-  return typeof window !== 'undefined' && !!window.midnight?.mnLace;
+export interface WalletConnectorEffect {
+  readonly connect: (networkId?: string) => Effect.Effect<WalletConnection, WalletError>;
+  readonly isAvailable: () => Effect.Effect<boolean, never>;
+  readonly disconnect: () => Effect.Effect<void, never>;
+  readonly getProvingProvider: (wallet: ConnectedAPI, zkConfigProvider: KeyMaterialProvider) => Effect.Effect<ProvingProvider, WalletError>;
 }
 
-/**
- * Wait for the wallet extension to be injected.
- */
-async function waitForWallet(timeout: number = 5000): Promise<InitialAPI> {
-  const start = Date.now();
+// =============================================================================
+// Effect API
+// =============================================================================
 
-  while (Date.now() - start < timeout) {
-    if (window.midnight?.mnLace) {
-      return window.midnight.mnLace;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-
-  throw new Error('Lace wallet not found. Please install the Lace browser extension.');
+function isAvailableEffect(): Effect.Effect<boolean, never> {
+  return Effect.sync(() => typeof window !== 'undefined' && !!window.midnight?.mnLace);
 }
 
-/**
- * Check if API version is compatible.
- */
+function waitForWalletEffect(timeout: number = 5000): Effect.Effect<InitialAPI, WalletError> {
+  return Effect.tryPromise({
+    try: async () => {
+      const start = Date.now();
+
+      while (Date.now() - start < timeout) {
+        if (window.midnight?.mnLace) {
+          return window.midnight.mnLace;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+
+      throw new Error('Lace wallet not found. Please install the Lace browser extension.');
+    },
+    catch: (cause) =>
+      new WalletError({
+        cause,
+        message: `Wallet not available: ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
+}
+
 function isVersionCompatible(version: string, required: string): boolean {
   const [major] = version.split('.').map(Number);
   const [requiredMajor] = required.split('.').map(Number);
   return major >= requiredMajor;
+}
+
+function connectEffect(networkId: string = 'testnet'): Effect.Effect<WalletConnection, WalletError> {
+  return Effect.gen(function* () {
+    if (typeof window === 'undefined') {
+      return yield* Effect.fail(
+        new WalletError({
+          cause: new Error('Browser environment required'),
+          message: 'connectWallet() can only be used in browser environment',
+        }),
+      );
+    }
+
+    const connector = yield* waitForWalletEffect();
+
+    if (!isVersionCompatible(connector.apiVersion, '4.0')) {
+      return yield* Effect.fail(
+        new WalletError({
+          cause: new Error('Incompatible API version'),
+          message: `Incompatible wallet API version: ${connector.apiVersion}. Requires 4.x or higher. Please update Lace.`,
+        }),
+      );
+    }
+
+    const wallet = yield* Effect.tryPromise({
+      try: () => connector.connect(networkId),
+      catch: (cause) =>
+        new WalletError({
+          cause,
+          message: `Failed to connect to wallet: ${cause instanceof Error ? cause.message : String(cause)}`,
+        }),
+    });
+
+    const config = yield* Effect.tryPromise({
+      try: () => wallet.getConfiguration(),
+      catch: (cause) =>
+        new WalletError({
+          cause,
+          message: `Failed to get wallet configuration: ${cause instanceof Error ? cause.message : String(cause)}`,
+        }),
+    });
+
+    const addresses = yield* Effect.tryPromise({
+      try: () => wallet.getShieldedAddresses(),
+      catch: (cause) =>
+        new WalletError({
+          cause,
+          message: `Failed to get wallet addresses: ${cause instanceof Error ? cause.message : String(cause)}`,
+        }),
+    });
+
+    return {
+      wallet,
+      config,
+      addresses,
+      coinPublicKey: addresses.shieldedCoinPublicKey,
+      encryptionPublicKey: addresses.shieldedEncryptionPublicKey,
+    };
+  });
+}
+
+function disconnectEffect(): Effect.Effect<void, never> {
+  // Currently Lace doesn't expose a disconnect API
+  return Effect.void;
+}
+
+function getProvingProviderEffect(wallet: ConnectedAPI, zkConfigProvider: KeyMaterialProvider): Effect.Effect<ProvingProvider, WalletError> {
+  return Effect.tryPromise({
+    try: () => wallet.getProvingProvider(zkConfigProvider),
+    catch: (cause) =>
+      new WalletError({
+        cause,
+        message: `Failed to get proving provider: ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
+}
+
+/**
+ * Effect-based API for wallet connector.
+ */
+export const WalletConnectorEffectAPI: WalletConnectorEffect = {
+  connect: connectEffect,
+  isAvailable: isAvailableEffect,
+  disconnect: disconnectEffect,
+  getProvingProvider: getProvingProviderEffect,
+};
+
+// =============================================================================
+// Promise API (backwards compatible)
+// =============================================================================
+
+/**
+ * Check if running in browser with Lace wallet available.
+ */
+export function isWalletAvailable(): boolean {
+  return runEffect(isAvailableEffect());
 }
 
 /**
@@ -140,37 +255,15 @@ function isVersionCompatible(version: string, required: string): boolean {
  *
  * @example
  * ```typescript
- * const connection = await connectWallet('testnet');
- * const client = await Midday.Client.fromWallet(connection, {
- *   zkConfigProvider: new Midday.FetchZkConfigProvider(window.location.origin, fetch.bind(window)),
- *   privateStateProvider: Midday.indexedDBPrivateStateProvider({ privateStateStoreName: 'my-app' }),
- * });
+ * // Effect-based usage
+ * const connection = yield* Midday.WalletConnector.Effect.connect('testnet');
+ *
+ * // Promise-based usage
+ * const connection = await Midday.connectWallet('testnet');
  * ```
  */
 export async function connectWallet(networkId: string = 'testnet'): Promise<WalletConnection> {
-  if (typeof window === 'undefined') {
-    throw new Error('connectWallet() can only be used in browser environment');
-  }
-
-  const connector = await waitForWallet();
-
-  if (!isVersionCompatible(connector.apiVersion, '4.0')) {
-    throw new Error(
-      `Incompatible wallet API version: ${connector.apiVersion}. Requires 4.x or higher. Please update Lace.`,
-    );
-  }
-
-  const wallet = await connector.connect(networkId);
-  const config = await wallet.getConfiguration();
-  const addresses = await wallet.getShieldedAddresses();
-
-  return {
-    wallet,
-    config,
-    addresses,
-    coinPublicKey: addresses.shieldedCoinPublicKey,
-    encryptionPublicKey: addresses.shieldedEncryptionPublicKey,
-  };
+  return runEffectPromise(connectEffect(networkId));
 }
 
 /**
@@ -180,12 +273,17 @@ export async function getWalletProvingProvider(
   wallet: ConnectedAPI,
   zkConfigProvider: KeyMaterialProvider,
 ): Promise<ProvingProvider> {
-  return wallet.getProvingProvider(zkConfigProvider);
+  return runEffectPromise(getProvingProviderEffect(wallet, zkConfigProvider));
 }
 
 /**
  * Disconnect from the wallet (if supported).
  */
 export async function disconnectWallet(): Promise<void> {
-  // Currently Lace doesn't expose a disconnect API
+  return runEffectPromise(disconnectEffect());
 }
+
+/**
+ * Effect-based API export.
+ */
+export { WalletConnectorEffectAPI as Effect };
