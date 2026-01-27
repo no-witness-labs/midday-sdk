@@ -1,7 +1,5 @@
 import { afterAll, describe, expect, it } from 'vitest';
-import * as Cluster from '../src/devnet/Cluster.js';
-import * as Container from '../src/devnet/Container.js';
-import * as Images from '../src/devnet/Images.js';
+import { Cluster, Container, Images } from '../src/devnet/index.js';
 import Docker from 'dockerode';
 
 /**
@@ -19,7 +17,7 @@ describe('Devnet Integration Tests', () => {
   afterAll(async () => {
     for (const cluster of createdClusters) {
       try {
-        await Cluster.remove(cluster);
+        await cluster.remove();
       } catch {
         // Silently ignore cleanup errors
       }
@@ -72,7 +70,7 @@ describe('Devnet Integration Tests', () => {
       expect(cluster.config.indexer.port).toBe(18088);
       expect(cluster.config.proofServer.port).toBe(16300);
 
-      const networkConfig = Cluster.toNetworkConfig(cluster);
+      const networkConfig = cluster.networkConfig;
       expect(networkConfig.node).toBe('ws://localhost:19944');
       expect(networkConfig.indexer).toBe('http://localhost:18088/api/v3/graphql');
       expect(networkConfig.proofServer).toBe('http://localhost:16300');
@@ -106,7 +104,7 @@ describe('Devnet Integration Tests', () => {
       });
       createdClusters.push(cluster);
 
-      await Cluster.start(cluster);
+      await cluster.start();
 
       const docker = new Docker();
 
@@ -119,7 +117,7 @@ describe('Devnet Integration Tests', () => {
       const proofServerInfo = await docker.getContainer(cluster.proofServer.id).inspect();
       expect(proofServerInfo.State.Running).toBe(true);
 
-      await Cluster.stop(cluster);
+      await cluster.stop();
     });
 
     it('should stop running cluster', { timeout: 180_000 }, async () => {
@@ -131,8 +129,8 @@ describe('Devnet Integration Tests', () => {
       });
       createdClusters.push(cluster);
 
-      await Cluster.start(cluster);
-      await Cluster.stop(cluster);
+      await cluster.start();
+      await cluster.stop();
 
       const docker = new Docker();
       const nodeInfo = await docker.getContainer(cluster.node.id).inspect();
@@ -149,13 +147,13 @@ describe('Devnet Integration Tests', () => {
       });
       createdClusters.push(cluster);
 
-      expect(await Cluster.isRunning(cluster)).toBe(false);
+      expect(await cluster.isRunning()).toBe(false);
 
-      await Cluster.start(cluster);
-      expect(await Cluster.isRunning(cluster)).toBe(true);
+      await cluster.start();
+      expect(await cluster.isRunning()).toBe(true);
 
-      await Cluster.stop(cluster);
-      expect(await Cluster.isRunning(cluster)).toBe(false);
+      await cluster.stop();
+      expect(await cluster.isRunning()).toBe(false);
     });
   });
 
@@ -208,7 +206,7 @@ describe('Devnet Integration Tests', () => {
       });
       createdClusters.push(cluster);
 
-      const networkConfig = Cluster.toNetworkConfig(cluster);
+      const networkConfig = cluster.networkConfig;
 
       expect(networkConfig).toEqual({
         networkId: 'undeployed',
