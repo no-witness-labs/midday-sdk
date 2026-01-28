@@ -2,26 +2,32 @@
  * Provider setup for contract interactions on Midnight Network.
  *
  * Creates the provider stack needed for deploying and interacting with contracts.
+ * Provides dual API: Effect-based and Promise-based.
  *
  * @since 0.1.0
  * @module
  */
 
+import { Context, Effect, Layer } from 'effect';
 import * as ledger from '@midnight-ntwrk/ledger-v6';
 import { setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
 import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
-import { levelPrivateStateProvider } from '@midnight-ntwrk/midnight-js-level-private-state-provider';
-import { NodeZkConfigProvider } from '@midnight-ntwrk/midnight-js-node-zk-config-provider';
-import type { WalletProvider, MidnightProvider, BalancedProvingRecipe } from '@midnight-ntwrk/midnight-js-types';
+import type {
+  WalletProvider,
+  MidnightProvider,
+  BalancedProvingRecipe,
+  ZKConfigProvider,
+  PrivateStateProvider,
+} from '@midnight-ntwrk/midnight-js-types';
 
 import type { NetworkConfig } from './Config.js';
 import type { WalletContext } from './Wallet.js';
+import { ProviderError } from './providers/errors.js';
+import { runEffect } from './utils/effect-runtime.js';
 
 export interface StorageConfig {
-  /** Path for LevelDB private state storage (default: '.data/midnight-level-db') */
-  path?: string;
-  /** Storage password (default from MIDNIGHT_STORAGE_PASSWORD env or generated) */
+  /** Storage password */
   password?: string;
 }
 
@@ -29,66 +35,245 @@ export interface ContractProviders {
   walletProvider: WalletProvider;
   midnightProvider: MidnightProvider;
   publicDataProvider: ReturnType<typeof indexerPublicDataProvider>;
-  privateStateProvider: ReturnType<typeof levelPrivateStateProvider>;
+  privateStateProvider: PrivateStateProvider;
   proofProvider: ReturnType<typeof httpClientProofProvider>;
-  zkConfigProvider: NodeZkConfigProvider<string>;
+  zkConfigProvider: ZKConfigProvider<string>;
 }
 
+/**
+ * Options for creating providers.
+ */
+export interface CreateProvidersOptions {
+  /** Network configuration */
+  networkConfig: NetworkConfig;
+  /** ZK configuration provider */
+  zkConfigProvider: ZKConfigProvider<string>;
+  /** Private state provider */
+  privateStateProvider: PrivateStateProvider;
+  /** Storage configuration */
+  storageConfig?: StorageConfig;
+}
+
+/**
+ * Effect-based interface for provider creation.
+ */
+export interface ContractProvidersEffect {
+  readonly create: (walletContext: WalletContext, options: CreateProvidersOptions) => Effect.Effect<ContractProviders, ProviderError>;
+  readonly createFromWalletProviders: (
+    walletProvider: WalletProvider,
+    midnightProvider: MidnightProvider,
+    options: CreateProvidersOptions,
+  ) => Effect.Effect<ContractProviders, ProviderError>;
+}
+
+// =============================================================================
+// Effect API
+// =============================================================================
+
+function createEffect(
+  walletContext: WalletContext,
+  options: CreateProvidersOptions,
+): Effect.Effect<ContractProviders, ProviderError> {
+  return Effect.try({
+    try: () => {
+      const { networkConfig, zkConfigProvider, privateStateProvider } = options;
+
+      // Set network ID
+      setNetworkId(networkConfig.networkId as 'undeployed');
+
+      // Wallet provider - handles transaction balancing
+      const walletProvider: WalletProvider = {
+        getCoinPublicKey: () => walletContext.shieldedSecretKeys.coinPublicKey as unknown as ledger.CoinPublicKey,
+        getEncryptionPublicKey: () =>
+          walletContext.shieldedSecretKeys.encryptionPublicKey as unknown as ledger.EncPublicKey,
+        balanceTx: async (
+          tx: ledger.UnprovenTransaction,
+          newCoins?: unknown[],
+          ttl?: Date,
+        ): Promise<BalancedProvingRecipe> => {
+          const txTtl = ttl ?? new Date(Date.now() + 30 * 60 * 1000);
+          const provingRecipe = await walletContext.wallet.balanceTransaction(
+            walletContext.shieldedSecretKeys,
+            walletContext.dustSecretKey,
+            tx as unknown as ledger.Transaction<ledger.SignatureEnabled, ledger.Proofish, ledger.Bindingish>,
+            txTtl,
+          );
+          return provingRecipe as unknown as BalancedProvingRecipe;
+        },
+      };
+
+      // Midnight provider - handles transaction submission
+      const midnightProvider: MidnightProvider = {
+        submitTx: async (tx: ledger.FinalizedTransaction) => await walletContext.wallet.submitTransaction(tx),
+      };
+
+      // Public data provider - reads from indexer
+      const publicDataProvider = indexerPublicDataProvider(networkConfig.indexer, networkConfig.indexerWS);
+
+      // Proof provider - generates ZK proofs
+      const proofProvider = httpClientProofProvider(networkConfig.proofServer);
+
+      return {
+        walletProvider,
+        midnightProvider,
+        publicDataProvider,
+        privateStateProvider,
+        proofProvider,
+        zkConfigProvider,
+      };
+    },
+    catch: (cause) =>
+      new ProviderError({
+        cause,
+        message: `Failed to create providers: ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
+}
+
+function createFromWalletProvidersEffect(
+  walletProvider: WalletProvider,
+  midnightProvider: MidnightProvider,
+  options: CreateProvidersOptions,
+): Effect.Effect<ContractProviders, ProviderError> {
+  return Effect.try({
+    try: () => {
+      const { networkConfig, zkConfigProvider, privateStateProvider } = options;
+
+      // Set network ID
+      setNetworkId(networkConfig.networkId as 'undeployed');
+
+      // Public data provider - reads from indexer
+      const publicDataProvider = indexerPublicDataProvider(networkConfig.indexer, networkConfig.indexerWS);
+
+      // Proof provider - generates ZK proofs
+      const proofProvider = httpClientProofProvider(networkConfig.proofServer);
+
+      return {
+        walletProvider,
+        midnightProvider,
+        publicDataProvider,
+        privateStateProvider,
+        proofProvider,
+        zkConfigProvider,
+      };
+    },
+    catch: (cause) =>
+      new ProviderError({
+        cause,
+        message: `Failed to create providers from wallet: ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
+}
+
+/**
+ * Effect-based API for provider creation.
+ */
+export const ProvidersEffectAPI: ContractProvidersEffect = {
+  create: createEffect,
+  createFromWalletProviders: createFromWalletProvidersEffect,
+};
+
+// =============================================================================
+// Promise API (backwards compatible)
+// =============================================================================
+
+/**
+ * Create contract providers from wallet context.
+ *
+ * @param walletContext - Initialized wallet context
+ * @param options - Provider options including zkConfig and privateState providers
+ * @returns Contract providers for deploying and interacting with contracts
+ *
+ * @example
+ * ```typescript
+ * // Effect-based usage
+ * const providers = yield* Midday.Providers.effect.create(walletContext, options);
+ *
+ * // Synchronous usage
+ * const providers = Midday.Providers.create(walletContext, options);
+ * ```
+ */
 export function create(
   walletContext: WalletContext,
-  zkConfigPath: string,
-  networkConfig: NetworkConfig,
-  storageConfig: StorageConfig = {},
+  options: CreateProvidersOptions,
 ): ContractProviders {
-  // Set network ID
-  setNetworkId(networkConfig.networkId as 'undeployed');
-
-  // Storage configuration
-  const storagePath = storageConfig.path || '.data/midnight-level-db';
-  const storagePassword = storageConfig.password || process.env.MIDNIGHT_STORAGE_PASSWORD || '1234567890123456';
-
-  // Wallet provider - handles transaction balancing
-  const walletProvider: WalletProvider = {
-    getCoinPublicKey: () => walletContext.shieldedSecretKeys.coinPublicKey as unknown as ledger.CoinPublicKey,
-    getEncryptionPublicKey: () => walletContext.shieldedSecretKeys.encryptionPublicKey as unknown as ledger.EncPublicKey,
-    balanceTx: async (tx: ledger.UnprovenTransaction, newCoins?: unknown[], ttl?: Date): Promise<BalancedProvingRecipe> => {
-      const txTtl = ttl ?? new Date(Date.now() + 30 * 60 * 1000);
-      const provingRecipe = await walletContext.wallet.balanceTransaction(
-        walletContext.shieldedSecretKeys,
-        walletContext.dustSecretKey,
-        tx as unknown as ledger.Transaction<ledger.SignatureEnabled, ledger.Proofish, ledger.Bindingish>,
-        txTtl,
-      );
-      return provingRecipe as unknown as BalancedProvingRecipe;
-    },
-  };
-
-  // Midnight provider - handles transaction submission
-  const midnightProvider: MidnightProvider = {
-    submitTx: async (tx: ledger.FinalizedTransaction) => await walletContext.wallet.submitTransaction(tx),
-  };
-
-  // Public data provider - reads from indexer
-  const publicDataProvider = indexerPublicDataProvider(networkConfig.indexer, networkConfig.indexerWS);
-
-  // Private state provider - local encrypted storage
-  const privateStateProvider = levelPrivateStateProvider({
-    privateStateStoreName: storagePath,
-    privateStoragePasswordProvider: () => storagePassword,
-  });
-
-  // Proof provider - generates ZK proofs
-  const proofProvider = httpClientProofProvider(networkConfig.proofServer);
-
-  // ZK config provider - circuit keys and config
-  const zkConfigProvider = new NodeZkConfigProvider(zkConfigPath);
-
-  return {
-    walletProvider,
-    midnightProvider,
-    publicDataProvider,
-    privateStateProvider,
-    proofProvider,
-    zkConfigProvider,
-  };
+  return runEffect(createEffect(walletContext, options));
 }
+
+/**
+ * Create contract providers from pre-configured wallet and midnight providers.
+ *
+ * This is used when connecting via wallet connector (browser) where the wallet
+ * handles balancing and submission.
+ *
+ * @param walletProvider - Provider for transaction balancing
+ * @param midnightProvider - Provider for transaction submission
+ * @param options - Additional provider options
+ * @returns Contract providers for deploying and interacting with contracts
+ */
+export function createFromWalletProviders(
+  walletProvider: WalletProvider,
+  midnightProvider: MidnightProvider,
+  options: CreateProvidersOptions,
+): ContractProviders {
+  return runEffect(createFromWalletProvidersEffect(walletProvider, midnightProvider, options));
+}
+
+/**
+ * Raw Effect APIs for advanced users.
+ *
+ * @since 0.2.0
+ * @category effect
+ */
+export const effect = {
+  create: createEffect,
+  createFromWalletProviders: createFromWalletProvidersEffect,
+};
+
+// =============================================================================
+// Effect DI - Service Definitions
+// =============================================================================
+
+/**
+ * Service interface for Providers operations.
+ *
+ * @since 0.2.0
+ * @category service
+ */
+export interface ProvidersServiceImpl {
+  readonly create: (
+    walletContext: WalletContext,
+    options: CreateProvidersOptions,
+  ) => Effect.Effect<ContractProviders, ProviderError>;
+  readonly createFromWalletProviders: (
+    walletProvider: WalletProvider,
+    midnightProvider: MidnightProvider,
+    options: CreateProvidersOptions,
+  ) => Effect.Effect<ContractProviders, ProviderError>;
+}
+
+/**
+ * Context.Tag for ProvidersService dependency injection.
+ *
+ * @since 0.2.0
+ * @category service
+ */
+export class ProvidersService extends Context.Tag('ProvidersService')<
+  ProvidersService,
+  ProvidersServiceImpl
+>() {}
+
+// =============================================================================
+// Effect DI - Live Layer
+// =============================================================================
+
+/**
+ * Live Layer for ProvidersService.
+ *
+ * @since 0.2.0
+ * @category layer
+ */
+export const ProvidersLive: Layer.Layer<ProvidersService> = Layer.succeed(ProvidersService, {
+  create: createEffect,
+  createFromWalletProviders: createFromWalletProvidersEffect,
+});
