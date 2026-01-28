@@ -1,6 +1,6 @@
 {
   "name": "@no-witness-labs/midday-sdk",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Developer-friendly SDK for building dapps on Midnight Network",
   "type": "module",
   "main": "dist/index.js",
