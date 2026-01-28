@@ -183,6 +183,7 @@ export {
   ContractBuilderLive,
   ContractService,
   ContractLive,
+  MidnightClientService,
 } from './Client.js';
 export type { NetworkConfig } from './Config.js';
 export type { WalletContext, WalletServiceImpl } from './Wallet.js';
