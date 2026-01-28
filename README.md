@@ -10,21 +10,115 @@ pnpm add @no-witness-labs/midday-sdk
 
 ## Quick Start
 
+### Promise API (Non-Effect Users)
+
 ```typescript
 import * as Midday from '@no-witness-labs/midday-sdk';
 
-// Create client (uses local network + dev wallet by default)
-const client = await Midday.Client.create();
+// Create client
+const client = await Midday.Client.create({
+  networkConfig: Midday.Config.NETWORKS.local,
+  zkConfigProvider: new Midday.HttpZkConfigProvider('http://localhost:3000/zk'),
+  privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+});
 
 // Load and deploy a contract
-const counter = await (await client.contractFrom('build/simple-counter')).deploy();
+const builder = await Midday.Client.contractFrom(client, {
+  module: await import('./contracts/counter/index.js'),
+});
+const contract = await Midday.ContractBuilder.deploy(builder);
 
 // Call contract actions
-await counter.call('increment');
+await Midday.Contract.call(contract, 'increment');
 
 // Read state
-const state = await counter.ledgerState();
+const state = await Midday.Contract.ledgerState(contract);
 console.log(state.counter);
+```
+
+### Effect API (Pure Effect Users)
+
+```typescript
+import * as Midday from '@no-witness-labs/midday-sdk';
+import { Effect } from 'effect';
+
+const program = Effect.gen(function* () {
+  const client = yield* Midday.Client.effect.create({
+    networkConfig: Midday.Config.NETWORKS.local,
+    zkConfigProvider: new Midday.HttpZkConfigProvider('http://localhost:3000/zk'),
+    privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+  });
+
+  const builder = yield* Midday.Client.effect.contractFrom(client, {
+    module: await import('./contracts/counter/index.js'),
+  });
+
+  const contract = yield* Midday.ContractBuilder.effect.deploy(builder);
+  const result = yield* Midday.Contract.effect.call(contract, 'increment');
+
+  return result;
+});
+
+const result = await Midday.runEffectPromise(program);
+```
+
+### Effect DI (Dependency Injection)
+
+```typescript
+import * as Midday from '@no-witness-labs/midday-sdk';
+import { Effect, Layer } from 'effect';
+
+const program = Effect.gen(function* () {
+  const clientService = yield* Midday.ClientService;
+  const contractBuilderService = yield* Midday.ContractBuilderService;
+  const contractService = yield* Midday.ContractService;
+
+  const client = yield* clientService.create({
+    networkConfig: Midday.Config.NETWORKS.local,
+    zkConfigProvider: new Midday.HttpZkConfigProvider('http://localhost:3000/zk'),
+    privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+  });
+
+  const builder = yield* clientService.contractFrom(client, {
+    module: await import('./contracts/counter/index.js'),
+  });
+
+  const contract = yield* contractBuilderService.deploy(builder);
+  const result = yield* contractService.call(contract, 'increment');
+
+  return result;
+});
+
+// Compose layers
+const MainLive = Layer.mergeAll(
+  Midday.ClientLive,
+  Midday.ContractBuilderLive,
+  Midday.ContractLive,
+);
+
+const result = await Effect.runPromise(program.pipe(Effect.provide(MainLive)));
+```
+
+## Browser Usage (Lace Wallet)
+
+```typescript
+import * as Midday from '@no-witness-labs/midday-sdk';
+
+// Connect to Lace wallet
+const connection = await Midday.connectWallet('testnet');
+
+// Create client from wallet connection
+const client = await Midday.Client.fromWallet(connection, {
+  zkConfigProvider: new Midday.HttpZkConfigProvider('https://cdn.example.com/zk'),
+  privateStateProvider: Midday.indexedDBPrivateStateProvider({ privateStateStoreName: 'my-app' }),
+});
+
+// Use contract
+const builder = await Midday.Client.contractFrom(client, {
+  module: await import('./contracts/counter/index.js'),
+});
+const contract = await Midday.ContractBuilder.deploy(builder);
+await Midday.Contract.call(contract, 'increment');
 ```
 
 ## Configuration
@@ -32,10 +126,20 @@ console.log(state.counter);
 ### Network Configuration
 
 ```typescript
-// Local network (default)
-const client = await Midday.Client.create();
+// Local network
+const client = await Midday.Client.create({
+  networkConfig: Midday.Config.NETWORKS.local,
+  // ...
+});
 
-// Custom network via config
+// Testnet
+const client = await Midday.Client.create({
+  networkConfig: Midday.Config.NETWORKS.testnet,
+  seed: 'your-64-char-hex-seed',
+  // ...
+});
+
+// Custom network
 const client = await Midday.Client.create({
   networkConfig: {
     networkId: 'testnet',
@@ -45,40 +149,8 @@ const client = await Midday.Client.create({
     proofServer: 'https://proof.testnet.midnight.network',
   },
   seed: 'your-64-char-hex-seed',
+  // ...
 });
-
-// Or via environment variables
-// MIDNIGHT_INDEXER=https://...
-// MIDNIGHT_INDEXER_WS=wss://...
-// MIDNIGHT_NODE=wss://...
-// MIDNIGHT_PROOF_SERVER=https://...
-// MIDNIGHT_NETWORK_ID=testnet
-```
-
-### Wallet Seed
-
-```typescript
-// Local network uses dev wallet by default
-const client = await Midday.Client.create();
-
-// Custom seed
-const client = await Midday.Client.create({
-  seed: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
-});
-```
-
-### Storage Configuration
-
-```typescript
-const client = await Midday.Client.create({
-  storage: {
-    path: '.data/my-app-state',
-    password: 'secure-password',
-  },
-});
-
-// Or via environment variable
-// MIDNIGHT_STORAGE_PASSWORD=secure-password
 ```
 
 ## Contract Operations
@@ -86,48 +158,38 @@ const client = await Midday.Client.create({
 ### Deploy a New Contract
 
 ```typescript
-const contract = await (await client.contractFrom('build/my-contract')).deploy();
+const builder = await Midday.Client.contractFrom(client, {
+  module: await import('./contracts/my-contract/index.js'),
+});
+const contract = await Midday.ContractBuilder.deploy(builder);
 console.log(`Deployed at: ${contract.address}`);
 ```
 
 ### Join an Existing Contract
 
 ```typescript
-const contract = await (await client.contractFrom('build/my-contract')).join(address);
-```
-
-### Path Resolution Options
-
-```typescript
-// Relative to cwd (default)
-await client.contractFrom('build/my-contract');
-
-// Relative to project root (finds package.json)
-await client.contractFrom('build/my-contract', { from: 'project' });
-
-// Relative to current file
-await client.contractFrom('../build/my-contract', { from: import.meta.url });
-
-// Absolute path
-await client.contractFrom('/absolute/path/to/build/my-contract');
+const builder = await Midday.Client.contractFrom(client, {
+  module: await import('./contracts/my-contract/index.js'),
+});
+const contract = await Midday.ContractBuilder.join(builder, { address: contractAddress });
 ```
 
 ### With Witnesses
 
 ```typescript
-const contract = await (
-  await client.contractFrom('build/my-contract', {
-    witnesses: {
-      my_witness_function: myImplementation,
-    },
-  })
-).deploy();
+const builder = await Midday.Client.contractFrom(client, {
+  module: await import('./contracts/my-contract/index.js'),
+  witnesses: {
+    my_witness_function: myImplementation,
+  },
+});
+const contract = await Midday.ContractBuilder.deploy(builder);
 ```
 
 ### Call Actions
 
 ```typescript
-const result = await contract.call('increment');
+const result = await Midday.Contract.call(contract, 'increment');
 console.log(`TX Hash: ${result.txHash}`);
 console.log(`Block: ${result.blockHeight}`);
 ```
@@ -136,34 +198,39 @@ console.log(`Block: ${result.blockHeight}`);
 
 ```typescript
 // Parsed state via ledger
-const state = await contract.ledgerState();
+const state = await Midday.Contract.ledgerState(contract);
 
 // Raw state
-const rawState = await contract.state();
+const rawState = await Midday.Contract.state(contract);
 
 // State at specific block
-const historicalState = await contract.ledgerStateAt(blockHeight);
+const historicalState = await Midday.Contract.ledgerStateAt(contract, blockHeight);
 ```
-
-## Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `MIDNIGHT_INDEXER` | Indexer GraphQL HTTP endpoint |
-| `MIDNIGHT_INDEXER_WS` | Indexer GraphQL WebSocket endpoint |
-| `MIDNIGHT_NODE` | Node WebSocket endpoint |
-| `MIDNIGHT_PROOF_SERVER` | Proof server HTTP endpoint |
-| `MIDNIGHT_NETWORK_ID` | Network ID (e.g., 'undeployed', 'testnet') |
-| `MIDNIGHT_STORAGE_PASSWORD` | Private state storage password |
 
 ## API Reference
 
 ### Modules
 
 - `Midday.Client` - High-level client for contract interactions
+- `Midday.ContractBuilder` - Contract deployment and joining
+- `Midday.Contract` - Contract operations (call, state)
 - `Midday.Config` - Network configuration utilities
 - `Midday.Wallet` - Wallet initialization and management
 - `Midday.Providers` - Low-level provider setup
+
+### Services (Effect DI)
+
+| Service | Layer | Description |
+|---------|-------|-------------|
+| `ClientService` | `ClientLive` | Client creation and contract loading |
+| `ContractBuilderService` | `ContractBuilderLive` | Contract deployment and joining |
+| `ContractService` | `ContractLive` | Contract operations |
+| `WalletService` | `WalletLive` | Wallet initialization |
+| `ProvidersService` | `ProvidersLive` | Provider setup |
+| `ZkConfigService` | `ZkConfigLive` | ZK configuration loading |
+| `PrivateStateService` | `PrivateStateLive` | Private state management |
+| `WalletConnectorService` | `WalletConnectorLive` | Browser wallet connection |
+| `WalletProviderService` | `WalletProviderLive` | Wallet provider operations |
 
 ### Types
 
