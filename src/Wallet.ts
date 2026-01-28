@@ -28,7 +28,7 @@ import {
 } from '@midnight-ntwrk/wallet-sdk-unshielded-wallet';
 
 import type { NetworkConfig } from './Config.js';
-import { WalletError } from './errors/index.js';
+import { WalletError } from './wallet/errors.js';
 import { hexToBytes } from './utils/hex.js';
 import { runEffect, runEffectPromise } from './utils/effect-runtime.js';
 
@@ -199,9 +199,6 @@ export const effect = {
   waitForSync: waitForSyncEffect,
   deriveAddress: deriveAddressEffect,
 };
-
-// Legacy export for backwards compatibility
-export { effect as Effect };
 
 // =============================================================================
 // Effect DI - Service Definitions

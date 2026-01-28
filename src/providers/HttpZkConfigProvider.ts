@@ -36,7 +36,7 @@ import {
   createZKIR,
 } from '@midnight-ntwrk/midnight-js-types';
 
-import { ZkConfigError } from '../errors/index.js';
+import { ZkConfigError } from './errors.js';
 import { runEffectPromise } from '../utils/effect-runtime.js';
 
 /**
@@ -378,3 +378,16 @@ export const ZkConfigLive: Layer.Layer<ZkConfigService> = Layer.succeed(ZkConfig
   getProverKey: getProverKeyEffect,
   getVerifierKey: getVerifierKeyEffect,
 });
+
+/**
+ * ZK configuration provider service for dependency injection.
+ *
+ * This tag allows injecting a ZKConfigProvider instance.
+ *
+ * @since 0.3.0
+ * @category services
+ */
+export class ZkConfigProviderService extends Context.Tag('ZkConfigProviderService')<
+  ZkConfigProviderService,
+  ZKConfigProvider<string>
+>() {}

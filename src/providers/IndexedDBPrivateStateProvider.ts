@@ -30,7 +30,7 @@ import { Context, Effect, Layer } from 'effect';
 import { BrowserLevel } from 'browser-level';
 import type { PrivateStateProvider } from '@midnight-ntwrk/midnight-js-types';
 
-import { PrivateStateError } from '../errors/index.js';
+import { PrivateStateError } from './errors.js';
 import { runEffectPromise } from '../utils/effect-runtime.js';
 
 // Use string for contract address to avoid importing compact-runtime
@@ -677,3 +677,16 @@ export const PrivateStateLive: Layer.Layer<PrivateStateService> = Layer.succeed(
   removeSigningKey: removeSigningKeyEffect,
   clearSigningKeys: clearSigningKeysEffect,
 });
+
+/**
+ * Private state provider service for dependency injection.
+ *
+ * This tag allows injecting a PrivateStateProvider instance.
+ *
+ * @since 0.3.0
+ * @category services
+ */
+export class PrivateStateProviderService extends Context.Tag('PrivateStateProviderService')<
+  PrivateStateProviderService,
+  PrivateStateProvider
+>() {}

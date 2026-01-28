@@ -29,7 +29,7 @@
  * @module
  */
 
-import { Context, Effect, Layer } from 'effect';
+import { Context, Data, Effect, Layer } from 'effect';
 import { deployContract, findDeployedContract } from '@midnight-ntwrk/midnight-js-contracts';
 import type { ZKConfigProvider, PrivateStateProvider } from '@midnight-ntwrk/midnight-js-types';
 
@@ -41,8 +41,33 @@ import type { ContractProviders, StorageConfig, CreateProvidersOptions } from '.
 import type { WalletContext } from './Wallet.js';
 import type { WalletConnection } from './wallet/connector.js';
 import { createWalletProviders } from './wallet/provider.js';
-import { ClientError, ContractError } from './errors/index.js';
 import { runEffectPromise } from './utils/effect-runtime.js';
+
+// =============================================================================
+// Errors
+// =============================================================================
+
+/**
+ * Error during client initialization or operation.
+ *
+ * @since 0.3.0
+ * @category errors
+ */
+export class ClientError extends Data.TaggedError('ClientError')<{
+  readonly cause: unknown;
+  readonly message: string;
+}> {}
+
+/**
+ * Error during contract deployment or calls.
+ *
+ * @since 0.3.0
+ * @category errors
+ */
+export class ContractError extends Data.TaggedError('ContractError')<{
+  readonly cause: unknown;
+  readonly message: string;
+}> {}
 
 // =============================================================================
 // Types
@@ -288,7 +313,7 @@ function createEffect(config: ClientConfig): Effect.Effect<MidnightClient, Clien
 
     // Initialize wallet
     logger.info('Initializing wallet...');
-    const walletContext = yield* Wallet.Effect.init(walletSeed, networkConfig).pipe(
+    const walletContext = yield* Wallet.effect.init(walletSeed, networkConfig).pipe(
       Effect.mapError(
         (e) =>
           new ClientError({
@@ -298,7 +323,7 @@ function createEffect(config: ClientConfig): Effect.Effect<MidnightClient, Clien
       ),
     );
 
-    yield* Wallet.Effect.waitForSync(walletContext).pipe(
+    yield* Wallet.effect.waitForSync(walletContext).pipe(
       Effect.mapError(
         (e) =>
           new ClientError({
@@ -998,3 +1023,31 @@ export const ContractLive: Layer.Layer<ContractService> = Layer.succeed(Contract
   ledgerState: ledgerStateEffect,
   ledgerStateAt: ledgerStateAtEffect,
 });
+
+// =============================================================================
+// Layer Factories
+// =============================================================================
+
+/**
+ * Create a Layer providing all Client-related services.
+ *
+ * @example
+ * ```typescript
+ * import { Effect } from 'effect';
+ * import * as Midday from '@no-witness-labs/midday-sdk';
+ *
+ * const program = Effect.gen(function* () {
+ *   const clientService = yield* Midday.ClientService;
+ *   const client = yield* clientService.create(config);
+ *   return client;
+ * });
+ *
+ * await Effect.runPromise(program.pipe(Effect.provide(Midday.Client.layer())));
+ * ```
+ *
+ * @since 0.3.0
+ * @category layer
+ */
+export function layer(): Layer.Layer<ClientService | ContractBuilderService | ContractService> {
+  return Layer.mergeAll(ClientLive, ContractBuilderLive, ContractLive);
+}

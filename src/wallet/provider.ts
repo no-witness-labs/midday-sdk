@@ -15,7 +15,7 @@ import { Transaction, type FinalizedTransaction, type TransactionId, type Unprov
 import { getNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 
 import type { ConnectedAPI, ShieldedAddresses } from './connector.js';
-import { ProviderError } from '../errors/index.js';
+import { ProviderError } from '../providers/errors.js';
 import { bytesToHex, hexToBytes } from '../utils/hex.js';
 import { runEffectPromise } from '../utils/effect-runtime.js';
 
@@ -171,9 +171,6 @@ export const effect = {
   balanceTx: balanceTxEffect,
   submitTx: submitTxEffect,
 };
-
-// Legacy export for backwards compatibility
-export { WalletProviderEffectAPI as Effect };
 
 // =============================================================================
 // Effect DI - Service Definitions

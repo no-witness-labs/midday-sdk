@@ -9,7 +9,7 @@
  */
 
 import { Context, Effect, Layer } from 'effect';
-import { WalletError } from '../errors/index.js';
+import { WalletError } from './errors.js';
 import { runEffect, runEffectPromise } from '../utils/effect-runtime.js';
 
 // Types based on @midnight-ntwrk/dapp-connector-api v4
@@ -256,7 +256,7 @@ export function isWalletAvailable(): boolean {
  * @example
  * ```typescript
  * // Effect-based usage
- * const connection = yield* Midday.WalletConnector.Effect.connect('testnet');
+ * const connection = yield* Midday.WalletConnector.effect.connect('testnet');
  *
  * // Promise-based usage
  * const connection = await Midday.connectWallet('testnet');
@@ -295,9 +295,6 @@ export const effect = {
   disconnect: disconnectEffect,
   getProvingProvider: getProvingProviderEffect,
 };
-
-// Legacy export for backwards compatibility
-export { WalletConnectorEffectAPI as Effect };
 
 // =============================================================================
 // Effect DI - Service Definitions

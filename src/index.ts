@@ -55,16 +55,14 @@
 // Re-export Effect for consumer convenience
 export { Effect, pipe, Context, Layer } from 'effect';
 
-// Services for dependency injection
+// Services for dependency injection (from Config module)
 export {
   LoggerService,
   NetworkConfigService,
-  ZkConfigProviderService,
-  PrivateStateProviderService,
   SdkConfigService,
   makeSdkLayer,
   type SdkConfig,
-} from './services/index.js';
+} from './Config.js';
 
 // Core modules
 export * as Client from './Client.js';
@@ -76,15 +74,10 @@ export * as Providers from './Providers.js';
 // Effect utilities
 export { runEffect, runEffectPromise } from './utils/effect-runtime.js';
 
-// Error types
-export {
-  ClientError,
-  WalletError,
-  ProviderError,
-  ContractError,
-  ZkConfigError,
-  PrivateStateError,
-} from './errors/index.js';
+// Error types (colocated with their modules)
+export { ClientError, ContractError } from './Client.js';
+export { WalletError } from './wallet/errors.js';
+export { ProviderError, ZkConfigError, PrivateStateError } from './providers/errors.js';
 
 // Type helpers
 export type {
@@ -138,6 +131,7 @@ export {
   effect as HttpZkConfigProviderEffect,
   ZkConfigService,
   ZkConfigLive,
+  ZkConfigProviderService,
   type ZkConfig,
   type HttpZkConfigProviderData,
   type ZkConfigServiceImpl,
@@ -157,6 +151,7 @@ export {
   effect as PrivateStateEffect,
   PrivateStateService,
   PrivateStateLive,
+  PrivateStateProviderService,
   type IndexedDBPrivateStateConfig,
   type PrivateStateProviderData,
   type PrivateStateServiceImpl,

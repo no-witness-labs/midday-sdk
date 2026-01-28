@@ -23,7 +23,7 @@ import type {
 
 import type { NetworkConfig } from './Config.js';
 import type { WalletContext } from './Wallet.js';
-import { ProviderError } from './errors/index.js';
+import { ProviderError } from './providers/errors.js';
 import { runEffect } from './utils/effect-runtime.js';
 
 export interface StorageConfig {
@@ -187,7 +187,7 @@ export const ProvidersEffectAPI: ContractProvidersEffect = {
  * @example
  * ```typescript
  * // Effect-based usage
- * const providers = yield* Midday.Providers.Effect.create(walletContext, options);
+ * const providers = yield* Midday.Providers.effect.create(walletContext, options);
  *
  * // Synchronous usage
  * const providers = Midday.Providers.create(walletContext, options);
@@ -229,9 +229,6 @@ export const effect = {
   create: createEffect,
   createFromWalletProviders: createFromWalletProvidersEffect,
 };
-
-// Legacy export for backwards compatibility
-export { effect as Effect };
 
 // =============================================================================
 // Effect DI - Service Definitions
