@@ -1029,7 +1029,10 @@ export const ContractLive: Layer.Layer<ContractService> = Layer.succeed(Contract
 // =============================================================================
 
 /**
- * Create a Layer providing all Client-related services.
+ * Create a Layer providing all Client-related factory services.
+ *
+ * Use this when you want to create clients on-demand within your Effect programs.
+ * For pre-initialized clients, use `Client.layer(config)` instead.
  *
  * @example
  * ```typescript
@@ -1042,12 +1045,104 @@ export const ContractLive: Layer.Layer<ContractService> = Layer.succeed(Contract
  *   return client;
  * });
  *
- * await Effect.runPromise(program.pipe(Effect.provide(Midday.Client.layer())));
+ * await Effect.runPromise(program.pipe(Effect.provide(Midday.Client.services())));
  * ```
  *
  * @since 0.3.0
  * @category layer
  */
-export function layer(): Layer.Layer<ClientService | ContractBuilderService | ContractService> {
+export function services(): Layer.Layer<ClientService | ContractBuilderService | ContractService> {
   return Layer.mergeAll(ClientLive, ContractBuilderLive, ContractLive);
+}
+
+// =============================================================================
+// Pre-configured Client Layer
+// =============================================================================
+
+/**
+ * Context.Tag for a pre-initialized MidnightClient.
+ *
+ * Use with `Client.layer(config)` for dependency injection of a configured client.
+ *
+ * @since 0.3.0
+ * @category service
+ */
+export class MidnightClientService extends Context.Tag('MidnightClientService')<
+  MidnightClientService,
+  MidnightClient
+>() {}
+
+/**
+ * Create a Layer that provides a pre-initialized MidnightClient.
+ *
+ * This is the recommended way to inject a client into Effect programs
+ * when you have a known configuration at startup. Follows the same pattern
+ * as `Cluster.layer(config)`.
+ *
+ * @example
+ * ```typescript
+ * import { Effect } from 'effect';
+ * import * as Midday from '@no-witness-labs/midday-sdk';
+ *
+ * const clientLayer = Midday.Client.layer({
+ *   seed: 'your-64-char-hex-seed',
+ *   networkConfig: Midday.Config.NETWORKS.local,
+ *   zkConfigProvider: new Midday.HttpZkConfigProvider('http://localhost:3000/zk'),
+ *   privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+ * });
+ *
+ * const program = Effect.gen(function* () {
+ *   const client = yield* Midday.MidnightClientService;
+ *   const builder = yield* Midday.Client.effect.contractFrom(client, { module });
+ *   return builder;
+ * });
+ *
+ * await Effect.runPromise(program.pipe(Effect.provide(clientLayer)));
+ * ```
+ *
+ * @since 0.3.0
+ * @category layer
+ */
+export function layer(config: ClientConfig): Layer.Layer<MidnightClientService, ClientError> {
+  return Layer.effect(MidnightClientService, createEffect(config));
+}
+
+/**
+ * Create a Layer that provides a pre-initialized MidnightClient from a wallet connection.
+ *
+ * Use this for browser environments with Lace wallet integration.
+ *
+ * @example
+ * ```typescript
+ * import { Effect } from 'effect';
+ * import * as Midday from '@no-witness-labs/midday-sdk';
+ *
+ * // After connecting wallet
+ * const connection = await Midday.connectWallet('testnet');
+ *
+ * const clientLayer = Midday.Client.layerFromWallet(connection, {
+ *   zkConfigProvider: new Midday.HttpZkConfigProvider('https://cdn.example.com/zk'),
+ *   privateStateProvider: Midday.indexedDBPrivateStateProvider({ privateStateStoreName: 'my-app' }),
+ * });
+ *
+ * const program = Effect.gen(function* () {
+ *   const client = yield* Midday.MidnightClientService;
+ *   // Use client...
+ * });
+ *
+ * await Effect.runPromise(program.pipe(Effect.provide(clientLayer)));
+ * ```
+ *
+ * @since 0.3.0
+ * @category layer
+ */
+export function layerFromWallet(
+  connection: WalletConnection,
+  config: {
+    zkConfigProvider: ZKConfigProvider<string>;
+    privateStateProvider: PrivateStateProvider;
+    logging?: boolean;
+  },
+): Layer.Layer<MidnightClientService, ClientError> {
+  return Layer.effect(MidnightClientService, fromWalletEffect(connection, config));
 }
