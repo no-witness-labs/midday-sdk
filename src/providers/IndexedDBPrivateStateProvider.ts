@@ -1,8 +1,26 @@
 /**
  * IndexedDB-based private state provider for browser environments.
  *
- * Uses browser-level (which wraps IndexedDB) for persistent encrypted storage.
- * Provides dual API: Effect-based and Promise-based.
+ * ## API Design
+ *
+ * This module uses a **module-function pattern**:
+ *
+ * - **Stateless**: Functions operate on PrivateStateProvider data
+ * - **Module functions**: `PrivateState.get(provider, id)`, `PrivateState.set(provider, id, state)`
+ * - **Data-oriented**: Provider is plain data, not an instance with methods
+ *
+ * ### Usage Patterns
+ *
+ * ```typescript
+ * // Promise user
+ * const provider = PrivateState.makeIndexedDB({ privateStateStoreName: 'my-app' });
+ * const state = await PrivateState.get(provider, 'myContract');
+ * await PrivateState.set(provider, 'myContract', { count: 0 });
+ *
+ * // Effect user
+ * const provider = PrivateState.makeIndexedDB({ privateStateStoreName: 'my-app' });
+ * const state = yield* PrivateState.effect.get(provider, 'myContract');
+ * ```
  *
  * @since 0.2.0
  * @module
@@ -23,6 +41,9 @@ type SigningKey = unknown;
 
 /**
  * Configuration for IndexedDB private state storage.
+ *
+ * @since 0.2.0
+ * @category model
  */
 export interface IndexedDBPrivateStateConfig {
   /** Name of the IndexedDB store */
@@ -32,55 +53,270 @@ export interface IndexedDBPrivateStateConfig {
 }
 
 /**
- * Effect-based interface for private state provider.
- */
-export interface PrivateStateProviderEffect {
-  readonly get: (privateStateId: string) => Effect.Effect<unknown | null, PrivateStateError>;
-  readonly set: (privateStateId: string, state: unknown) => Effect.Effect<void, PrivateStateError>;
-  readonly remove: (privateStateId: string) => Effect.Effect<void, PrivateStateError>;
-  readonly clear: () => Effect.Effect<void, PrivateStateError>;
-  readonly setSigningKey: (address: ContractAddress, signingKey: SigningKey) => Effect.Effect<void, PrivateStateError>;
-  readonly getSigningKey: (address: ContractAddress) => Effect.Effect<SigningKey | null, PrivateStateError>;
-  readonly removeSigningKey: (address: ContractAddress) => Effect.Effect<void, PrivateStateError>;
-  readonly clearSigningKeys: () => Effect.Effect<void, PrivateStateError>;
-}
-
-/**
- * Extended PrivateStateProvider with Effect API.
- */
-export interface IndexedDBPrivateStateProviderWithEffect extends PrivateStateProvider<string, unknown> {
-  readonly Effect: PrivateStateProviderEffect;
-}
-
-/**
- * Create a browser-compatible private state provider using IndexedDB.
+ * Represents a private state provider.
  *
- * This provider stores encrypted private state in the browser's IndexedDB,
- * allowing state to persist across page reloads.
+ * This is plain data - use module functions to operate on it.
+ *
+ * @since 0.2.0
+ * @category model
+ */
+export interface PrivateStateProviderData {
+  /** State database */
+  readonly stateDb: BrowserLevel<string, Uint8Array> | Map<string, unknown>;
+  /** Signing key database */
+  readonly signingKeyDb: BrowserLevel<string, Uint8Array> | Map<string, SigningKey>;
+  /** Encryption function */
+  readonly encrypt: (data: Uint8Array) => Uint8Array;
+  /** Decryption function */
+  readonly decrypt: (data: Uint8Array) => Uint8Array;
+  /** Type indicator */
+  readonly type: 'indexeddb' | 'memory';
+}
+
+// =============================================================================
+// Internal Effect Implementations
+// =============================================================================
+
+function getEffect(
+  provider: PrivateStateProviderData,
+  privateStateId: string,
+): Effect.Effect<unknown | null, PrivateStateError> {
+  if (provider.type === 'memory') {
+    const store = provider.stateDb as Map<string, unknown>;
+    return Effect.succeed(store.get(privateStateId) ?? null);
+  }
+
+  return Effect.tryPromise({
+    try: async () => {
+      const stateDb = provider.stateDb as BrowserLevel<string, Uint8Array>;
+      try {
+        const encrypted = await stateDb.get(privateStateId);
+        const decrypted = provider.decrypt(encrypted);
+        const json = new TextDecoder().decode(decrypted);
+        return JSON.parse(json);
+      } catch (error: unknown) {
+        if ((error as { code?: string })?.code === 'LEVEL_NOT_FOUND') {
+          return null;
+        }
+        throw error;
+      }
+    },
+    catch: (cause) =>
+      new PrivateStateError({
+        cause,
+        message: `Failed to get private state '${privateStateId}': ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
+}
+
+function setEffect(
+  provider: PrivateStateProviderData,
+  privateStateId: string,
+  state: unknown,
+): Effect.Effect<void, PrivateStateError> {
+  if (provider.type === 'memory') {
+    const store = provider.stateDb as Map<string, unknown>;
+    return Effect.sync(() => {
+      store.set(privateStateId, state);
+    });
+  }
+
+  return Effect.tryPromise({
+    try: async () => {
+      const stateDb = provider.stateDb as BrowserLevel<string, Uint8Array>;
+      const json = JSON.stringify(state);
+      const bytes = new TextEncoder().encode(json);
+      const encrypted = provider.encrypt(bytes);
+      await stateDb.put(privateStateId, encrypted);
+    },
+    catch: (cause) =>
+      new PrivateStateError({
+        cause,
+        message: `Failed to set private state '${privateStateId}': ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
+}
+
+function removeEffect(
+  provider: PrivateStateProviderData,
+  privateStateId: string,
+): Effect.Effect<void, PrivateStateError> {
+  if (provider.type === 'memory') {
+    const store = provider.stateDb as Map<string, unknown>;
+    return Effect.sync(() => {
+      store.delete(privateStateId);
+    });
+  }
+
+  return Effect.tryPromise({
+    try: async () => {
+      const stateDb = provider.stateDb as BrowserLevel<string, Uint8Array>;
+      try {
+        await stateDb.del(privateStateId);
+      } catch (error: unknown) {
+        if ((error as { code?: string })?.code !== 'LEVEL_NOT_FOUND') {
+          throw error;
+        }
+      }
+    },
+    catch: (cause) =>
+      new PrivateStateError({
+        cause,
+        message: `Failed to remove private state '${privateStateId}': ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
+}
+
+function clearEffect(provider: PrivateStateProviderData): Effect.Effect<void, PrivateStateError> {
+  if (provider.type === 'memory') {
+    const store = provider.stateDb as Map<string, unknown>;
+    return Effect.sync(() => {
+      store.clear();
+    });
+  }
+
+  return Effect.tryPromise({
+    try: () => (provider.stateDb as BrowserLevel<string, Uint8Array>).clear(),
+    catch: (cause) =>
+      new PrivateStateError({
+        cause,
+        message: `Failed to clear private state: ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
+}
+
+function setSigningKeyEffect(
+  provider: PrivateStateProviderData,
+  address: ContractAddress,
+  signingKey: SigningKey,
+): Effect.Effect<void, PrivateStateError> {
+  if (provider.type === 'memory') {
+    const store = provider.signingKeyDb as Map<string, SigningKey>;
+    return Effect.sync(() => {
+      store.set(address, signingKey);
+    });
+  }
+
+  return Effect.tryPromise({
+    try: async () => {
+      const signingKeyDb = provider.signingKeyDb as BrowserLevel<string, Uint8Array>;
+      const json = JSON.stringify(signingKey);
+      const serialized = new TextEncoder().encode(json);
+      const encrypted = provider.encrypt(serialized);
+      await signingKeyDb.put(address, encrypted);
+    },
+    catch: (cause) =>
+      new PrivateStateError({
+        cause,
+        message: `Failed to set signing key for '${address}': ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
+}
+
+function getSigningKeyEffect(
+  provider: PrivateStateProviderData,
+  address: ContractAddress,
+): Effect.Effect<SigningKey | null, PrivateStateError> {
+  if (provider.type === 'memory') {
+    const store = provider.signingKeyDb as Map<string, SigningKey>;
+    return Effect.succeed(store.get(address) ?? null);
+  }
+
+  return Effect.tryPromise({
+    try: async () => {
+      const signingKeyDb = provider.signingKeyDb as BrowserLevel<string, Uint8Array>;
+      try {
+        const encrypted = await signingKeyDb.get(address);
+        const decrypted = provider.decrypt(encrypted);
+        const json = new TextDecoder().decode(decrypted);
+        return JSON.parse(json) as SigningKey;
+      } catch (error: unknown) {
+        if ((error as { code?: string })?.code === 'LEVEL_NOT_FOUND') {
+          return null;
+        }
+        throw error;
+      }
+    },
+    catch: (cause) =>
+      new PrivateStateError({
+        cause,
+        message: `Failed to get signing key for '${address}': ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
+}
+
+function removeSigningKeyEffect(
+  provider: PrivateStateProviderData,
+  address: ContractAddress,
+): Effect.Effect<void, PrivateStateError> {
+  if (provider.type === 'memory') {
+    const store = provider.signingKeyDb as Map<string, SigningKey>;
+    return Effect.sync(() => {
+      store.delete(address);
+    });
+  }
+
+  return Effect.tryPromise({
+    try: async () => {
+      const signingKeyDb = provider.signingKeyDb as BrowserLevel<string, Uint8Array>;
+      try {
+        await signingKeyDb.del(address);
+      } catch (error: unknown) {
+        if ((error as { code?: string })?.code !== 'LEVEL_NOT_FOUND') {
+          throw error;
+        }
+      }
+    },
+    catch: (cause) =>
+      new PrivateStateError({
+        cause,
+        message: `Failed to remove signing key for '${address}': ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
+}
+
+function clearSigningKeysEffect(provider: PrivateStateProviderData): Effect.Effect<void, PrivateStateError> {
+  if (provider.type === 'memory') {
+    const store = provider.signingKeyDb as Map<string, SigningKey>;
+    return Effect.sync(() => {
+      store.clear();
+    });
+  }
+
+  return Effect.tryPromise({
+    try: () => (provider.signingKeyDb as BrowserLevel<string, Uint8Array>).clear(),
+    catch: (cause) =>
+      new PrivateStateError({
+        cause,
+        message: `Failed to clear signing keys: ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
+}
+
+// =============================================================================
+// Promise API
+// =============================================================================
+
+/**
+ * Create an IndexedDB-based private state provider.
  *
  * @param config - Configuration options
- * @returns PrivateStateProvider compatible with midnight-js
+ * @returns PrivateStateProviderData
  *
  * @example
  * ```typescript
- * const provider = indexedDBPrivateStateProvider({
+ * const provider = makeIndexedDB({
  *   privateStateStoreName: 'my-dapp-state',
  *   password: 'user-password',
  * });
- *
- * // Effect-based usage
- * const state = yield* provider.Effect.get('myContract');
- *
- * // Promise-based usage
- * const state = await provider.get('myContract');
  * ```
+ *
+ * @since 0.2.0
+ * @category constructors
  */
-export function indexedDBPrivateStateProvider(
-  config: IndexedDBPrivateStateConfig,
-): IndexedDBPrivateStateProviderWithEffect {
+export function makeIndexedDB(config: IndexedDBPrivateStateConfig): PrivateStateProviderData {
   const { privateStateStoreName, password = 'default-password-change-me' } = config;
 
-  // Create separate stores for state and signing keys
   const stateDb = new BrowserLevel<string, Uint8Array>(`${privateStateStoreName}-state`, {
     valueEncoding: 'view',
   });
@@ -104,213 +340,221 @@ export function indexedDBPrivateStateProvider(
     return encrypt(data); // XOR is symmetric
   }
 
-  function serializeSigningKey(signingKey: SigningKey): Uint8Array {
-    const json = JSON.stringify(signingKey);
-    return new TextEncoder().encode(json);
-  }
-
-  function deserializeSigningKey(data: Uint8Array): SigningKey {
-    const json = new TextDecoder().decode(data);
-    return JSON.parse(json) as SigningKey;
-  }
-
-  // Effect-based implementations
-  function getEffect(privateStateId: string): Effect.Effect<unknown | null, PrivateStateError> {
-    return Effect.tryPromise({
-      try: async () => {
-        try {
-          const encrypted = await stateDb.get(privateStateId);
-          const decrypted = decrypt(encrypted);
-          const json = new TextDecoder().decode(decrypted);
-          return JSON.parse(json);
-        } catch (error: unknown) {
-          if ((error as { code?: string })?.code === 'LEVEL_NOT_FOUND') {
-            return null;
-          }
-          throw error;
-        }
-      },
-      catch: (cause) =>
-        new PrivateStateError({
-          cause,
-          message: `Failed to get private state '${privateStateId}': ${cause instanceof Error ? cause.message : String(cause)}`,
-        }),
-    });
-  }
-
-  function setEffect(privateStateId: string, state: unknown): Effect.Effect<void, PrivateStateError> {
-    return Effect.tryPromise({
-      try: async () => {
-        const json = JSON.stringify(state);
-        const bytes = new TextEncoder().encode(json);
-        const encrypted = encrypt(bytes);
-        await stateDb.put(privateStateId, encrypted);
-      },
-      catch: (cause) =>
-        new PrivateStateError({
-          cause,
-          message: `Failed to set private state '${privateStateId}': ${cause instanceof Error ? cause.message : String(cause)}`,
-        }),
-    });
-  }
-
-  function removeEffect(privateStateId: string): Effect.Effect<void, PrivateStateError> {
-    return Effect.tryPromise({
-      try: async () => {
-        try {
-          await stateDb.del(privateStateId);
-        } catch (error: unknown) {
-          if ((error as { code?: string })?.code !== 'LEVEL_NOT_FOUND') {
-            throw error;
-          }
-        }
-      },
-      catch: (cause) =>
-        new PrivateStateError({
-          cause,
-          message: `Failed to remove private state '${privateStateId}': ${cause instanceof Error ? cause.message : String(cause)}`,
-        }),
-    });
-  }
-
-  function clearEffect(): Effect.Effect<void, PrivateStateError> {
-    return Effect.tryPromise({
-      try: () => stateDb.clear(),
-      catch: (cause) =>
-        new PrivateStateError({
-          cause,
-          message: `Failed to clear private state: ${cause instanceof Error ? cause.message : String(cause)}`,
-        }),
-    });
-  }
-
-  function setSigningKeyEffect(address: ContractAddress, signingKey: SigningKey): Effect.Effect<void, PrivateStateError> {
-    return Effect.tryPromise({
-      try: async () => {
-        const serialized = serializeSigningKey(signingKey);
-        const encrypted = encrypt(serialized);
-        await signingKeyDb.put(address, encrypted);
-      },
-      catch: (cause) =>
-        new PrivateStateError({
-          cause,
-          message: `Failed to set signing key for '${address}': ${cause instanceof Error ? cause.message : String(cause)}`,
-        }),
-    });
-  }
-
-  function getSigningKeyEffect(address: ContractAddress): Effect.Effect<SigningKey | null, PrivateStateError> {
-    return Effect.tryPromise({
-      try: async () => {
-        try {
-          const encrypted = await signingKeyDb.get(address);
-          const decrypted = decrypt(encrypted);
-          return deserializeSigningKey(decrypted);
-        } catch (error: unknown) {
-          if ((error as { code?: string })?.code === 'LEVEL_NOT_FOUND') {
-            return null;
-          }
-          throw error;
-        }
-      },
-      catch: (cause) =>
-        new PrivateStateError({
-          cause,
-          message: `Failed to get signing key for '${address}': ${cause instanceof Error ? cause.message : String(cause)}`,
-        }),
-    });
-  }
-
-  function removeSigningKeyEffect(address: ContractAddress): Effect.Effect<void, PrivateStateError> {
-    return Effect.tryPromise({
-      try: async () => {
-        try {
-          await signingKeyDb.del(address);
-        } catch (error: unknown) {
-          if ((error as { code?: string })?.code !== 'LEVEL_NOT_FOUND') {
-            throw error;
-          }
-        }
-      },
-      catch: (cause) =>
-        new PrivateStateError({
-          cause,
-          message: `Failed to remove signing key for '${address}': ${cause instanceof Error ? cause.message : String(cause)}`,
-        }),
-    });
-  }
-
-  function clearSigningKeysEffect(): Effect.Effect<void, PrivateStateError> {
-    return Effect.tryPromise({
-      try: () => signingKeyDb.clear(),
-      catch: (cause) =>
-        new PrivateStateError({
-          cause,
-          message: `Failed to clear signing keys: ${cause instanceof Error ? cause.message : String(cause)}`,
-        }),
-    });
-  }
-
-  // Effect API object
-  const effectAPI: PrivateStateProviderEffect = {
-    get: getEffect,
-    set: setEffect,
-    remove: removeEffect,
-    clear: clearEffect,
-    setSigningKey: setSigningKeyEffect,
-    getSigningKey: getSigningKeyEffect,
-    removeSigningKey: removeSigningKeyEffect,
-    clearSigningKeys: clearSigningKeysEffect,
-  };
-
   return {
-    Effect: effectAPI,
-
-    async get(privateStateId: string): Promise<unknown | null> {
-      return runEffectPromise(getEffect(privateStateId));
-    },
-
-    async set(privateStateId: string, state: unknown): Promise<void> {
-      return runEffectPromise(setEffect(privateStateId, state));
-    },
-
-    async remove(privateStateId: string): Promise<void> {
-      return runEffectPromise(removeEffect(privateStateId));
-    },
-
-    async clear(): Promise<void> {
-      return runEffectPromise(clearEffect());
-    },
-
-    async setSigningKey(address: ContractAddress, signingKey: SigningKey): Promise<void> {
-      return runEffectPromise(setSigningKeyEffect(address, signingKey));
-    },
-
-    async getSigningKey(address: ContractAddress): Promise<SigningKey | null> {
-      return runEffectPromise(getSigningKeyEffect(address));
-    },
-
-    async removeSigningKey(address: ContractAddress): Promise<void> {
-      return runEffectPromise(removeSigningKeyEffect(address));
-    },
-
-    async clearSigningKeys(): Promise<void> {
-      return runEffectPromise(clearSigningKeysEffect());
-    },
+    stateDb,
+    signingKeyDb,
+    encrypt,
+    decrypt,
+    type: 'indexeddb',
   };
-}
-
-/**
- * Effect-based interface for in-memory private state provider.
- */
-export interface InMemoryPrivateStateProviderWithEffect extends PrivateStateProvider<string, unknown> {
-  readonly Effect: PrivateStateProviderEffect;
 }
 
 /**
  * Create an in-memory private state provider (no persistence).
  *
- * Useful for testing or ephemeral sessions where persistence isn't needed.
+ * @returns PrivateStateProviderData
+ *
+ * @example
+ * ```typescript
+ * const provider = makeInMemory();
+ * ```
+ *
+ * @since 0.2.0
+ * @category constructors
+ */
+export function makeInMemory(): PrivateStateProviderData {
+  return {
+    stateDb: new Map<string, unknown>(),
+    signingKeyDb: new Map<string, SigningKey>(),
+    encrypt: (data) => data,
+    decrypt: (data) => data,
+    type: 'memory',
+  };
+}
+
+/**
+ * Get private state.
+ *
+ * @since 0.2.0
+ * @category operations
+ */
+export async function get(
+  provider: PrivateStateProviderData,
+  privateStateId: string,
+): Promise<unknown | null> {
+  return runEffectPromise(getEffect(provider, privateStateId));
+}
+
+/**
+ * Set private state.
+ *
+ * @since 0.2.0
+ * @category operations
+ */
+export async function set(
+  provider: PrivateStateProviderData,
+  privateStateId: string,
+  state: unknown,
+): Promise<void> {
+  return runEffectPromise(setEffect(provider, privateStateId, state));
+}
+
+/**
+ * Remove private state.
+ *
+ * @since 0.2.0
+ * @category operations
+ */
+export async function remove(
+  provider: PrivateStateProviderData,
+  privateStateId: string,
+): Promise<void> {
+  return runEffectPromise(removeEffect(provider, privateStateId));
+}
+
+/**
+ * Clear all private state.
+ *
+ * @since 0.2.0
+ * @category operations
+ */
+export async function clear(provider: PrivateStateProviderData): Promise<void> {
+  return runEffectPromise(clearEffect(provider));
+}
+
+/**
+ * Set signing key.
+ *
+ * @since 0.2.0
+ * @category operations
+ */
+export async function setSigningKey(
+  provider: PrivateStateProviderData,
+  address: ContractAddress,
+  signingKey: SigningKey,
+): Promise<void> {
+  return runEffectPromise(setSigningKeyEffect(provider, address, signingKey));
+}
+
+/**
+ * Get signing key.
+ *
+ * @since 0.2.0
+ * @category operations
+ */
+export async function getSigningKey(
+  provider: PrivateStateProviderData,
+  address: ContractAddress,
+): Promise<SigningKey | null> {
+  return runEffectPromise(getSigningKeyEffect(provider, address));
+}
+
+/**
+ * Remove signing key.
+ *
+ * @since 0.2.0
+ * @category operations
+ */
+export async function removeSigningKey(
+  provider: PrivateStateProviderData,
+  address: ContractAddress,
+): Promise<void> {
+  return runEffectPromise(removeSigningKeyEffect(provider, address));
+}
+
+/**
+ * Clear all signing keys.
+ *
+ * @since 0.2.0
+ * @category operations
+ */
+export async function clearSigningKeys(provider: PrivateStateProviderData): Promise<void> {
+  return runEffectPromise(clearSigningKeysEffect(provider));
+}
+
+/**
+ * Raw Effect APIs for advanced users.
+ *
+ * @since 0.2.0
+ * @category effect
+ */
+export const effect = {
+  get: getEffect,
+  set: setEffect,
+  remove: removeEffect,
+  clear: clearEffect,
+  setSigningKey: setSigningKeyEffect,
+  getSigningKey: getSigningKeyEffect,
+  removeSigningKey: removeSigningKeyEffect,
+  clearSigningKeys: clearSigningKeysEffect,
+};
+
+// =============================================================================
+// PrivateStateProvider Wrapper (for midnight-js compatibility)
+// =============================================================================
+
+/**
+ * Create a browser-compatible private state provider using IndexedDB.
+ *
+ * This function returns a PrivateStateProvider compatible with midnight-js.
+ *
+ * @param config - Configuration options
+ * @returns PrivateStateProvider compatible with midnight-js
+ *
+ * @example
+ * ```typescript
+ * const provider = indexedDBPrivateStateProvider({
+ *   privateStateStoreName: 'my-dapp-state',
+ *   password: 'user-password',
+ * });
+ *
+ * // Use with Client.create()
+ * const client = await Client.create({
+ *   privateStateProvider: provider,
+ *   // ...
+ * });
+ * ```
+ *
+ * @since 0.2.0
+ * @category constructors
+ */
+export function indexedDBPrivateStateProvider(
+  config: IndexedDBPrivateStateConfig,
+): PrivateStateProvider<string, unknown> {
+  const data = makeIndexedDB(config);
+
+  return {
+    async get(privateStateId: string): Promise<unknown | null> {
+      return get(data, privateStateId);
+    },
+    async set(privateStateId: string, state: unknown): Promise<void> {
+      return set(data, privateStateId, state);
+    },
+    async remove(privateStateId: string): Promise<void> {
+      return remove(data, privateStateId);
+    },
+    async clear(): Promise<void> {
+      return clear(data);
+    },
+    async setSigningKey(address: ContractAddress, signingKey: SigningKey): Promise<void> {
+      return setSigningKey(data, address, signingKey);
+    },
+    async getSigningKey(address: ContractAddress): Promise<SigningKey | null> {
+      return getSigningKey(data, address);
+    },
+    async removeSigningKey(address: ContractAddress): Promise<void> {
+      return removeSigningKey(data, address);
+    },
+    async clearSigningKeys(): Promise<void> {
+      return clearSigningKeys(data);
+    },
+  };
+}
+
+/**
+ * Create an in-memory private state provider (no persistence).
+ *
+ * This function returns a PrivateStateProvider compatible with midnight-js.
  *
  * @returns PrivateStateProvider that stores state in memory
  *
@@ -318,107 +562,43 @@ export interface InMemoryPrivateStateProviderWithEffect extends PrivateStateProv
  * ```typescript
  * const provider = inMemoryPrivateStateProvider();
  *
- * // Effect-based usage
- * yield* provider.Effect.set('myContract', { count: 0 });
- *
- * // Promise-based usage
- * await provider.set('myContract', { count: 0 });
+ * // Use with Client.create()
+ * const client = await Client.create({
+ *   privateStateProvider: provider,
+ *   // ...
+ * });
  * ```
+ *
+ * @since 0.2.0
+ * @category constructors
  */
-export function inMemoryPrivateStateProvider(): InMemoryPrivateStateProviderWithEffect {
-  const stateStore = new Map<string, unknown>();
-  const signingKeyStore = new Map<string, SigningKey>();
-
-  // Effect-based implementations (in-memory operations never fail)
-  function getEffect(privateStateId: string): Effect.Effect<unknown | null, PrivateStateError> {
-    return Effect.succeed(stateStore.get(privateStateId) ?? null);
-  }
-
-  function setEffect(privateStateId: string, state: unknown): Effect.Effect<void, PrivateStateError> {
-    return Effect.sync(() => {
-      stateStore.set(privateStateId, state);
-    });
-  }
-
-  function removeEffect(privateStateId: string): Effect.Effect<void, PrivateStateError> {
-    return Effect.sync(() => {
-      stateStore.delete(privateStateId);
-    });
-  }
-
-  function clearEffect(): Effect.Effect<void, PrivateStateError> {
-    return Effect.sync(() => {
-      stateStore.clear();
-    });
-  }
-
-  function setSigningKeyEffect(address: ContractAddress, signingKey: SigningKey): Effect.Effect<void, PrivateStateError> {
-    return Effect.sync(() => {
-      signingKeyStore.set(address, signingKey);
-    });
-  }
-
-  function getSigningKeyEffect(address: ContractAddress): Effect.Effect<SigningKey | null, PrivateStateError> {
-    return Effect.succeed(signingKeyStore.get(address) ?? null);
-  }
-
-  function removeSigningKeyEffect(address: ContractAddress): Effect.Effect<void, PrivateStateError> {
-    return Effect.sync(() => {
-      signingKeyStore.delete(address);
-    });
-  }
-
-  function clearSigningKeysEffect(): Effect.Effect<void, PrivateStateError> {
-    return Effect.sync(() => {
-      signingKeyStore.clear();
-    });
-  }
-
-  // Effect API object
-  const effectAPI: PrivateStateProviderEffect = {
-    get: getEffect,
-    set: setEffect,
-    remove: removeEffect,
-    clear: clearEffect,
-    setSigningKey: setSigningKeyEffect,
-    getSigningKey: getSigningKeyEffect,
-    removeSigningKey: removeSigningKeyEffect,
-    clearSigningKeys: clearSigningKeysEffect,
-  };
+export function inMemoryPrivateStateProvider(): PrivateStateProvider<string, unknown> {
+  const data = makeInMemory();
 
   return {
-    Effect: effectAPI,
-
     async get(privateStateId: string): Promise<unknown | null> {
-      return stateStore.get(privateStateId) ?? null;
+      return get(data, privateStateId);
     },
-
     async set(privateStateId: string, state: unknown): Promise<void> {
-      stateStore.set(privateStateId, state);
+      return set(data, privateStateId, state);
     },
-
     async remove(privateStateId: string): Promise<void> {
-      stateStore.delete(privateStateId);
+      return remove(data, privateStateId);
     },
-
     async clear(): Promise<void> {
-      stateStore.clear();
+      return clear(data);
     },
-
     async setSigningKey(address: ContractAddress, signingKey: SigningKey): Promise<void> {
-      signingKeyStore.set(address, signingKey);
+      return setSigningKey(data, address, signingKey);
     },
-
     async getSigningKey(address: ContractAddress): Promise<SigningKey | null> {
-      return signingKeyStore.get(address) ?? null;
+      return getSigningKey(data, address);
     },
-
     async removeSigningKey(address: ContractAddress): Promise<void> {
-      signingKeyStore.delete(address);
+      return removeSigningKey(data, address);
     },
-
     async clearSigningKeys(): Promise<void> {
-      signingKeyStore.clear();
+      return clearSigningKeys(data);
     },
   };
 }

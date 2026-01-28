@@ -14,11 +14,11 @@
  *   privateStateProvider: Midday.indexedDBPrivateStateProvider({ privateStateStoreName: 'my-app' }),
  * });
  *
- * const contract = await client.contractFrom({
+ * const builder = await Midday.Client.contractFrom(client, {
  *   module: await import('./contracts/counter/index.js'),
  * });
- * await contract.deploy();
- * await contract.call('increment');
+ * const contract = await Midday.ContractBuilder.deploy(builder);
+ * await Midday.Contract.call(contract, 'increment');
  * ```
  *
  * @example
@@ -28,19 +28,19 @@
  * import { Effect } from 'effect';
  *
  * const program = Effect.gen(function* () {
- *   const client = yield* Midday.Client.Effect.create({
+ *   const client = yield* Midday.Client.effect.create({
  *     seed: 'your-64-char-hex-seed',
  *     networkConfig: Midday.Config.NETWORKS.local,
  *     zkConfigProvider: new Midday.HttpZkConfigProvider('http://localhost:3000/zk'),
  *     privateStateProvider: Midday.inMemoryPrivateStateProvider(),
  *   });
  *
- *   const contract = yield* client.Effect.contractFrom({
+ *   const builder = yield* Midday.Client.effect.contractFrom(client, {
  *     module: await import('./contracts/counter/index.js'),
  *   });
  *
- *   const deployed = yield* contract.Effect.deploy();
- *   const result = yield* deployed.Effect.call('increment');
+ *   const contract = yield* Midday.ContractBuilder.effect.deploy(builder);
+ *   const result = yield* Midday.Contract.effect.call(contract, 'increment');
  *
  *   return result;
  * });
@@ -68,6 +68,7 @@ export {
 
 // Core modules
 export * as Client from './Client.js';
+export { Contract, ContractBuilder } from './Client.js';
 export * as Config from './Config.js';
 export * as Wallet from './Wallet.js';
 export * as Providers from './Providers.js';
@@ -123,8 +124,14 @@ export {
 // Providers
 export {
   HttpZkConfigProvider,
+  make as makeHttpZkConfigProvider,
+  getZKIR,
+  getProverKey,
+  getVerifierKey,
+  clearCache as clearZkConfigCache,
+  effect as HttpZkConfigProviderEffect,
   type ZkConfig,
-  type ZkConfigProviderEffect,
+  type HttpZkConfigProviderData,
 } from './providers/HttpZkConfigProvider.js';
 
 // Re-export FetchZkConfigProvider for browser use
@@ -132,10 +139,15 @@ export { FetchZkConfigProvider } from '@midnight-ntwrk/midnight-js-fetch-zk-conf
 export {
   indexedDBPrivateStateProvider,
   inMemoryPrivateStateProvider,
+  makeIndexedDB as makeIndexedDBPrivateState,
+  makeInMemory as makeInMemoryPrivateState,
+  get as getPrivateState,
+  set as setPrivateState,
+  remove as removePrivateState,
+  clear as clearPrivateState,
+  effect as PrivateStateEffect,
   type IndexedDBPrivateStateConfig,
-  type PrivateStateProviderEffect,
-  type IndexedDBPrivateStateProviderWithEffect,
-  type InMemoryPrivateStateProviderWithEffect,
+  type PrivateStateProviderData,
 } from './providers/IndexedDBPrivateStateProvider.js';
 
 // Re-export ledger utilities for balance checking
@@ -145,17 +157,14 @@ export { nativeToken } from '@midnight-ntwrk/ledger-v6';
 export type {
   ClientConfig,
   MidnightClient,
-  MidnightClientEffect,
-  ContractBuilder,
-  ContractBuilderEffect,
-  ConnectedContract,
-  ConnectedContractEffect,
   CallResult,
   FinalizedTxData,
   ContractModule,
   ContractFromOptions,
   Logger,
-  ClientEffect,
+  DeployOptions,
+  JoinOptions,
+  LoadedContractModule,
 } from './Client.js';
 export type { NetworkConfig } from './Config.js';
 export type { WalletContext, WalletEffect } from './Wallet.js';
