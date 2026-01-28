@@ -8,7 +8,7 @@
  * @module
  */
 
-import { Effect } from 'effect';
+import { Context, Effect, Layer } from 'effect';
 import * as ledger from '@midnight-ntwrk/ledger-v6';
 import { setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
@@ -220,6 +220,63 @@ export function createFromWalletProviders(
 }
 
 /**
- * Effect-based API export.
+ * Raw Effect APIs for advanced users.
+ *
+ * @since 0.2.0
+ * @category effect
  */
-export { ProvidersEffectAPI as Effect };
+export const effect = {
+  create: createEffect,
+  createFromWalletProviders: createFromWalletProvidersEffect,
+};
+
+// Legacy export for backwards compatibility
+export { effect as Effect };
+
+// =============================================================================
+// Effect DI - Service Definitions
+// =============================================================================
+
+/**
+ * Service interface for Providers operations.
+ *
+ * @since 0.2.0
+ * @category service
+ */
+export interface ProvidersServiceImpl {
+  readonly create: (
+    walletContext: WalletContext,
+    options: CreateProvidersOptions,
+  ) => Effect.Effect<ContractProviders, ProviderError>;
+  readonly createFromWalletProviders: (
+    walletProvider: WalletProvider,
+    midnightProvider: MidnightProvider,
+    options: CreateProvidersOptions,
+  ) => Effect.Effect<ContractProviders, ProviderError>;
+}
+
+/**
+ * Context.Tag for ProvidersService dependency injection.
+ *
+ * @since 0.2.0
+ * @category service
+ */
+export class ProvidersService extends Context.Tag('ProvidersService')<
+  ProvidersService,
+  ProvidersServiceImpl
+>() {}
+
+// =============================================================================
+// Effect DI - Live Layer
+// =============================================================================
+
+/**
+ * Live Layer for ProvidersService.
+ *
+ * @since 0.2.0
+ * @category layer
+ */
+export const ProvidersLive: Layer.Layer<ProvidersService> = Layer.succeed(ProvidersService, {
+  create: createEffect,
+  createFromWalletProviders: createFromWalletProvidersEffect,
+});

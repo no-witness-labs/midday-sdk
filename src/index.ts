@@ -105,6 +105,9 @@ export {
   disconnectWallet,
   isWalletAvailable,
   getWalletProvingProvider,
+  effect as WalletConnectorEffect,
+  WalletConnectorService,
+  WalletConnectorLive,
   type WalletConnection,
   type ShieldedAddresses,
   type InitialAPI,
@@ -112,13 +115,16 @@ export {
   type Configuration,
   type ProvingProvider,
   type KeyMaterialProvider,
-  type WalletConnectorEffect,
+  type WalletConnectorServiceImpl,
 } from './wallet/connector.js';
 export {
   createWalletProviders,
+  effect as WalletProviderEffect,
+  WalletProviderService,
+  WalletProviderLive,
   type WalletKeys,
   type WalletProviders,
-  type WalletProviderEffect,
+  type WalletProviderServiceImpl,
 } from './wallet/provider.js';
 
 // Providers
@@ -130,8 +136,11 @@ export {
   getVerifierKey,
   clearCache as clearZkConfigCache,
   effect as HttpZkConfigProviderEffect,
+  ZkConfigService,
+  ZkConfigLive,
   type ZkConfig,
   type HttpZkConfigProviderData,
+  type ZkConfigServiceImpl,
 } from './providers/HttpZkConfigProvider.js';
 
 // Re-export FetchZkConfigProvider for browser use
@@ -146,8 +155,11 @@ export {
   remove as removePrivateState,
   clear as clearPrivateState,
   effect as PrivateStateEffect,
+  PrivateStateService,
+  PrivateStateLive,
   type IndexedDBPrivateStateConfig,
   type PrivateStateProviderData,
+  type PrivateStateServiceImpl,
 } from './providers/IndexedDBPrivateStateProvider.js';
 
 // Re-export ledger utilities for balance checking
@@ -165,12 +177,26 @@ export type {
   DeployOptions,
   JoinOptions,
   LoadedContractModule,
+  ClientServiceImpl,
+  ContractBuilderServiceImpl,
+  ContractServiceImpl,
+} from './Client.js';
+export {
+  ClientService,
+  ClientLive,
+  ContractBuilderService,
+  ContractBuilderLive,
+  ContractService,
+  ContractLive,
 } from './Client.js';
 export type { NetworkConfig } from './Config.js';
-export type { WalletContext, WalletEffect } from './Wallet.js';
+export type { WalletContext, WalletServiceImpl } from './Wallet.js';
+export { WalletService, WalletLive } from './Wallet.js';
 export type {
   ContractProviders,
   StorageConfig,
   CreateProvidersOptions,
   ContractProvidersEffect,
+  ProvidersServiceImpl,
 } from './Providers.js';
+export { ProvidersService, ProvidersLive } from './Providers.js';

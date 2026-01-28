@@ -2,13 +2,18 @@
  * Wallet initialization and management for Midnight Network.
  *
  * Handles the three-layer wallet system: shielded, dust, and unshielded wallets.
- * Provides dual API: Effect-based and Promise-based.
+ *
+ * ## API Design
+ *
+ * - **Promise API**: `await Wallet.init(seed, config)`
+ * - **Effect API**: `yield* Wallet.effect.init(seed, config)`
+ * - **Effect DI**: `yield* WalletService` with `WalletLive` layer
  *
  * @since 0.1.0
  * @module
  */
 
-import { Effect } from 'effect';
+import { Context, Effect, Layer } from 'effect';
 import * as Rx from 'rxjs';
 import * as ledger from '@midnight-ntwrk/ledger-v6';
 import { WalletFacade } from '@midnight-ntwrk/wallet-sdk-facade';
@@ -27,6 +32,16 @@ import { WalletError } from './errors/index.js';
 import { hexToBytes } from './utils/hex.js';
 import { runEffect, runEffectPromise } from './utils/effect-runtime.js';
 
+// =============================================================================
+// Types
+// =============================================================================
+
+/**
+ * Wallet context containing all wallet components.
+ *
+ * @since 0.2.0
+ * @category model
+ */
 export interface WalletContext {
   wallet: WalletFacade;
   shieldedSecretKeys: ledger.ZswapSecretKeys;
@@ -34,17 +49,8 @@ export interface WalletContext {
   unshieldedKeystore: ReturnType<typeof createKeystore>;
 }
 
-/**
- * Effect-based interface for wallet operations.
- */
-export interface WalletEffect {
-  readonly init: (seed: string, networkConfig: NetworkConfig) => Effect.Effect<WalletContext, WalletError>;
-  readonly waitForSync: (walletContext: WalletContext) => Effect.Effect<void, WalletError>;
-  readonly deriveAddress: (seed: string, networkId: string) => Effect.Effect<string, WalletError>;
-}
-
 // =============================================================================
-// Effect API
+// Internal Effect Implementations
 // =============================================================================
 
 function initEffect(seed: string, networkConfig: NetworkConfig): Effect.Effect<WalletContext, WalletError> {
@@ -143,17 +149,8 @@ function deriveAddressEffect(seed: string, networkId: string): Effect.Effect<str
   });
 }
 
-/**
- * Effect-based API for wallet operations.
- */
-export const WalletEffectAPI: WalletEffect = {
-  init: initEffect,
-  waitForSync: waitForSyncEffect,
-  deriveAddress: deriveAddressEffect,
-};
-
 // =============================================================================
-// Promise API (backwards compatible)
+// Promise API
 // =============================================================================
 
 /**
@@ -161,12 +158,11 @@ export const WalletEffectAPI: WalletEffect = {
  *
  * @example
  * ```typescript
- * // Effect-based usage
- * const walletContext = yield* Midday.Wallet.Effect.init(seed, networkConfig);
- *
- * // Promise-based usage
- * const walletContext = await Midday.Wallet.init(seed, networkConfig);
+ * const walletContext = await Wallet.init(seed, networkConfig);
  * ```
+ *
+ * @since 0.2.0
+ * @category constructors
  */
 export async function init(seed: string, networkConfig: NetworkConfig): Promise<WalletContext> {
   return runEffectPromise(initEffect(seed, networkConfig));
@@ -174,6 +170,9 @@ export async function init(seed: string, networkConfig: NetworkConfig): Promise<
 
 /**
  * Wait for wallet to sync with the network.
+ *
+ * @since 0.2.0
+ * @category operations
  */
 export async function waitForSync(walletContext: WalletContext): Promise<void> {
   return runEffectPromise(waitForSyncEffect(walletContext));
@@ -181,13 +180,77 @@ export async function waitForSync(walletContext: WalletContext): Promise<void> {
 
 /**
  * Derive wallet address from seed without starting wallet connection.
- * Useful for displaying addresses or checking balances via indexer.
+ *
+ * @since 0.2.0
+ * @category utilities
  */
 export function deriveAddress(seed: string, networkId: string): string {
   return runEffect(deriveAddressEffect(seed, networkId));
 }
 
 /**
- * Effect-based API export.
+ * Raw Effect APIs for advanced users.
+ *
+ * @since 0.2.0
+ * @category effect
  */
-export { WalletEffectAPI as Effect };
+export const effect = {
+  init: initEffect,
+  waitForSync: waitForSyncEffect,
+  deriveAddress: deriveAddressEffect,
+};
+
+// Legacy export for backwards compatibility
+export { effect as Effect };
+
+// =============================================================================
+// Effect DI - Service Definitions
+// =============================================================================
+
+/**
+ * Service interface for Wallet operations.
+ *
+ * @since 0.2.0
+ * @category service
+ */
+export interface WalletServiceImpl {
+  readonly init: (seed: string, networkConfig: NetworkConfig) => Effect.Effect<WalletContext, WalletError>;
+  readonly waitForSync: (walletContext: WalletContext) => Effect.Effect<void, WalletError>;
+  readonly deriveAddress: (seed: string, networkId: string) => Effect.Effect<string, WalletError>;
+}
+
+/**
+ * Context.Tag for WalletService dependency injection.
+ *
+ * @example
+ * ```typescript
+ * const program = Effect.gen(function* () {
+ *   const walletService = yield* WalletService;
+ *   const wallet = yield* walletService.init(seed, config);
+ *   yield* walletService.waitForSync(wallet);
+ *   return wallet;
+ * });
+ *
+ * Effect.runPromise(program.pipe(Effect.provide(WalletLive)));
+ * ```
+ *
+ * @since 0.2.0
+ * @category service
+ */
+export class WalletService extends Context.Tag('WalletService')<WalletService, WalletServiceImpl>() {}
+
+// =============================================================================
+// Effect DI - Live Layer
+// =============================================================================
+
+/**
+ * Live Layer for WalletService.
+ *
+ * @since 0.2.0
+ * @category layer
+ */
+export const WalletLive: Layer.Layer<WalletService> = Layer.succeed(WalletService, {
+  init: initEffect,
+  waitForSync: waitForSyncEffect,
+  deriveAddress: deriveAddressEffect,
+});

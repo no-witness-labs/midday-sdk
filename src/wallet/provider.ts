@@ -8,7 +8,7 @@
  * @module
  */
 
-import { Effect } from 'effect';
+import { Context, Effect, Layer } from 'effect';
 import type { WalletProvider, MidnightProvider, BalancedProvingRecipe } from '@midnight-ntwrk/midnight-js-types';
 import { NOTHING_TO_PROVE } from '@midnight-ntwrk/midnight-js-types';
 import { Transaction, type FinalizedTransaction, type TransactionId, type UnprovenTransaction } from '@midnight-ntwrk/ledger-v6';
@@ -162,6 +162,59 @@ export function createWalletProviders(wallet: ConnectedAPI, addresses: ShieldedA
 }
 
 /**
- * Effect-based API export.
+ * Raw Effect APIs for advanced users.
+ *
+ * @since 0.2.0
+ * @category effect
  */
+export const effect = {
+  balanceTx: balanceTxEffect,
+  submitTx: submitTxEffect,
+};
+
+// Legacy export for backwards compatibility
 export { WalletProviderEffectAPI as Effect };
+
+// =============================================================================
+// Effect DI - Service Definitions
+// =============================================================================
+
+/**
+ * Service interface for WalletProvider operations.
+ *
+ * @since 0.2.0
+ * @category service
+ */
+export interface WalletProviderServiceImpl {
+  readonly balanceTx: (
+    wallet: ConnectedAPI,
+    tx: UnprovenTransaction,
+  ) => Effect.Effect<BalancedProvingRecipe, ProviderError>;
+  readonly submitTx: (wallet: ConnectedAPI, tx: FinalizedTransaction) => Effect.Effect<TransactionId, ProviderError>;
+}
+
+/**
+ * Context.Tag for WalletProviderService dependency injection.
+ *
+ * @since 0.2.0
+ * @category service
+ */
+export class WalletProviderService extends Context.Tag('WalletProviderService')<
+  WalletProviderService,
+  WalletProviderServiceImpl
+>() {}
+
+// =============================================================================
+// Effect DI - Live Layer
+// =============================================================================
+
+/**
+ * Live Layer for WalletProviderService.
+ *
+ * @since 0.2.0
+ * @category layer
+ */
+export const WalletProviderLive: Layer.Layer<WalletProviderService> = Layer.succeed(WalletProviderService, {
+  balanceTx: balanceTxEffect,
+  submitTx: submitTxEffect,
+});

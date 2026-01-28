@@ -26,7 +26,7 @@
  * @module
  */
 
-import { Effect } from 'effect';
+import { Context, Effect, Layer } from 'effect';
 import { BrowserLevel } from 'browser-level';
 import type { PrivateStateProvider } from '@midnight-ntwrk/midnight-js-types';
 
@@ -602,3 +602,78 @@ export function inMemoryPrivateStateProvider(): PrivateStateProvider<string, unk
     },
   };
 }
+
+// =============================================================================
+// Effect DI - Service Definitions
+// =============================================================================
+
+/**
+ * Service interface for PrivateState operations.
+ *
+ * @since 0.2.0
+ * @category service
+ */
+export interface PrivateStateServiceImpl {
+  readonly get: (
+    provider: PrivateStateProviderData,
+    privateStateId: string,
+  ) => Effect.Effect<unknown | null, PrivateStateError>;
+  readonly set: (
+    provider: PrivateStateProviderData,
+    privateStateId: string,
+    state: unknown,
+  ) => Effect.Effect<void, PrivateStateError>;
+  readonly remove: (
+    provider: PrivateStateProviderData,
+    privateStateId: string,
+  ) => Effect.Effect<void, PrivateStateError>;
+  readonly clear: (provider: PrivateStateProviderData) => Effect.Effect<void, PrivateStateError>;
+  readonly setSigningKey: (
+    provider: PrivateStateProviderData,
+    address: string,
+    signingKey: unknown,
+  ) => Effect.Effect<void, PrivateStateError>;
+  readonly getSigningKey: (
+    provider: PrivateStateProviderData,
+    address: string,
+  ) => Effect.Effect<unknown | null, PrivateStateError>;
+  readonly removeSigningKey: (
+    provider: PrivateStateProviderData,
+    address: string,
+  ) => Effect.Effect<void, PrivateStateError>;
+  readonly clearSigningKeys: (
+    provider: PrivateStateProviderData,
+  ) => Effect.Effect<void, PrivateStateError>;
+}
+
+/**
+ * Context.Tag for PrivateStateService dependency injection.
+ *
+ * @since 0.2.0
+ * @category service
+ */
+export class PrivateStateService extends Context.Tag('PrivateStateService')<
+  PrivateStateService,
+  PrivateStateServiceImpl
+>() {}
+
+// =============================================================================
+// Effect DI - Live Layer
+// =============================================================================
+
+/**
+ * Live Layer for PrivateStateService.
+ *
+ * @since 0.2.0
+ * @category layer
+ */
+export const PrivateStateLive: Layer.Layer<PrivateStateService> = Layer.succeed(PrivateStateService, {
+  get: getEffect,
+  set: setEffect,
+  remove: removeEffect,
+  clear: clearEffect,
+  setSigningKey: setSigningKeyEffect,
+  getSigningKey: getSigningKeyEffect,
+  removeSigningKey: removeSigningKeyEffect,
+  clearSigningKeys: clearSigningKeysEffect,
+});

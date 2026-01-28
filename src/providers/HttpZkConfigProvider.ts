@@ -25,7 +25,7 @@
  * @module
  */
 
-import { Effect } from 'effect';
+import { Context, Effect, Layer } from 'effect';
 import {
   ZKConfigProvider,
   type ProverKey,
@@ -326,3 +326,55 @@ export class HttpZkConfigProvider<K extends string = string> extends ZKConfigPro
     getVerifierKey: (circuitId: K) => getVerifierKeyEffect(this.data, circuitId),
   };
 }
+
+// =============================================================================
+// Effect DI - Service Definitions
+// =============================================================================
+
+/**
+ * Service interface for ZkConfig operations.
+ *
+ * @since 0.2.0
+ * @category service
+ */
+export interface ZkConfigServiceImpl {
+  readonly getZKIR: (
+    provider: HttpZkConfigProviderData,
+    circuitId: string,
+  ) => Effect.Effect<ZKIR, ZkConfigError>;
+  readonly getProverKey: (
+    provider: HttpZkConfigProviderData,
+    circuitId: string,
+  ) => Effect.Effect<ProverKey, ZkConfigError>;
+  readonly getVerifierKey: (
+    provider: HttpZkConfigProviderData,
+    circuitId: string,
+  ) => Effect.Effect<VerifierKey, ZkConfigError>;
+}
+
+/**
+ * Context.Tag for ZkConfigService dependency injection.
+ *
+ * @since 0.2.0
+ * @category service
+ */
+export class ZkConfigService extends Context.Tag('ZkConfigService')<
+  ZkConfigService,
+  ZkConfigServiceImpl
+>() {}
+
+// =============================================================================
+// Effect DI - Live Layer
+// =============================================================================
+
+/**
+ * Live Layer for ZkConfigService.
+ *
+ * @since 0.2.0
+ * @category layer
+ */
+export const ZkConfigLive: Layer.Layer<ZkConfigService> = Layer.succeed(ZkConfigService, {
+  getZKIR: getZKIREffect,
+  getProverKey: getProverKeyEffect,
+  getVerifierKey: getVerifierKeyEffect,
+});

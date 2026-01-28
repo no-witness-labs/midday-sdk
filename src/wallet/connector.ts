@@ -8,7 +8,7 @@
  * @module
  */
 
-import { Effect } from 'effect';
+import { Context, Effect, Layer } from 'effect';
 import { WalletError } from '../errors/index.js';
 import { runEffect, runEffectPromise } from '../utils/effect-runtime.js';
 
@@ -284,6 +284,65 @@ export async function disconnectWallet(): Promise<void> {
 }
 
 /**
- * Effect-based API export.
+ * Raw Effect APIs for advanced users.
+ *
+ * @since 0.2.0
+ * @category effect
  */
+export const effect = {
+  connect: connectEffect,
+  isAvailable: isAvailableEffect,
+  disconnect: disconnectEffect,
+  getProvingProvider: getProvingProviderEffect,
+};
+
+// Legacy export for backwards compatibility
 export { WalletConnectorEffectAPI as Effect };
+
+// =============================================================================
+// Effect DI - Service Definitions
+// =============================================================================
+
+/**
+ * Service interface for WalletConnector operations.
+ *
+ * @since 0.2.0
+ * @category service
+ */
+export interface WalletConnectorServiceImpl {
+  readonly connect: (networkId?: string) => Effect.Effect<WalletConnection, WalletError>;
+  readonly isAvailable: () => Effect.Effect<boolean, never>;
+  readonly disconnect: () => Effect.Effect<void, never>;
+  readonly getProvingProvider: (
+    wallet: ConnectedAPI,
+    zkConfigProvider: KeyMaterialProvider,
+  ) => Effect.Effect<ProvingProvider, WalletError>;
+}
+
+/**
+ * Context.Tag for WalletConnectorService dependency injection.
+ *
+ * @since 0.2.0
+ * @category service
+ */
+export class WalletConnectorService extends Context.Tag('WalletConnectorService')<
+  WalletConnectorService,
+  WalletConnectorServiceImpl
+>() {}
+
+// =============================================================================
+// Effect DI - Live Layer
+// =============================================================================
+
+/**
+ * Live Layer for WalletConnectorService.
+ *
+ * @since 0.2.0
+ * @category layer
+ */
+export const WalletConnectorLive: Layer.Layer<WalletConnectorService> = Layer.succeed(WalletConnectorService, {
+  connect: connectEffect,
+  isAvailable: isAvailableEffect,
+  disconnect: disconnectEffect,
+  getProvingProvider: getProvingProviderEffect,
+});

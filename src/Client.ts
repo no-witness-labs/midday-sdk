@@ -29,7 +29,7 @@
  * @module
  */
 
-import { Effect } from 'effect';
+import { Context, Effect, Layer } from 'effect';
 import { deployContract, findDeployedContract } from '@midnight-ntwrk/midnight-js-contracts';
 import type { ZKConfigProvider, PrivateStateProvider } from '@midnight-ntwrk/midnight-js-types';
 
@@ -840,3 +840,161 @@ export const Contract = {
     ledgerStateAt: ledgerStateAtEffect,
   },
 };
+
+// =============================================================================
+// Effect DI - Service Definitions
+// =============================================================================
+
+/**
+ * Service interface for Client operations.
+ *
+ * @since 0.2.0
+ * @category service
+ */
+export interface ClientServiceImpl {
+  readonly create: (config: ClientConfig) => Effect.Effect<MidnightClient, ClientError>;
+  readonly fromWallet: (
+    connection: WalletConnection,
+    config: {
+      zkConfigProvider: ZKConfigProvider<string>;
+      privateStateProvider: PrivateStateProvider;
+      logging?: boolean;
+    },
+  ) => Effect.Effect<MidnightClient, ClientError>;
+  readonly contractFrom: (
+    client: MidnightClient,
+    options: ContractFromOptions,
+  ) => Effect.Effect<ContractBuilder, ClientError>;
+  readonly waitForTx: (
+    client: MidnightClient,
+    txHash: string,
+  ) => Effect.Effect<FinalizedTxData, ClientError>;
+}
+
+/**
+ * Context.Tag for ClientService dependency injection.
+ *
+ * @example
+ * ```typescript
+ * const program = Effect.gen(function* () {
+ *   const clientService = yield* ClientService;
+ *   const client = yield* clientService.create(config);
+ *   return client;
+ * });
+ *
+ * Effect.runPromise(program.pipe(Effect.provide(ClientLive)));
+ * ```
+ *
+ * @since 0.2.0
+ * @category service
+ */
+export class ClientService extends Context.Tag('ClientService')<ClientService, ClientServiceImpl>() {}
+
+/**
+ * Service interface for ContractBuilder operations.
+ *
+ * @since 0.2.0
+ * @category service
+ */
+export interface ContractBuilderServiceImpl {
+  readonly deploy: (
+    builder: ContractBuilder,
+    options?: DeployOptions,
+  ) => Effect.Effect<ConnectedContract, ContractError>;
+  readonly join: (
+    builder: ContractBuilder,
+    address: string,
+    options?: JoinOptions,
+  ) => Effect.Effect<ConnectedContract, ContractError>;
+}
+
+/**
+ * Context.Tag for ContractBuilderService dependency injection.
+ *
+ * @since 0.2.0
+ * @category service
+ */
+export class ContractBuilderService extends Context.Tag('ContractBuilderService')<
+  ContractBuilderService,
+  ContractBuilderServiceImpl
+>() {}
+
+/**
+ * Service interface for Contract operations.
+ *
+ * @since 0.2.0
+ * @category service
+ */
+export interface ContractServiceImpl {
+  readonly call: (
+    contract: ConnectedContract,
+    action: string,
+    ...args: unknown[]
+  ) => Effect.Effect<CallResult, ContractError>;
+  readonly state: (contract: ConnectedContract) => Effect.Effect<unknown, ContractError>;
+  readonly stateAt: (
+    contract: ConnectedContract,
+    blockHeight: number,
+  ) => Effect.Effect<unknown, ContractError>;
+  readonly ledgerState: (contract: ConnectedContract) => Effect.Effect<unknown, ContractError>;
+  readonly ledgerStateAt: (
+    contract: ConnectedContract,
+    blockHeight: number,
+  ) => Effect.Effect<unknown, ContractError>;
+}
+
+/**
+ * Context.Tag for ContractService dependency injection.
+ *
+ * @since 0.2.0
+ * @category service
+ */
+export class ContractService extends Context.Tag('ContractService')<
+  ContractService,
+  ContractServiceImpl
+>() {}
+
+// =============================================================================
+// Effect DI - Live Layers
+// =============================================================================
+
+/**
+ * Live Layer for ClientService.
+ *
+ * @since 0.2.0
+ * @category layer
+ */
+export const ClientLive: Layer.Layer<ClientService> = Layer.succeed(ClientService, {
+  create: createEffect,
+  fromWallet: fromWalletEffect,
+  contractFrom: contractFromEffect,
+  waitForTx: waitForTxEffect,
+});
+
+/**
+ * Live Layer for ContractBuilderService.
+ *
+ * @since 0.2.0
+ * @category layer
+ */
+export const ContractBuilderLive: Layer.Layer<ContractBuilderService> = Layer.succeed(
+  ContractBuilderService,
+  {
+    deploy: deployEffect,
+    join: joinEffect,
+  },
+);
+
+/**
+ * Live Layer for ContractService.
+ *
+ * @since 0.2.0
+ * @category layer
+ */
+export const ContractLive: Layer.Layer<ContractService> = Layer.succeed(ContractService, {
+  call: callEffect,
+  state: stateEffect,
+  stateAt: stateAtEffect,
+  ledgerState: ledgerStateEffect,
+  ledgerStateAt: ledgerStateAtEffect,
+});
