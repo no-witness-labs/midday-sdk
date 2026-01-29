@@ -12,6 +12,9 @@ jobs:
     # Run if: workflow_dispatch (manual) OR workflow_run completed successfully
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Get latest release with changes
         id: release
         run: |
@@ -45,6 +48,8 @@ jobs:
               if [ -n "$REAL_CHANGES" ]; then
                 TAG=$RELEASE_TAG
                 URL=$RELEASE_URL
+                # Extract version number (remove 'v' prefix)
+                echo "version=${TAG#v}" >> $GITHUB_OUTPUT
                 break
               fi
             fi
@@ -60,8 +65,64 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Tweet new release
+      - name: Extract code from CHANGELOG
         if: steps.release.outputs.found == 'true'
+        id: extract
+        run: |
+          VERSION="${{ steps.release.outputs.version }}"
+          
+          # Extract first code block from this version's section
+          awk -v ver="$VERSION" '
+            $0 ~ "^## " ver { found_version=1; next }
+            found_version && /^## [0-9]/ { exit }
+            found_version && /```typescript/ { in_code=1; next }
+            found_version && /```/ && in_code { exit }
+            in_code { print }
+          ' CHANGELOG.md > /tmp/snippet.ts
+          
+          if [ -s /tmp/snippet.ts ]; then
+            echo "has_code=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_code=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate code image
+        if: steps.release.outputs.found == 'true' && steps.extract.outputs.has_code == 'true'
+        run: |
+          npx -y carbon-now-cli /tmp/snippet.ts \
+            --save-to . \
+            --save-as release-snippet \
+            --headless \
+            --settings '{"theme":"one-dark","backgroundColor":"rgba(171,184,195,0)","windowTheme":"none","windowControls":true,"fontFamily":"JetBrains Mono","fontSize":"14px","lineNumbers":false,"paddingVertical":"40px","paddingHorizontal":"40px","dropShadow":true,"exportSize":"2x","watermark":false}'
+
+      - name: Post to X with image
+        if: steps.release.outputs.found == 'true' && steps.extract.outputs.has_code == 'true'
+        run: |
+          npm install twitter-api-v2
+          node -e "
+            const { TwitterApi } = require('twitter-api-v2');
+            const client = new TwitterApi({
+              appKey: process.env.TWITTER_API_KEY,
+              appSecret: process.env.TWITTER_API_SECRET,
+              accessToken: process.env.TWITTER_ACCESS_TOKEN,
+              accessSecret: process.env.TWITTER_ACCESS_TOKEN_SECRET,
+            });
+            (async () => {
+              const mediaId = await client.v1.uploadMedia('./release-snippet.png');
+              await client.v2.tweet({
+                text: 'Midday SDK ${{ steps.release.outputs.tag }} out now\n${{ steps.release.outputs.url }}\nHappy building!',
+                media: { media_ids: [mediaId] }
+              });
+            })();
+          "
+        env:
+          TWITTER_API_KEY: ${{ secrets.TWITTER_API_KEY }}
+          TWITTER_API_SECRET: ${{ secrets.TWITTER_API_SECRET }}
+          TWITTER_ACCESS_TOKEN: ${{ secrets.TWITTER_ACCESS_TOKEN }}
+          TWITTER_ACCESS_TOKEN_SECRET: ${{ secrets.TWITTER_ACCESS_TOKEN_SECRET }}
+
+      - name: Post to X without image
+        if: steps.release.outputs.found == 'true' && steps.extract.outputs.has_code != 'true'
         uses: nearform-actions/github-action-notify-twitter@v1
         with:
           message: |
