@@ -167,7 +167,9 @@ export async function runEffectPromise<A, E>(effect: Effect.Effect<A, E>): Promi
  * Run an Effect asynchronously with optional logging configuration.
  *
  * - Executes the Effect using Effect.runPromiseExit
- * - Applies Logger.pretty when logging is enabled, Logger.none when disabled
+ * - Applies Logger.pretty in both cases
+ * - When logging is enabled, sets minimum log level to Debug (shows all logs)
+ * - When logging is disabled, uses default log level (hides Debug messages)
  * - On failure, extracts the error from the Exit and cleans stack traces
  *
  * @example
@@ -176,7 +178,7 @@ export async function runEffectPromise<A, E>(effect: Effect.Effect<A, E>): Promi
  * import { runEffectWithLogging } from '@no-witness-labs/midday-sdk';
  *
  * const myEffect = Effect.gen(function* () {
- *   yield* Effect.logInfo('Starting...');
+ *   yield* Effect.logDebug('Starting...');
  *   return 42;
  * });
  *
