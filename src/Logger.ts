@@ -11,13 +11,16 @@
  * import { Effect } from 'effect';
  * import { SdkLogger } from 'midday-sdk';
  *
- * // Use default pretty logger
+ * // Use default pretty logger (shows Info and above)
  * const program = Effect.gen(function* () {
  *   yield* Effect.logInfo('Starting operation');
- *   yield* Effect.logDebug('Debug details');
+ *   yield* Effect.logDebug('Debug details'); // hidden by default
  * });
  *
  * Effect.runFork(program.pipe(Effect.provide(SdkLogger.pretty)));
+ *
+ * // Enable debug logging
+ * Effect.runFork(program.pipe(Effect.provide(SdkLogger.withDebug)));
  *
  * // Use JSON logger for production
  * Effect.runFork(program.pipe(Effect.provide(SdkLogger.json)));
