@@ -86,6 +86,12 @@ jobs:
             echo "has_code=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Setup Node.js
+        if: steps.release.outputs.found == 'true' && steps.extract.outputs.has_code == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: Generate code image
         if: steps.release.outputs.found == 'true' && steps.extract.outputs.has_code == 'true'
         run: |
@@ -113,7 +119,12 @@ jobs:
                 text: 'Midday SDK ${{ steps.release.outputs.tag }} out now\n${{ steps.release.outputs.url }}\nHappy building!',
                 media: { media_ids: [mediaId] }
               });
-            })();
+            })()
+              .then(() => process.exit(0))
+              .catch(err => {
+                console.error(err);
+                process.exit(1);
+              });
           "
         env:
           TWITTER_API_KEY: ${{ secrets.TWITTER_API_KEY }}
