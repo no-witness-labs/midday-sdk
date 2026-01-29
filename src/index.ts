@@ -57,7 +57,6 @@ export { Effect, pipe, Context, Layer } from 'effect';
 
 // Services for dependency injection (from Config module)
 export {
-  LoggerService,
   NetworkConfigService,
   SdkConfigService,
   makeSdkLayer,
@@ -72,7 +71,22 @@ export * as Wallet from './Wallet.js';
 export * as Providers from './Providers.js';
 
 // Effect utilities
-export { runEffect, runEffectPromise } from './utils/effect-runtime.js';
+export { runEffect, runEffectPromise, runEffectWithLogging } from './utils/effect-runtime.js';
+
+// Logging (Effect Logger layers)
+export * as SdkLogger from './Logger.js';
+export {
+  pretty as prettyLogger,
+  json as jsonLogger,
+  logFmt as logFmtLogger,
+  none as noopLogger,
+  Default as DefaultLogger,
+  withDebug,
+  withInfo,
+  withWarning,
+  withError,
+  fromEnabled as loggerFromEnabled,
+} from './Logger.js';
 
 // Error types (colocated with their modules)
 export { ClientError, ContractError } from './Client.js';
@@ -168,7 +182,6 @@ export type {
   FinalizedTxData,
   ContractModule,
   ContractFromOptions,
-  Logger,
   DeployOptions,
   JoinOptions,
   LoadedContractModule,
