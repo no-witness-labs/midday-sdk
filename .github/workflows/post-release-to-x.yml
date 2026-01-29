@@ -73,7 +73,7 @@ jobs:
           
           # Extract first code block from this version's section
           awk -v ver="$VERSION" '
-            $0 ~ "^## " ver { found_version=1; next }
+            index($0, "## " ver) == 1 { found_version=1; next }
             found_version && /^## [0-9]/ { exit }
             found_version && /```typescript/ { in_code=1; next }
             found_version && /```/ && in_code { exit }
