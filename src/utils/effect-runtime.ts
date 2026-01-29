@@ -5,7 +5,7 @@
  * @module
  */
 
-import { Cause, Effect, Exit } from 'effect';
+import { Cause, Effect, Exit, Layer, Logger, LogLevel } from 'effect';
 
 /**
  * Patterns to filter from stack traces - Effect.ts internal implementation details
@@ -161,4 +161,46 @@ export async function runEffectPromise<A, E>(effect: Effect.Effect<A, E>): Promi
   }
 
   return exit.value;
+}
+
+/**
+ * Run an Effect asynchronously with optional logging configuration.
+ *
+ * - Executes the Effect using Effect.runPromiseExit
+ * - Applies Logger.pretty in both cases
+ * - When logging is enabled, sets minimum log level to Debug (shows all logs)
+ * - When logging is disabled, uses default log level (hides Debug messages)
+ * - On failure, extracts the error from the Exit and cleans stack traces
+ *
+ * @example
+ * ```typescript
+ * import { Effect } from 'effect';
+ * import { runEffectWithLogging } from '@no-witness-labs/midday-sdk';
+ *
+ * const myEffect = Effect.gen(function* () {
+ *   yield* Effect.logDebug('Starting...');
+ *   return 42;
+ * });
+ *
+ * // With logging enabled
+ * await runEffectWithLogging(myEffect, true);
+ *
+ * // With logging disabled (silent)
+ * await runEffectWithLogging(myEffect, false);
+ * ```
+ *
+ * @since 0.3.0
+ * @category utilities
+ */
+export async function runEffectWithLogging<A, E>(
+  effect: Effect.Effect<A, E>,
+  logging: boolean,
+): Promise<A> {
+  // When logging enabled: pretty logger + Debug level visible
+  // When logging disabled: pretty logger only (Debug hidden by default)
+  const loggerLayer = logging
+    ? Layer.merge(Logger.pretty, Logger.minimumLogLevel(LogLevel.Debug))
+    : Logger.pretty;
+  const withLogger = Effect.provide(effect, loggerLayer);
+  return runEffectPromise(withLogger);
 }

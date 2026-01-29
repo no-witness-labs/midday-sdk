@@ -41,7 +41,7 @@ import type { ContractProviders, StorageConfig, CreateProvidersOptions } from '.
 import type { WalletContext } from './Wallet.js';
 import type { WalletConnection } from './wallet/connector.js';
 import { createWalletProviders } from './wallet/provider.js';
-import { runEffectPromise } from './utils/effect-runtime.js';
+import { runEffectWithLogging } from './utils/effect-runtime.js';
 
 // =============================================================================
 // Errors
@@ -72,19 +72,6 @@ export class ContractError extends Data.TaggedError('ContractError')<{
 // =============================================================================
 // Types
 // =============================================================================
-
-/**
- * Logger interface for client operations.
- *
- * @since 0.2.0
- * @category model
- */
-export interface Logger {
-  info(message: string): void;
-  warn(message: string): void;
-  error(message: string): void;
-  debug(message: string): void;
-}
 
 /**
  * Configuration for creating a client.
@@ -213,10 +200,10 @@ export interface MidnightClient {
   readonly wallet: WalletContext | null;
   /** Network configuration */
   readonly networkConfig: NetworkConfig;
-  /** Logger instance */
-  readonly logger: Logger;
   /** Contract providers */
   readonly providers: ContractProviders;
+  /** Whether logging is enabled (for backwards compatibility) */
+  readonly logging: boolean;
 }
 
 /**
@@ -232,8 +219,8 @@ export interface ContractBuilder {
   readonly module: LoadedContractModule;
   /** Contract providers */
   readonly providers: ContractProviders;
-  /** Logger */
-  readonly logger: Logger;
+  /** Whether logging is enabled */
+  readonly logging: boolean;
 }
 
 /**
@@ -253,30 +240,8 @@ export interface ConnectedContract {
   readonly module: LoadedContractModule;
   /** Raw providers */
   readonly providers: ContractProviders;
-  /** Logger */
-  readonly logger: Logger;
-}
-
-// =============================================================================
-// Logger Factory
-// =============================================================================
-
-function createLogger(enabled: boolean): Logger {
-  if (!enabled) {
-    return {
-      info: () => {},
-      warn: () => {},
-      error: () => {},
-      debug: () => {},
-    };
-  }
-
-  return {
-    info: (message: string) => console.log(`[INFO] ${message}`),
-    warn: (message: string) => console.warn(`[WARN] ${message}`),
-    error: (message: string) => console.error(`[ERROR] ${message}`),
-    debug: (message: string) => console.debug(`[DEBUG] ${message}`),
-  };
+  /** Whether logging is enabled */
+  readonly logging: boolean;
 }
 
 // =============================================================================
@@ -295,8 +260,6 @@ function createEffect(config: ClientConfig): Effect.Effect<MidnightClient, Clien
       logging = true,
     } = config;
 
-    const logger = createLogger(logging);
-
     // Resolve network configuration
     const networkConfig = customNetworkConfig ?? Config.getNetworkConfig(network);
 
@@ -312,7 +275,7 @@ function createEffect(config: ClientConfig): Effect.Effect<MidnightClient, Clien
     }
 
     // Initialize wallet
-    logger.info('Initializing wallet...');
+    yield* Effect.logDebug('Initializing wallet...');
     const walletContext = yield* Wallet.effect.init(walletSeed, networkConfig).pipe(
       Effect.mapError(
         (e) =>
@@ -332,7 +295,7 @@ function createEffect(config: ClientConfig): Effect.Effect<MidnightClient, Clien
           }),
       ),
     );
-    logger.info('Wallet synced');
+    yield* Effect.logDebug('Wallet synced');
 
     const providerOptions: CreateProvidersOptions = {
       networkConfig,
@@ -346,8 +309,8 @@ function createEffect(config: ClientConfig): Effect.Effect<MidnightClient, Clien
     return {
       wallet: walletContext,
       networkConfig,
-      logger,
       providers,
+      logging,
     };
   });
 }
@@ -360,47 +323,48 @@ function fromWalletEffect(
     logging?: boolean;
   },
 ): Effect.Effect<MidnightClient, ClientError> {
-  return Effect.try({
-    try: () => {
-      const { zkConfigProvider, privateStateProvider, logging = true } = config;
-      const logger = createLogger(logging);
+  return Effect.gen(function* () {
+    const { zkConfigProvider, privateStateProvider, logging = true } = config;
 
-      // Create network config from wallet configuration
-      const networkConfig: NetworkConfig = {
-        networkId: connection.config.networkId,
-        indexer: connection.config.indexerUri,
-        indexerWS: connection.config.indexerWsUri,
-        node: connection.config.substrateNodeUri,
-        proofServer: connection.config.proverServerUri ?? '',
-      };
+    // Create network config from wallet configuration
+    const networkConfig: NetworkConfig = {
+      networkId: connection.config.networkId,
+      indexer: connection.config.indexerUri,
+      indexerWS: connection.config.indexerWsUri,
+      node: connection.config.substrateNodeUri,
+      proofServer: connection.config.proverServerUri ?? '',
+    };
 
-      // Create wallet providers from connection
-      const { walletProvider, midnightProvider } = createWalletProviders(connection.wallet, connection.addresses);
+    // Create wallet providers from connection
+    const { walletProvider, midnightProvider } = createWalletProviders(connection.wallet, connection.addresses);
 
-      const providerOptions: CreateProvidersOptions = {
-        networkConfig,
-        zkConfigProvider,
-        privateStateProvider,
-      };
+    const providerOptions: CreateProvidersOptions = {
+      networkConfig,
+      zkConfigProvider,
+      privateStateProvider,
+    };
 
-      // Create providers using the wallet providers
-      const providers = Providers.createFromWalletProviders(walletProvider, midnightProvider, providerOptions);
+    // Create providers using the wallet providers
+    const providers = Providers.createFromWalletProviders(walletProvider, midnightProvider, providerOptions);
 
-      logger.info('Connected to wallet');
+    yield* Effect.logDebug('Connected to wallet');
 
-      return {
-        wallet: null,
-        networkConfig,
-        logger,
-        providers,
-      };
-    },
-    catch: (cause) =>
-      new ClientError({
-        cause,
-        message: `Failed to create client from wallet: ${cause instanceof Error ? cause.message : String(cause)}`,
-      }),
-  });
+    return {
+      wallet: null,
+      networkConfig,
+      providers,
+      logging,
+    };
+  }).pipe(
+    Effect.catchAllDefect((defect) =>
+      Effect.fail(
+        new ClientError({
+          cause: defect,
+          message: `Failed to create client from wallet: ${defect instanceof Error ? defect.message : String(defect)}`,
+        }),
+      ),
+    ),
+  );
 }
 
 function contractFromEffect(
@@ -423,7 +387,7 @@ function contractFromEffect(
       return {
         module,
         providers: client.providers,
-        logger: client.logger,
+        logging: client.logging,
       };
     },
     catch: (cause) =>
@@ -476,7 +440,8 @@ function waitForTxEffect(
  * @category constructors
  */
 export async function create(config: ClientConfig): Promise<MidnightClient> {
-  return runEffectPromise(createEffect(config));
+  const logging = config.logging ?? true;
+  return runEffectWithLogging(createEffect(config), logging);
 }
 
 /**
@@ -493,7 +458,8 @@ export async function fromWallet(
     logging?: boolean;
   },
 ): Promise<MidnightClient> {
-  return runEffectPromise(fromWalletEffect(connection, config));
+  const logging = config.logging ?? true;
+  return runEffectWithLogging(fromWalletEffect(connection, config), logging);
 }
 
 /**
@@ -513,7 +479,7 @@ export async function contractFrom(
   client: MidnightClient,
   options: ContractFromOptions,
 ): Promise<ContractBuilder> {
-  return runEffectPromise(contractFromEffect(client, options));
+  return runEffectWithLogging(contractFromEffect(client, options), client.logging);
 }
 
 /**
@@ -526,7 +492,7 @@ export async function waitForTx(
   client: MidnightClient,
   txHash: string,
 ): Promise<FinalizedTxData> {
-  return runEffectPromise(waitForTxEffect(client, txHash));
+  return runEffectWithLogging(waitForTxEffect(client, txHash), client.logging);
 }
 
 /**
@@ -560,41 +526,43 @@ function deployEffect(
   builder: ContractBuilder,
   options?: DeployOptions,
 ): Effect.Effect<ConnectedContract, ContractError> {
-  return Effect.tryPromise({
-    try: async () => {
-      const { initialPrivateState = {} } = options ?? {};
-      const { module, providers, logger } = builder;
+  return Effect.gen(function* () {
+    const { initialPrivateState = {} } = options ?? {};
+    const { module, providers, logging } = builder;
 
-      logger.info('Deploying contract...');
+    yield* Effect.logDebug('Deploying contract...');
 
-      const ContractClass = module.Contract as new (witnesses: unknown) => unknown;
-      const contract = new ContractClass(module.witnesses);
+    const ContractClass = module.Contract as new (witnesses: unknown) => unknown;
+    const contract = new ContractClass(module.witnesses);
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const deployed = await deployContract(providers as any, {
-        contract,
-        privateStateId: module.privateStateId,
-        initialPrivateState,
-      } as any);
+    const deployed = yield* Effect.tryPromise({
+      try: () =>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        deployContract(providers as any, {
+          contract,
+          privateStateId: module.privateStateId,
+          initialPrivateState,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } as any),
+      catch: (cause) =>
+        new ContractError({
+          cause,
+          message: `Failed to deploy contract: ${cause instanceof Error ? cause.message : String(cause)}`,
+        }),
+    });
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const address = (deployed as any).deployTxData.public.contractAddress;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const address = (deployed as any).deployTxData.public.contractAddress;
 
-      logger.info(`Contract deployed at: ${address}`);
+    yield* Effect.logDebug(`Contract deployed at: ${address}`);
 
-      return {
-        address,
-        instance: deployed,
-        module,
-        providers,
-        logger,
-      };
-    },
-    catch: (cause) =>
-      new ContractError({
-        cause,
-        message: `Failed to deploy contract: ${cause instanceof Error ? cause.message : String(cause)}`,
-      }),
+    return {
+      address,
+      instance: deployed,
+      module,
+      providers,
+      logging,
+    };
   });
 }
 
@@ -603,39 +571,41 @@ function joinEffect(
   address: string,
   options?: JoinOptions,
 ): Effect.Effect<ConnectedContract, ContractError> {
-  return Effect.tryPromise({
-    try: async () => {
-      const { initialPrivateState = {} } = options ?? {};
-      const { module, providers, logger } = builder;
+  return Effect.gen(function* () {
+    const { initialPrivateState = {} } = options ?? {};
+    const { module, providers, logging } = builder;
 
-      logger.info(`Joining contract at ${address}...`);
+    yield* Effect.logDebug(`Joining contract at ${address}...`);
 
-      const ContractClass = module.Contract as new (witnesses: unknown) => unknown;
-      const contract = new ContractClass(module.witnesses);
+    const ContractClass = module.Contract as new (witnesses: unknown) => unknown;
+    const contract = new ContractClass(module.witnesses);
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const deployed = await findDeployedContract(providers as any, {
-        contractAddress: address,
-        contract,
-        privateStateId: module.privateStateId,
-        initialPrivateState,
-      } as any);
+    const deployed = yield* Effect.tryPromise({
+      try: () =>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        findDeployedContract(providers as any, {
+          contractAddress: address,
+          contract,
+          privateStateId: module.privateStateId,
+          initialPrivateState,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } as any),
+      catch: (cause) =>
+        new ContractError({
+          cause,
+          message: `Failed to join contract at ${address}: ${cause instanceof Error ? cause.message : String(cause)}`,
+        }),
+    });
 
-      logger.info('Contract joined');
+    yield* Effect.logDebug('Contract joined');
 
-      return {
-        address,
-        instance: deployed,
-        module,
-        providers,
-        logger,
-      };
-    },
-    catch: (cause) =>
-      new ContractError({
-        cause,
-        message: `Failed to join contract at ${address}: ${cause instanceof Error ? cause.message : String(cause)}`,
-      }),
+    return {
+      address,
+      instance: deployed,
+      module,
+      providers,
+      logging,
+    };
   });
 }
 
@@ -662,7 +632,7 @@ export const ContractBuilder = {
    * @category lifecycle
    */
   deploy: async (builder: ContractBuilder, options?: DeployOptions): Promise<ConnectedContract> => {
-    return runEffectPromise(deployEffect(builder, options));
+    return runEffectWithLogging(deployEffect(builder, options), builder.logging);
   },
 
   /**
@@ -677,7 +647,7 @@ export const ContractBuilder = {
    * @category lifecycle
    */
   join: async (builder: ContractBuilder, address: string, options?: JoinOptions): Promise<ConnectedContract> => {
-    return runEffectPromise(joinEffect(builder, address, options));
+    return runEffectWithLogging(joinEffect(builder, address, options), builder.logging);
   },
 
   /**
@@ -701,34 +671,39 @@ function callEffect(
   action: string,
   ...args: unknown[]
 ): Effect.Effect<CallResult, ContractError> {
-  return Effect.tryPromise({
-    try: async () => {
-      const { instance, logger } = contract;
-      logger.info(`Calling ${action}()...`);
+  return Effect.gen(function* () {
+    const { instance } = contract;
+    yield* Effect.logDebug(`Calling ${action}()...`);
 
-      const deployed = instance as DeployedContractInstance;
-      const callTx = deployed.callTx;
-      if (!callTx || typeof callTx[action] !== 'function') {
-        throw new Error(`Unknown action: ${action}. Available: ${Object.keys(callTx || {}).join(', ')}`);
-      }
+    const deployed = instance as DeployedContractInstance;
+    const callTx = deployed.callTx;
+    if (!callTx || typeof callTx[action] !== 'function') {
+      return yield* Effect.fail(
+        new ContractError({
+          cause: new Error(`Unknown action: ${action}`),
+          message: `Unknown action: ${action}. Available: ${Object.keys(callTx || {}).join(', ')}`,
+        }),
+      );
+    }
 
-      const txData = await callTx[action](...args);
+    const txData = yield* Effect.tryPromise({
+      try: () => callTx[action](...args),
+      catch: (cause) =>
+        new ContractError({
+          cause,
+          message: `Failed to call ${action}: ${cause instanceof Error ? cause.message : String(cause)}`,
+        }),
+    });
 
-      logger.info('Transaction submitted');
-      logger.info(`  TX Hash: ${txData.public.txHash}`);
-      logger.info(`  Block: ${txData.public.blockHeight}`);
+    yield* Effect.logDebug('Transaction submitted');
+    yield* Effect.logDebug(`  TX Hash: ${txData.public.txHash}`);
+    yield* Effect.logDebug(`  Block: ${txData.public.blockHeight}`);
 
-      return {
-        txHash: txData.public.txHash,
-        blockHeight: txData.public.blockHeight,
-        status: txData.public.status,
-      };
-    },
-    catch: (cause) =>
-      new ContractError({
-        cause,
-        message: `Failed to call ${action}: ${cause instanceof Error ? cause.message : String(cause)}`,
-      }),
+    return {
+      txHash: txData.public.txHash,
+      blockHeight: txData.public.blockHeight,
+      status: txData.public.status,
+    };
   });
 }
 
@@ -808,7 +783,7 @@ export const Contract = {
    * @category operations
    */
   call: async (contract: ConnectedContract, action: string, ...args: unknown[]): Promise<CallResult> => {
-    return runEffectPromise(callEffect(contract, action, ...args));
+    return runEffectWithLogging(callEffect(contract, action, ...args), contract.logging);
   },
 
   /**
@@ -818,7 +793,7 @@ export const Contract = {
    * @category inspection
    */
   state: async (contract: ConnectedContract): Promise<unknown> => {
-    return runEffectPromise(stateEffect(contract));
+    return runEffectWithLogging(stateEffect(contract), contract.logging);
   },
 
   /**
@@ -828,7 +803,7 @@ export const Contract = {
    * @category inspection
    */
   stateAt: async (contract: ConnectedContract, blockHeight: number): Promise<unknown> => {
-    return runEffectPromise(stateAtEffect(contract, blockHeight));
+    return runEffectWithLogging(stateAtEffect(contract, blockHeight), contract.logging);
   },
 
   /**
@@ -838,7 +813,7 @@ export const Contract = {
    * @category inspection
    */
   ledgerState: async (contract: ConnectedContract): Promise<unknown> => {
-    return runEffectPromise(ledgerStateEffect(contract));
+    return runEffectWithLogging(ledgerStateEffect(contract), contract.logging);
   },
 
   /**
@@ -848,7 +823,7 @@ export const Contract = {
    * @category inspection
    */
   ledgerStateAt: async (contract: ConnectedContract, blockHeight: number): Promise<unknown> => {
-    return runEffectPromise(ledgerStateAtEffect(contract, blockHeight));
+    return runEffectWithLogging(ledgerStateAtEffect(contract, blockHeight), contract.logging);
   },
 
   /**
