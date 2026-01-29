@@ -8,7 +8,6 @@
 import { Context, Layer } from 'effect';
 import type { ZKConfigProvider, PrivateStateProvider } from '@midnight-ntwrk/midnight-js-types';
 
-import type { Logger } from './Client.js';
 import { ZkConfigProviderService } from './providers/HttpZkConfigProvider.js';
 import { PrivateStateProviderService } from './providers/IndexedDBPrivateStateProvider.js';
 
@@ -72,14 +71,6 @@ export const DEV_WALLET_SEED = '000000000000000000000000000000000000000000000000
 // =============================================================================
 
 /**
- * Logger service for SDK operations.
- *
- * @since 0.3.0
- * @category services
- */
-export class LoggerService extends Context.Tag('LoggerService')<LoggerService, Logger>() {}
-
-/**
  * Network configuration service.
  *
  * @since 0.3.0
@@ -97,7 +88,6 @@ export class NetworkConfigService extends Context.Tag('NetworkConfigService')<
  * @category services
  */
 export interface SdkConfig {
-  readonly logger: Logger;
   readonly networkConfig: NetworkConfig;
   readonly zkConfigProvider: ZKConfigProvider<string>;
   readonly privateStateProvider: PrivateStateProvider;
@@ -121,31 +111,31 @@ export class SdkConfigService extends Context.Tag('SdkConfigService')<SdkConfigS
  * import * as Midday from '@no-witness-labs/midday-sdk';
  *
  * const servicesLayer = Midday.Config.makeSdkLayer({
- *   logger: console,
  *   networkConfig: Midday.Config.NETWORKS.local,
  *   zkConfigProvider: new Midday.HttpZkConfigProvider('http://localhost:3000/zk'),
  *   privateStateProvider: Midday.inMemoryPrivateStateProvider(),
  * });
  *
- * // Use in Effect programs
+ * // Use in Effect programs with debug logging
  * const program = Effect.gen(function* () {
- *   const logger = yield* Midday.Config.LoggerService;
  *   const config = yield* Midday.Config.NetworkConfigService;
- *   logger.info(`Using network: ${config.networkId}`);
+ *   yield* Effect.logDebug(`Using network: ${config.networkId}`);
  * });
  *
- * // Provide all services at once
- * await Effect.runPromise(program.pipe(Effect.provide(servicesLayer)));
+ * // Provide services and enable debug logging
+ * await Effect.runPromise(program.pipe(
+ *   Effect.provide(servicesLayer),
+ *   Effect.provide(Midday.SdkLogger.withDebug),
+ * ));
  * ```
  *
  * @since 0.3.0
  * @category services
  */
 export function makeSdkLayer(config: SdkConfig): Layer.Layer<
-  LoggerService | NetworkConfigService | ZkConfigProviderService | PrivateStateProviderService | SdkConfigService
+  NetworkConfigService | ZkConfigProviderService | PrivateStateProviderService | SdkConfigService
 > {
   return Layer.mergeAll(
-    Layer.succeed(LoggerService, config.logger),
     Layer.succeed(NetworkConfigService, config.networkConfig),
     Layer.succeed(ZkConfigProviderService, config.zkConfigProvider),
     Layer.succeed(PrivateStateProviderService, config.privateStateProvider),
