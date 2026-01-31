@@ -36,8 +36,8 @@ import { runEffectPromise } from '../utils/effect-runtime.js';
 // Use string for contract address to avoid importing compact-runtime
 type ContractAddress = string;
 
-// Simplified signing key type - actual structure may differ
-type SigningKey = unknown;
+// SigningKey type matches compact-runtime's definition
+type SigningKey = string;
 
 /**
  * Configuration for IndexedDB private state storage.
@@ -631,12 +631,12 @@ export interface PrivateStateServiceImpl {
   readonly setSigningKey: (
     provider: PrivateStateProviderData,
     address: string,
-    signingKey: unknown,
+    signingKey: string,
   ) => Effect.Effect<void, PrivateStateError>;
   readonly getSigningKey: (
     provider: PrivateStateProviderData,
     address: string,
-  ) => Effect.Effect<unknown | null, PrivateStateError>;
+  ) => Effect.Effect<string | null, PrivateStateError>;
   readonly removeSigningKey: (
     provider: PrivateStateProviderData,
     address: string,
