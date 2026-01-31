@@ -92,8 +92,7 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Generate code image
-        if: steps.release.outputs.found == 'true' && steps.extract.outputs.has_code == 'true'
+      - name: settings '{"theme":"blackboard","backgroundColor":"#FD4B1B","windowTheme":"none","windowControls":true,"fontFamily":"JetBrains Mono","fontSize":"14px","lineNumbers":false,"paddingVertical":"40px","paddingHorizontal":"40px","dropShadow":true,"dropShadowOffsetY":"10px","dropShadowBlurRadius":"30px"
         run: |
           npx -y carbon-now-cli /tmp/snippet.ts \
             --save-to . \
