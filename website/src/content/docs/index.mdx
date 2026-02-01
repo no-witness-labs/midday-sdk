@@ -1,0 +1,60 @@
+---
+title: Midday SDK
+description: Developer-friendly SDK for building dapps on Midnight Network
+template: splash
+hero:
+  tagline: Build privacy-preserving dapps on Midnight Network with ease
+  image:
+    alt: Midday SDK
+    dark: ../../assets/logo-dark.svg
+    light: ../../assets/logo-light.svg
+  actions:
+    - text: Get Started
+      link: /midday-sdk/getting-started/introduction/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/no-witness-labs/midday-sdk
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## Features
+
+<CardGrid stagger>
+  <Card title="Multiple API Styles" icon="puzzle">
+    Choose between Promise API for simplicity or Effect API for functional programming with dependency injection.
+  </Card>
+  <Card title="Browser & Node.js" icon="laptop">
+    Works seamlessly in both browser environments with Lace wallet and Node.js for backend applications.
+  </Card>
+  <Card title="Type-Safe" icon="approve-check">
+    Full TypeScript support with comprehensive type definitions for contracts, state, and operations.
+  </Card>
+  <Card title="Zero-Knowledge Ready" icon="shield">
+    Built-in support for ZK proofs and privacy-preserving contract interactions on Midnight Network.
+  </Card>
+</CardGrid>
+
+## Quick Example
+
+```typescript
+import * as Midday from '@no-witness-labs/midday-sdk';
+
+// Create client
+const client = await Midday.Client.create({
+  networkConfig: Midday.Config.NETWORKS.testnet,
+  seed: 'your-64-char-hex-seed',
+  zkConfigProvider: new Midday.HttpZkConfigProvider('https://cdn.example.com/zk'),
+  privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+});
+
+// Deploy and interact with contracts
+const builder = await Midday.Client.contractFrom(client, {
+  module: await import('./contracts/counter/index.js'),
+});
+const contract = await Midday.ContractBuilder.deploy(builder);
+await Midday.Contract.call(contract, 'increment');
+```

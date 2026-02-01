@@ -1,0 +1,155 @@
+---
+title: Contract Operations
+description: Deploy, join, and interact with smart contracts
+---
+
+import { Steps } from '@astrojs/starlight/components';
+
+## Loading a Contract Module
+
+Before deploying or joining a contract, you need to load its module:
+
+```typescript
+const builder = await Midday.Client.contractFrom(client, {
+  module: await import('./contracts/my-contract/index.js'),
+});
+```
+
+### With Witnesses
+
+Witnesses are client-side functions that provide private data to contract computations:
+
+```typescript
+const builder = await Midday.Client.contractFrom(client, {
+  module: await import('./contracts/my-contract/index.js'),
+  witnesses: {
+    my_witness_function: (context) => {
+      // Return private data for the contract
+      return somePrivateValue;
+    },
+  },
+});
+```
+
+## Deploying a Contract
+
+Deploy a new instance of a contract to the network:
+
+```typescript
+const contract = await Midday.ContractBuilder.deploy(builder);
+console.log(`Deployed at: ${contract.address}`);
+```
+
+The deploy operation:
+1. Compiles the contract if needed
+2. Generates the deployment transaction
+3. Submits it to the network
+4. Waits for confirmation
+5. Returns a connected contract instance
+
+## Joining an Existing Contract
+
+Connect to a contract that's already deployed:
+
+```typescript
+const contract = await Midday.ContractBuilder.join(builder, {
+  address: '0x1234...abcd'
+});
+```
+
+## Calling Contract Actions
+
+Execute a state-changing action on the contract:
+
+```typescript
+const result = await Midday.Contract.call(contract, 'increment');
+
+console.log(`TX Hash: ${result.txHash}`);
+console.log(`Block: ${result.blockHeight}`);
+```
+
+### With Arguments
+
+Pass arguments to contract actions:
+
+```typescript
+const result = await Midday.Contract.call(contract, 'transfer', {
+  recipient: recipientAddress,
+  amount: 100n,
+});
+```
+
+## Reading Contract State
+
+### Current State
+
+Get the parsed ledger state:
+
+```typescript
+const state = await Midday.Contract.ledgerState(contract);
+console.log(state.counter); // Access state fields
+```
+
+### Raw State
+
+Get the unparsed state:
+
+```typescript
+const rawState = await Midday.Contract.state(contract);
+```
+
+### Historical State
+
+Query state at a specific block height:
+
+```typescript
+const historicalState = await Midday.Contract.ledgerStateAt(contract, blockHeight);
+```
+
+## Effect API Examples
+
+All contract operations are also available via the Effect API:
+
+```typescript
+import { Effect } from 'effect';
+
+const program = Effect.gen(function* () {
+  // Load contract
+  const builder = yield* Midday.Client.effect.contractFrom(client, {
+    module: await import('./contracts/counter/index.js'),
+  });
+
+  // Deploy
+  const contract = yield* Midday.ContractBuilder.effect.deploy(builder);
+
+  // Call action
+  const result = yield* Midday.Contract.effect.call(contract, 'increment');
+
+  // Read state
+  const state = yield* Midday.Contract.effect.ledgerState(contract);
+
+  return { result, state };
+});
+```
+
+## Error Handling
+
+Contract operations can fail for various reasons:
+
+| Error | Cause |
+|-------|-------|
+| `ContractNotFound` | The contract address doesn't exist |
+| `InsufficientFunds` | Not enough balance for the transaction |
+| `ProofGenerationFailed` | ZK proof generation failed |
+| `TransactionRejected` | The network rejected the transaction |
+
+With the Effect API, errors are typed and can be handled explicitly:
+
+```typescript
+const program = Midday.Contract.effect.call(contract, 'increment').pipe(
+  Effect.catchTag('ProofGenerationFailed', (error) => {
+    console.error('Proof failed:', error.message);
+    return Effect.fail(error);
+  })
+);
+```
