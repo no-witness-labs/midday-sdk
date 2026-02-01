@@ -31,3 +31,6 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+      - name: Build examples
+        run: pnpm --filter "@examples/*" build
