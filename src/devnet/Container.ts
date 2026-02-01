@@ -273,6 +273,21 @@ function removeByNameEffect(containerName: string): Effect.Effect<void, Containe
 }
 
 /**
+ * Remove the Docker network for a cluster.
+ *
+ * @since 0.2.0
+ * @category utilities
+ * @internal
+ */
+export async function removeClusterNetwork(clusterName: string): Promise<void> {
+  try {
+    await removeNetwork(`${clusterName}-network`);
+  } catch {
+    // Ignore network removal errors
+  }
+}
+
+/**
  * Remove a container by name if it exists.
  *
  * @since 0.2.0
@@ -281,6 +296,33 @@ function removeByNameEffect(containerName: string): Effect.Effect<void, Containe
  */
 export async function removeByName(containerName: string): Promise<void> {
   return Effect.runPromise(removeByNameEffect(containerName));
+}
+
+/**
+ * Create or get a Docker network for the cluster.
+ * @internal
+ */
+async function ensureNetwork(networkName: string): Promise<Docker.Network> {
+  const docker = new Docker();
+  const networks = await docker.listNetworks({ filters: { name: [networkName] } });
+  const existing = networks.find((n) => n.Name === networkName);
+  if (existing) {
+    return docker.getNetwork(existing.Id!);
+  }
+  return docker.createNetwork({ Name: networkName, Driver: 'bridge' });
+}
+
+/**
+ * Remove a Docker network if it exists.
+ * @internal
+ */
+async function removeNetwork(networkName: string): Promise<void> {
+  const docker = new Docker();
+  const networks = await docker.listNetworks({ filters: { name: [networkName] } });
+  const existing = networks.find((n) => n.Name === networkName);
+  if (existing) {
+    await docker.getNetwork(existing.Id!).remove();
+  }
 }
 
 // Internal Effect implementation
@@ -292,8 +334,10 @@ function createNodeEffect(
       try: async () => {
         const docker = new Docker();
         const containerName = `${config.clusterName}-node`;
+        const networkName = `${config.clusterName}-network`;
 
         await Images.ensureAvailable(config.node.image);
+        await ensureNetwork(networkName);
 
         return docker.createContainer({
           Image: config.node.image,
@@ -306,8 +350,16 @@ function createNodeEffect(
               // Node exposes 9944 internally, we map to configured port
               ['9944/tcp']: [{ HostPort: String(config.node.port) }],
             },
+            NetworkMode: networkName,
           },
           Env: [`CFG_PRESET=${config.node.cfgPreset}`],
+          Healthcheck: {
+            Test: ['CMD', 'curl', '-f', 'http://localhost:9944/health'],
+            Interval: 2_000_000_000, // 2s in nanoseconds
+            Timeout: 5_000_000_000, // 5s
+            Retries: 5,
+            StartPeriod: 5_000_000_000, // 5s
+          },
         });
       },
       catch: (cause: unknown) =>
@@ -342,9 +394,11 @@ function createIndexerEffect(
       try: async () => {
         const docker = new Docker();
         const containerName = `${config.clusterName}-indexer`;
+        const networkName = `${config.clusterName}-network`;
         const nodeUrl = `ws://${config.clusterName}-node:9944`;
 
         await Images.ensureAvailable(config.indexer.image);
+        await ensureNetwork(networkName);
 
         return docker.createContainer({
           Image: config.indexer.image,
@@ -357,13 +411,21 @@ function createIndexerEffect(
               // Indexer exposes 8088 internally
               ['8088/tcp']: [{ HostPort: String(config.indexer.port) }],
             },
-            Links: [`${config.clusterName}-node:${config.clusterName}-node`],
+            NetworkMode: networkName,
           },
           Env: [
             `RUST_LOG=indexer=${config.indexer.logLevel},chain_indexer=${config.indexer.logLevel},indexer_api=${config.indexer.logLevel},wallet_indexer=${config.indexer.logLevel},indexer_common=${config.indexer.logLevel},fastrace_opentelemetry=${config.indexer.logLevel},${config.indexer.logLevel}`,
             `APP__INFRA__SECRET=${Config.DEV_INDEXER_SECRET}`,
             `APP__INFRA__NODE__URL=${nodeUrl}`,
           ],
+          Healthcheck: {
+            // This is what the indexer uses to signal it's fully synced
+            Test: ['CMD-SHELL', 'cat /var/run/indexer-standalone/running'],
+            Interval: 5_000_000_000, // 5s in nanoseconds
+            Timeout: 2_000_000_000, // 2s
+            Retries: 2,
+            StartPeriod: 5_000_000_000, // 5s
+          },
         });
       },
       catch: (cause: unknown) =>
@@ -398,8 +460,10 @@ function createProofServerEffect(
       try: async () => {
         const docker = new Docker();
         const containerName = `${config.clusterName}-proof-server`;
+        const networkName = `${config.clusterName}-network`;
 
         await Images.ensureAvailable(config.proofServer.image);
+        await ensureNetwork(networkName);
 
         const binds: string[] = [];
         if (config.proofServer.zkParamsPath) {
@@ -417,6 +481,7 @@ function createProofServerEffect(
               // Proof server exposes 6300 internally
               ['6300/tcp']: [{ HostPort: String(config.proofServer.port) }],
             },
+            NetworkMode: networkName,
             Binds: binds.length > 0 ? binds : undefined,
           },
           Env: ['HOME=/root'],
