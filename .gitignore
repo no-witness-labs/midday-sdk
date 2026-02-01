@@ -1,8 +1,15 @@
 node_modules/
 dist/
-docs/
+/docs/
+
+# Website (Astro Starlight)
+website/dist/
+website/.astro/
+website/src/content/docs/api/
 .data/
 *.log
 .DS_Store
 .npmrc
 .direnv/
+.claude
+openspec

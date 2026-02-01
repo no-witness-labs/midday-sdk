@@ -1,0 +1,125 @@
+---
+title: Configuration
+description: Configure network settings, providers, and storage options
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Network Configuration
+
+Midday SDK comes with pre-configured network settings for common environments.
+
+### Built-in Networks
+
+<Tabs>
+  <TabItem label="Local">
+    ```typescript
+    const client = await Midday.Client.create({
+      networkConfig: Midday.Config.NETWORKS.local,
+      zkConfigProvider: new Midday.HttpZkConfigProvider('http://localhost:3000/zk'),
+      privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+    });
+    ```
+  </TabItem>
+  <TabItem label="Testnet">
+    ```typescript
+    const client = await Midday.Client.create({
+      networkConfig: Midday.Config.NETWORKS.testnet,
+      seed: 'your-64-char-hex-seed',
+      zkConfigProvider: new Midday.HttpZkConfigProvider('https://cdn.example.com/zk'),
+      privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+    });
+    ```
+  </TabItem>
+</Tabs>
+
+### Custom Network
+
+For custom deployments, provide the full network configuration:
+
+```typescript
+const client = await Midday.Client.create({
+  networkConfig: {
+    networkId: 'testnet',
+    indexer: 'https://indexer.testnet.midnight.network/graphql',
+    indexerWS: 'wss://indexer.testnet.midnight.network/graphql/ws',
+    node: 'wss://node.testnet.midnight.network',
+    proofServer: 'https://proof.testnet.midnight.network',
+  },
+  seed: 'your-64-char-hex-seed',
+  zkConfigProvider: new Midday.HttpZkConfigProvider('https://cdn.example.com/zk'),
+  privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+});
+```
+
+## ZK Configuration Provider
+
+The ZK configuration provider supplies zero-knowledge circuit configurations needed for proof generation.
+
+### HTTP Provider
+
+Fetches ZK configs from a remote URL:
+
+```typescript
+const zkConfigProvider = new Midday.HttpZkConfigProvider('https://cdn.example.com/zk');
+```
+
+### Node Provider
+
+For Node.js environments, loads configs from the local filesystem:
+
+```typescript
+const zkConfigProvider = new Midday.NodeZkConfigProvider('./zk-configs');
+```
+
+## Private State Provider
+
+Private state stores contract-specific secrets that should never leave the client.
+
+### In-Memory (Development)
+
+```typescript
+const privateStateProvider = Midday.inMemoryPrivateStateProvider();
+```
+
+### IndexedDB (Browser)
+
+```typescript
+const privateStateProvider = Midday.indexedDBPrivateStateProvider({
+  privateStateStoreName: 'my-app-private-state',
+});
+```
+
+## Wallet Configuration
+
+### Seed-Based (Node.js)
+
+For server-side applications, provide a 64-character hex seed:
+
+```typescript
+const client = await Midday.Client.create({
+  networkConfig: Midday.Config.NETWORKS.testnet,
+  seed: 'your-64-char-hex-seed', // 32 bytes as hex
+  // ...
+});
+```
+
+:::caution
+Never commit seeds to version control. Use environment variables or secure secret management.
+:::
+
+### Lace Wallet (Browser)
+
+For browser applications, connect to the Lace wallet extension:
+
+```typescript
+const connection = await Midday.connectWallet('testnet');
+const client = await Midday.Client.fromWallet(connection, {
+  zkConfigProvider: new Midday.HttpZkConfigProvider('https://cdn.example.com/zk'),
+  privateStateProvider: Midday.indexedDBPrivateStateProvider({
+    privateStateStoreName: 'my-app'
+  }),
+});
+```
+
+See the [Browser Usage](/midday-sdk/guides/browser-usage/) guide for more details.

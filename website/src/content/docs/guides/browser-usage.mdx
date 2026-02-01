@@ -1,0 +1,158 @@
+---
+title: Browser Usage
+description: Using Midday SDK in browser environments with Lace wallet
+---
+
+import { Steps } from '@astrojs/starlight/components';
+
+Midday SDK supports browser environments with integration for the [Lace wallet](https://www.lace.io/) extension.
+
+## Prerequisites
+
+- Lace wallet browser extension installed
+- Lace wallet connected to Midnight testnet
+
+## Connecting to Lace Wallet
+
+<Steps>
+
+1. **Connect to the wallet**
+
+   ```typescript
+   import * as Midday from '@no-witness-labs/midday-sdk';
+
+   const connection = await Midday.connectWallet('testnet');
+   ```
+
+   This will prompt the user to approve the connection in their Lace wallet.
+
+2. **Create a client from the connection**
+
+   ```typescript
+   const client = await Midday.Client.fromWallet(connection, {
+     zkConfigProvider: new Midday.HttpZkConfigProvider('https://cdn.example.com/zk'),
+     privateStateProvider: Midday.indexedDBPrivateStateProvider({
+       privateStateStoreName: 'my-app'
+     }),
+   });
+   ```
+
+3. **Use the client normally**
+
+   ```typescript
+   const builder = await Midday.Client.contractFrom(client, {
+     module: await import('./contracts/counter/index.js'),
+   });
+   const contract = await Midday.ContractBuilder.deploy(builder);
+   await Midday.Contract.call(contract, 'increment');
+   ```
+
+</Steps>
+
+## Complete Example
+
+```typescript
+import * as Midday from '@no-witness-labs/midday-sdk';
+
+async function main() {
+  // Connect to Lace wallet
+  const connection = await Midday.connectWallet('testnet');
+
+  // Create client from wallet connection
+  const client = await Midday.Client.fromWallet(connection, {
+    zkConfigProvider: new Midday.HttpZkConfigProvider('https://cdn.example.com/zk'),
+    privateStateProvider: Midday.indexedDBPrivateStateProvider({
+      privateStateStoreName: 'my-app'
+    }),
+  });
+
+  // Load and deploy contract
+  const builder = await Midday.Client.contractFrom(client, {
+    module: await import('./contracts/counter/index.js'),
+  });
+  const contract = await Midday.ContractBuilder.deploy(builder);
+
+  // Interact with contract
+  await Midday.Contract.call(contract, 'increment');
+
+  // Read state
+  const state = await Midday.Contract.ledgerState(contract);
+  console.log('Counter:', state.counter);
+}
+```
+
+## Browser-Specific Considerations
+
+### Private State Storage
+
+In browsers, use IndexedDB for persistent private state:
+
+```typescript
+const privateStateProvider = Midday.indexedDBPrivateStateProvider({
+  privateStateStoreName: 'my-app-private-state',
+});
+```
+
+:::tip
+Use a unique store name per application to avoid conflicts.
+:::
+
+### ZK Configuration
+
+ZK configs must be served over HTTP in browser environments:
+
+```typescript
+const zkConfigProvider = new Midday.HttpZkConfigProvider('https://cdn.example.com/zk');
+```
+
+:::note
+Ensure your ZK config server has proper CORS headers configured.
+:::
+
+### Network Selection
+
+Match the network to the wallet's current network:
+
+```typescript
+// Connect to testnet
+const connection = await Midday.connectWallet('testnet');
+
+// Or connect to mainnet (when available)
+const connection = await Midday.connectWallet('mainnet');
+```
+
+## Handling Wallet Events
+
+The wallet connection provides events for state changes:
+
+```typescript
+const connection = await Midday.connectWallet('testnet');
+
+// The connection includes the wallet state
+console.log('Connected address:', connection.address);
+console.log('Balance:', connection.balance);
+```
+
+## Troubleshooting
+
+### Wallet Not Found
+
+If `connectWallet` throws an error, ensure:
+
+1. Lace wallet extension is installed
+2. The wallet is unlocked
+3. The user has allowed the site to connect
+
+### Transaction Signing
+
+All transactions are signed by the Lace wallet. The user will see a confirmation dialog for each transaction.
+
+### CORS Issues
+
+If ZK configs fail to load, check that your ZK config server includes:
+
+```
+Access-Control-Allow-Origin: *
+```
+
+Or configure it to allow your specific domain.
