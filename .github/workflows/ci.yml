@@ -31,6 +31,3 @@ jobs:
 
       - name: Build
         run: pnpm build
-
-      - name: Generate docs
-        run: pnpm docgen

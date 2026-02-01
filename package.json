@@ -17,16 +17,13 @@
   },
   "files": [
     "dist",
-    "docs",
     "README.md"
   ],
   "scripts": {
     "build": "tsc",
-    "clean": "rm -rf dist docs",
+    "clean": "rm -rf dist",
     "type-check": "tsc --noEmit",
     "lint": "eslint src/",
-    "docgen": "typedoc",
-    "docgen:html": "typedoc --options typedoc.html.json",
     "docs:dev": "pnpm --dir website dev",
     "docs:build": "pnpm --dir website build",
     "docs:preview": "pnpm --dir website preview",
@@ -75,8 +72,6 @@
     "@types/node": "^22.0.0",
     "@types/ws": "^8.5.10",
     "eslint": "^9.34.0",
-    "typedoc": "^0.28.7",
-    "typedoc-plugin-markdown": "^4.6.3",
     "typescript": "^5.6.0",
     "typescript-eslint": "^8.33.0",
     "vitest": "^3.2.4"
