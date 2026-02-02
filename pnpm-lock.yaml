@@ -141,6 +141,16 @@ importers:
         specifier: ^5.6.0
         version: 5.9.3
 
+  examples/devnet-testing:
+    dependencies:
+      '@no-witness-labs/midday-sdk':
+        specifier: workspace:*
+        version: link:../..
+    devDependencies:
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+
   examples/effect-di:
     dependencies:
       '@no-witness-labs/midday-sdk':

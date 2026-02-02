@@ -1,139 +1,112 @@
 /**
  * Effect Dependency Injection Example
  *
- * Demonstrates using Midday SDK with Effect's dependency injection
- * for testable, composable applications.
+ * Complete example demonstrating contract deployment and interaction
+ * using Effect's dependency injection for testable, composable applications.
+ *
+ * Prerequisites:
+ * - Local devnet running OR testnet access
+ * - ZK config server available
  */
 import * as Midday from '@no-witness-labs/midday-sdk';
+import * as CounterContract from '../../../contracts/counter/index.js';
 import { Effect, Layer, Console } from 'effect';
 
 // Configuration
 const CONFIG = {
   seed: process.env.WALLET_SEED || Midday.Config.DEV_WALLET_SEED,
   zkConfigUrl: process.env.ZK_CONFIG_URL || 'http://localhost:3000/zk',
+  network: (process.env.NETWORK as 'local' | 'testnet') || 'local',
 };
 
 /**
- * Example 1: Using pre-configured client layer
- *
- * The simplest way to use Effect DI - create a layer with your config
- * and the client is automatically available.
+ * Main program using Effect DI
  */
-const example1 = Effect.gen(function* () {
-  yield* Console.log('Example 1: Pre-configured client layer');
+const program = Effect.gen(function* () {
+  yield* Console.log('=== Effect DI Example ===\n');
 
-  // Access the client from context
-  const client = yield* Midday.MidnightClientService;
-
-  yield* Console.log(`Client ready with network: ${client.networkConfig.networkId}`);
-
-  // To use with a contract:
-  // const builder = yield* Midday.Client.effect.contractFrom(client, { module });
-  // const contract = yield* Midday.ContractBuilder.effect.deploy(builder);
-});
-
-// Create the client layer with configuration
-const clientLayer = Midday.Client.layer({
-  seed: CONFIG.seed,
-  networkConfig: Midday.Config.NETWORKS.local,
-  zkConfigProvider: new Midday.HttpZkConfigProvider(CONFIG.zkConfigUrl),
-  privateStateProvider: Midday.inMemoryPrivateStateProvider(),
-  logging: true,
-});
-
-/**
- * Example 2: Using service interfaces for testability
- *
- * Access services through their interfaces for easier mocking in tests.
- */
-const example2 = Effect.gen(function* () {
-  yield* Console.log('\nExample 2: Service interfaces');
-
+  // Access services from context
   const clientService = yield* Midday.ClientService;
   const contractBuilderService = yield* Midday.ContractBuilderService;
   const contractService = yield* Midday.ContractService;
 
-  yield* Console.log('All services available:');
-  yield* Console.log('  - ClientService: create, fromWallet, contractFrom');
-  yield* Console.log('  - ContractBuilderService: deploy, join');
-  yield* Console.log('  - ContractService: call, state, ledgerState');
-
-  // Create client through service
+  // Step 1: Create client via service
+  yield* Console.log('Creating Midday client...');
   const client = yield* clientService.create({
     seed: CONFIG.seed,
-    networkConfig: Midday.Config.NETWORKS.local,
+    networkConfig: Midday.Config.NETWORKS[CONFIG.network],
     zkConfigProvider: new Midday.HttpZkConfigProvider(CONFIG.zkConfigUrl),
     privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+    logging: true,
   });
+  yield* Console.log('Client created!\n');
 
-  yield* Console.log(`Created client via service`);
+  // Step 2: Load contract via service
+  yield* Console.log('Loading counter contract...');
+  const builder = yield* clientService.contractFrom(client, {
+    module: CounterContract as Midday.ContractModule,
+    privateStateId: 'effect-di-example',
+  });
+  yield* Console.log('Contract loaded!\n');
 
-  // Services can be mocked in tests:
-  // const TestClientService = Layer.succeed(Midday.ClientService, {
-  //   create: () => Effect.succeed(mockClient),
-  //   contractFrom: () => Effect.succeed(mockBuilder),
-  //   ...
-  // });
+  // Step 3: Deploy via service
+  yield* Console.log('Deploying contract...');
+  const contract = yield* contractBuilderService.deploy(builder);
+  yield* Console.log(`Contract deployed at: ${contract.address}\n`);
+
+  // Step 4: Read initial state
+  yield* Console.log('Reading initial state...');
+  const initialState = yield* contractService.ledgerState(contract);
+  yield* Console.log(`Initial counter value: ${JSON.stringify(initialState)}\n`);
+
+  // Step 5: Call increment via service
+  yield* Console.log('Calling increment()...');
+  const result = yield* contractService.call(contract, 'increment');
+  yield* Console.log(`TX Hash: ${result.txHash}`);
+  yield* Console.log(`Block Height: ${result.blockHeight}\n`);
+
+  // Step 6: Read updated state
+  yield* Console.log('Reading updated state...');
+  const updatedState = yield* contractService.ledgerState(contract);
+  yield* Console.log(`Updated counter value: ${JSON.stringify(updatedState)}\n`);
+
+  yield* Console.log('=== Example complete! ===');
+
+  return { contract, finalState: updatedState };
 });
 
-// Compose all service layers
-const servicesLayer = Layer.mergeAll(
+/**
+ * Compose service layers
+ */
+const ServicesLive = Layer.mergeAll(
   Midday.ClientLive,
   Midday.ContractBuilderLive,
   Midday.ContractLive,
 );
 
 /**
- * Example 3: Composing effects
- *
- * Combine multiple operations into a single composable program.
+ * Run the program with services
  */
-const example3 = Effect.gen(function* () {
-  yield* Console.log('\nExample 3: Composing effects');
-
-  // Operations can be composed
-  const program = Midday.Client.effect
-    .create({
-      seed: CONFIG.seed,
-      networkConfig: Midday.Config.NETWORKS.local,
-      zkConfigProvider: new Midday.HttpZkConfigProvider(CONFIG.zkConfigUrl),
-      privateStateProvider: Midday.inMemoryPrivateStateProvider(),
-    })
-    .pipe(
-      Effect.tap(() => Console.log('Client created')),
-      Effect.map((client) => ({
-        client,
-        networkId: client.networkConfig.networkId,
-      })),
-      // Error handling with typed errors
+async function main() {
+  const result = await Effect.runPromise(
+    program.pipe(
+      Effect.provide(ServicesLive),
+      // Handle errors with typed error handling
       Effect.catchTag('ClientError', (error) => {
-        return Console.log(`Handled ClientError: ${error.message}`).pipe(
-          Effect.flatMap(() => Effect.fail(error)),
-        );
+        console.error('Client error:', error.message);
+        return Effect.fail(error);
       }),
-    );
+      Effect.catchTag('ContractError', (error) => {
+        console.error('Contract error:', error.message);
+        return Effect.fail(error);
+      }),
+    ),
+  );
 
-  const result = yield* program;
-  yield* Console.log(`Composed result: networkId=${result.networkId}`);
+  console.log('\nResult:', result);
+}
+
+main().catch((error) => {
+  console.error('Error:', error);
+  process.exit(1);
 });
-
-/**
- * Main program
- */
-const main = Effect.gen(function* () {
-  yield* Console.log('=== Effect DI Examples ===\n');
-
-  // Run example 1 with client layer
-  yield* example1.pipe(Effect.provide(clientLayer));
-
-  // Run example 2 with service layers
-  yield* example2.pipe(Effect.provide(servicesLayer));
-
-  // Run example 3 (no layer needed - creates its own client)
-  yield* example3;
-
-  yield* Console.log('\n=== Examples complete ===');
-});
-
-// Run the program
-Effect.runPromise(main).catch(console.error);

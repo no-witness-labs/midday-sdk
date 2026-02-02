@@ -248,6 +248,33 @@ import type {
 } from '@no-witness-labs/midday-sdk';
 ```
 
+## Examples
+
+Working examples are available in the [`examples/`](./examples) directory:
+
+| Example | Description |
+|---------|-------------|
+| [`counter`](./examples/counter) | Basic Node.js contract deployment and interaction |
+| [`browser-lace`](./examples/browser-lace) | Browser integration with Lace wallet |
+| [`effect-di`](./examples/effect-di) | Effect dependency injection patterns |
+| [`devnet-testing`](./examples/devnet-testing) | Local development with Docker devnet |
+
+To run an example:
+
+```bash
+# Clone and install
+git clone https://github.com/no-witness-labs/midday-sdk.git
+cd midday-sdk
+pnpm install
+
+# Build SDK
+pnpm build
+
+# Run an example
+cd examples/counter
+pnpm build && pnpm start
+```
+
 ## License
 
 MIT

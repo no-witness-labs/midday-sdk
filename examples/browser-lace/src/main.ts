@@ -1,7 +1,13 @@
 /**
  * Browser + Lace Wallet Example
  *
- * Demonstrates wallet connection and contract interaction in browser.
+ * Complete example demonstrating wallet connection and contract interaction
+ * in browser environment with Lace wallet.
+ *
+ * Prerequisites:
+ * - Lace wallet browser extension installed
+ * - Lace connected to Midnight testnet
+ * - ZK config server with CORS enabled
  */
 import * as Midday from '@no-witness-labs/midday-sdk';
 
@@ -9,6 +15,7 @@ import * as Midday from '@no-witness-labs/midday-sdk';
 const connectBtn = document.getElementById('connect') as HTMLButtonElement;
 const deployBtn = document.getElementById('deploy') as HTMLButtonElement;
 const incrementBtn = document.getElementById('increment') as HTMLButtonElement;
+const decrementBtn = document.getElementById('decrement') as HTMLButtonElement;
 const readBtn = document.getElementById('read') as HTMLButtonElement;
 const statusEl = document.getElementById('status') as HTMLDivElement;
 
@@ -16,17 +23,24 @@ const statusEl = document.getElementById('status') as HTMLDivElement;
 let client: Midday.MidnightClient | null = null;
 let contract: Awaited<ReturnType<typeof Midday.ContractBuilder.deploy>> | null = null;
 
-// Configuration
-const ZK_CONFIG_URL = 'https://cdn.example.com/zk'; // Update for your environment
+// Configuration - update for your environment
+const ZK_CONFIG_URL = 'https://cdn.example.com/zk';
 
 function log(message: string, type: 'info' | 'error' | 'success' = 'info') {
+  const timestamp = new Date().toLocaleTimeString();
   const className = type === 'error' ? 'error' : type === 'success' ? 'success' : '';
-  statusEl.innerHTML += `<span class="${className}">${message}</span>\n`;
+  statusEl.innerHTML += `<span class="${className}">[${timestamp}] ${message}</span>\n`;
   statusEl.scrollTop = statusEl.scrollHeight;
 }
 
 function clearLog() {
   statusEl.innerHTML = '';
+}
+
+function enableContractButtons() {
+  incrementBtn.disabled = false;
+  decrementBtn.disabled = false;
+  readBtn.disabled = false;
 }
 
 // Connect to Lace wallet
@@ -40,6 +54,7 @@ connectBtn.addEventListener('click', async () => {
     log(`Connected! Address: ${connection.addresses.shieldedAddress}`, 'success');
 
     // Create client from wallet connection
+    log('Creating Midday client...');
     client = await Midday.Client.fromWallet(connection, {
       zkConfigProvider: new Midday.HttpZkConfigProvider(ZK_CONFIG_URL),
       privateStateProvider: Midday.indexedDBPrivateStateProvider({
@@ -47,9 +62,7 @@ connectBtn.addEventListener('click', async () => {
       }),
     });
 
-    log('Client created successfully', 'success');
-
-    // Enable buttons
+    log('Client created successfully!', 'success');
     deployBtn.disabled = false;
     connectBtn.disabled = true;
   } catch (error) {
@@ -61,25 +74,30 @@ connectBtn.addEventListener('click', async () => {
 deployBtn.addEventListener('click', async () => {
   if (!client) return;
 
-  log('Deploying contract...');
+  log('Loading counter contract...');
 
   try {
-    // To use with a real contract:
-    // 1. Import your compiled contract module
-    // 2. Load and deploy:
+    // Note: In a real app, you'd import your compiled contract module
+    // For this example, we're showing the pattern:
+    //
+    // import * as CounterContract from './contracts/counter/index.js';
     //
     // const builder = await Midday.Client.contractFrom(client, {
-    //   module: await import('./contracts/counter/index.js'),
+    //   module: CounterContract,
+    //   privateStateId: 'browser-counter',
     // });
-    // contract = await Midday.ContractBuilder.deploy(builder);
+
+    log('Deploying contract...');
+    // const contract = await Midday.ContractBuilder.deploy(builder);
     // log(`Contract deployed at: ${contract.address}`, 'success');
 
-    log('Contract deployment placeholder - see source for implementation', 'info');
-    log('To complete: import your compiled contract module', 'info');
+    // For demo purposes, show what would happen:
+    log('Contract deployment requires a compiled contract module.', 'info');
+    log('See README for how to add your contract.', 'info');
 
-    // Enable interaction buttons when contract is deployed
-    // incrementBtn.disabled = false;
-    // readBtn.disabled = false;
+    // Uncomment when you have a real contract:
+    // enableContractButtons();
+    // deployBtn.disabled = true;
   } catch (error) {
     log(`Error: ${error instanceof Error ? error.message : String(error)}`, 'error');
   }
@@ -89,10 +107,25 @@ deployBtn.addEventListener('click', async () => {
 incrementBtn.addEventListener('click', async () => {
   if (!contract) return;
 
-  log('Calling increment...');
+  log('Calling increment()...');
 
   try {
     const result = await Midday.Contract.call(contract, 'increment');
+    log(`TX Hash: ${result.txHash}`, 'success');
+    log(`Block: ${result.blockHeight}`, 'success');
+  } catch (error) {
+    log(`Error: ${error instanceof Error ? error.message : String(error)}`, 'error');
+  }
+});
+
+// Decrement counter
+decrementBtn.addEventListener('click', async () => {
+  if (!contract) return;
+
+  log('Calling decrement()...');
+
+  try {
+    const result = await Midday.Contract.call(contract, 'decrement');
     log(`TX Hash: ${result.txHash}`, 'success');
     log(`Block: ${result.blockHeight}`, 'success');
   } catch (error) {
@@ -104,7 +137,7 @@ incrementBtn.addEventListener('click', async () => {
 readBtn.addEventListener('click', async () => {
   if (!contract) return;
 
-  log('Reading state...');
+  log('Reading ledger state...');
 
   try {
     const state = await Midday.Contract.ledgerState(contract);
