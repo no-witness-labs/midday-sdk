@@ -1,0 +1,71 @@
+{
+  "circuits": [
+    {
+      "name": "init",
+      "pure": false,
+      "arguments": [
+        {
+          "name": "hash",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "increment",
+      "pure": false,
+      "arguments": [
+        {
+          "name": "amount",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 65535
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "decrement",
+      "pure": false,
+      "arguments": [
+        {
+          "name": "amount",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 65535
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    }
+  ],
+  "witnesses": [
+    {
+      "name": "provide_password",
+      "arguments": [
+      ],
+      "result type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    }
+  ],
+  "contracts": [
+  ]
+}
