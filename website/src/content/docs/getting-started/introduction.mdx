@@ -1,0 +1,56 @@
+---
+title: Introduction
+description: Learn about Midday SDK and its capabilities
+---
+
+**Midday SDK** is a developer-friendly SDK for building decentralized applications (dapps) on the [Midnight Network](https://midnight.network/).
+
+## What is Midnight Network?
+
+Midnight is a data-protection blockchain that uses zero-knowledge proofs to enable privacy-preserving smart contracts. It allows developers to build applications where sensitive data remains private while still being verifiable on-chain.
+
+## Why Midday SDK?
+
+The official Midnight JavaScript libraries are powerful but can be complex to work with. Midday SDK provides:
+
+- **Simplified API** - High-level abstractions that reduce boilerplate
+- **Multiple Programming Styles** - Choose between Promise API, Effect API, or Effect with Dependency Injection
+- **Browser Support** - First-class support for browser environments with Lace wallet integration
+- **Type Safety** - Full TypeScript support with comprehensive type definitions
+- **Effect Integration** - Built on [Effect](https://effect.website/) for robust error handling and composability
+
+## API Styles
+
+Midday SDK offers three ways to interact with contracts:
+
+### Promise API
+The simplest approach, ideal for quick prototypes or developers unfamiliar with Effect:
+
+```typescript
+const contract = await Midday.ContractBuilder.deploy(builder);
+await Midday.Contract.call(contract, 'increment');
+```
+
+### Effect API
+For developers who want functional programming benefits without dependency injection:
+
+```typescript
+const program = Effect.gen(function* () {
+  const contract = yield* Midday.ContractBuilder.effect.deploy(builder);
+  return yield* Midday.Contract.effect.call(contract, 'increment');
+});
+```
+
+### Effect with Dependency Injection
+For large applications that benefit from testability and modularity:
+
+```typescript
+const program = Effect.gen(function* () {
+  const contractService = yield* Midday.ContractService;
+  return yield* contractService.call(contract, 'increment');
+});
+```
+
+## Next Steps
+
+Ready to get started? Head to the [Installation](/midday-sdk/getting-started/installation/) guide.

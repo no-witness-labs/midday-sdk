@@ -1,0 +1,68 @@
+---
+title: Installation
+description: How to install Midday SDK in your project
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Requirements
+
+- Node.js 18.0.0 or higher
+- A package manager (pnpm, npm, or yarn)
+
+## Install the Package
+
+<Tabs>
+  <TabItem label="pnpm" icon="pnpm">
+    ```bash
+    pnpm add @no-witness-labs/midday-sdk
+    ```
+  </TabItem>
+  <TabItem label="npm" icon="seti:npm">
+    ```bash
+    npm install @no-witness-labs/midday-sdk
+    ```
+  </TabItem>
+  <TabItem label="yarn" icon="seti:yarn">
+    ```bash
+    yarn add @no-witness-labs/midday-sdk
+    ```
+  </TabItem>
+</Tabs>
+
+## Peer Dependencies
+
+Midday SDK includes all necessary dependencies. However, if you're using the Effect API, you may want to install Effect explicitly for better IDE support:
+
+```bash
+pnpm add effect
+```
+
+## TypeScript Configuration
+
+Midday SDK is written in TypeScript and ships with type definitions. For the best experience, ensure your `tsconfig.json` includes:
+
+```json
+{
+  "compilerOptions": {
+    "moduleResolution": "bundler",
+    "target": "ES2022",
+    "module": "ESNext",
+    "strict": true
+  }
+}
+```
+
+## Browser vs Node.js
+
+Midday SDK works in both environments, but there are some differences:
+
+| Feature | Node.js | Browser |
+|---------|---------|---------|
+| Wallet | Seed-based HD wallet | Lace wallet extension |
+| Private State | In-memory or file-based | IndexedDB |
+| ZK Config | Local or HTTP provider | HTTP provider |
+
+## Next Steps
+
+Now that you have Midday SDK installed, head to the [Quick Start](/midday-sdk/getting-started/quick-start/) guide to create your first client.

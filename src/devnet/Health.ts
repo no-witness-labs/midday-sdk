@@ -280,6 +280,7 @@ function waitForGraphQLEffect(
         const { timeout = 60000, interval = 2000 } = options;
         const startTime = Date.now();
 
+        // Phase 1: Wait for GraphQL to be up
         while (Date.now() - startTime < timeout) {
           try {
             const response = await fetch(url, {
@@ -294,6 +295,37 @@ function waitForGraphQLEffect(
             if (response.ok) {
               const data = (await response.json()) as { errors?: unknown };
               if (data && !data.errors) {
+                break; // GraphQL is up, move to phase 2
+              }
+            }
+          } catch {
+            // Continue polling
+          }
+
+          await sleep(interval);
+        }
+
+        // Phase 2: Wait for indexer to have indexed at least some blocks
+        // This ensures the genesis dust allocation is available
+        while (Date.now() - startTime < timeout) {
+          try {
+            const response = await fetch(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                query: '{ state { tip { height } } }',
+              }),
+              signal: AbortSignal.timeout(5000),
+            });
+
+            if (response.ok) {
+              const data = (await response.json()) as {
+                data?: { state?: { tip?: { height?: number } } };
+                errors?: unknown;
+              };
+              const height = data?.data?.state?.tip?.height;
+              // Wait until at least 1 block is indexed
+              if (typeof height === 'number' && height >= 1) {
                 return;
               }
             }
@@ -389,6 +421,132 @@ function waitForPortEffect(
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Internal Effect implementation for Docker healthcheck
+function waitForContainerHealthyEffect(
+  containerName: string,
+  options: HealthCheckOptions = {},
+): Effect.Effect<void, HealthCheckError> {
+  return Effect.gen(function* () {
+    yield* Effect.tryPromise({
+      try: async () => {
+        const Docker = (await import('dockerode')).default;
+        const docker = new Docker();
+        const { timeout = 120000, interval = 2000 } = options;
+        const startTime = Date.now();
+
+        while (Date.now() - startTime < timeout) {
+          try {
+            const container = docker.getContainer(containerName);
+            const info = await container.inspect();
+            const health = info.State.Health;
+
+            if (health?.Status === 'healthy') {
+              return;
+            }
+
+            // If no healthcheck configured, fall back to running state
+            if (!health && info.State.Running) {
+              return;
+            }
+          } catch {
+            // Container might not exist yet, continue polling
+          }
+
+          await sleep(interval);
+        }
+
+        throw new Error(
+          `Container health check timed out after ${timeout}ms for ${containerName}`,
+        );
+      },
+      catch: (cause: unknown) =>
+        new HealthCheckError({
+          service: containerName,
+          cause,
+        }),
+    });
+  });
+}
+
+/**
+ * Wait for a Docker container to be healthy based on its healthcheck.
+ *
+ * @since 0.2.0
+ * @category health
+ */
+export async function waitForContainerHealthy(
+  containerName: string,
+  options: HealthCheckOptions = {},
+): Promise<void> {
+  return Effect.runPromise(waitForContainerHealthyEffect(containerName, options));
+}
+
+// Internal Effect implementation for indexer sync check
+function waitForIndexerSyncedEffect(
+  port: number,
+  options: HealthCheckOptions = {},
+): Effect.Effect<void, HealthCheckError> {
+  return Effect.gen(function* () {
+    yield* Effect.tryPromise({
+      try: async () => {
+        const url = `http://localhost:${port}/api/v3/graphql`;
+        const { timeout = 120000, interval = 2000 } = options;
+        const startTime = Date.now();
+
+        // Wait for GraphQL endpoint to respond
+        while (Date.now() - startTime < timeout) {
+          try {
+            const response = await fetch(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                query: '{ __schema { queryType { name } } }',
+              }),
+              signal: AbortSignal.timeout(5000),
+            });
+
+            if (response.ok) {
+              const data = (await response.json()) as { errors?: unknown };
+              if (data && !data.errors) {
+                // GraphQL is up, now wait for indexer to fully sync genesis state
+                // The indexer healthcheck file appears before all genesis data is indexed
+                await sleep(15000);
+                return;
+              }
+            }
+          } catch {
+            // Continue polling
+          }
+
+          await sleep(interval);
+        }
+
+        throw new Error(`Indexer sync check timed out after ${timeout}ms`);
+      },
+      catch: (cause: unknown) =>
+        new HealthCheckError({
+          service: `indexer sync (port ${port})`,
+          cause,
+        }),
+    });
+  });
+}
+
+/**
+ * Wait for the indexer to have synced at least one block.
+ *
+ * This ensures the genesis dust allocation is available for wallets.
+ *
+ * @since 0.2.0
+ * @category health
+ */
+export async function waitForIndexerSynced(
+  port: number,
+  options: HealthCheckOptions = {},
+): Promise<void> {
+  return Effect.runPromise(waitForIndexerSyncedEffect(port, options));
 }
 
 /**

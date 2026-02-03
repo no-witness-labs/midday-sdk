@@ -1,0 +1,178 @@
+---
+title: Effect API
+description: Using Midday SDK with Effect for functional programming
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Midday SDK is built on [Effect](https://effect.website/), a powerful TypeScript library for building robust, composable applications. You can use the SDK with three different styles.
+
+## Why Effect?
+
+Effect provides:
+
+- **Type-safe errors** - Errors are part of the type signature
+- **Composability** - Build complex workflows from simple operations
+- **Dependency injection** - Swap implementations for testing
+- **Resource management** - Automatic cleanup of resources
+- **Concurrency** - Built-in support for parallel and sequential operations
+
+## API Styles Comparison
+
+<Tabs>
+  <TabItem label="Promise API">
+    Simplest approach, ideal for quick prototypes:
+    ```typescript
+    const client = await Midday.Client.create(config);
+    const builder = await Midday.Client.contractFrom(client, { module });
+    const contract = await Midday.ContractBuilder.deploy(builder);
+    ```
+  </TabItem>
+  <TabItem label="Effect API">
+    Functional style without DI:
+    ```typescript
+    const program = Effect.gen(function* () {
+      const client = yield* Midday.Client.effect.create(config);
+      const builder = yield* Midday.Client.effect.contractFrom(client, { module });
+      const contract = yield* Midday.ContractBuilder.effect.deploy(builder);
+      return contract;
+    });
+    ```
+  </TabItem>
+  <TabItem label="Effect DI">
+    Full dependency injection:
+    ```typescript
+    const program = Effect.gen(function* () {
+      const clientService = yield* Midday.ClientService;
+      const contractBuilderService = yield* Midday.ContractBuilderService;
+
+      const client = yield* clientService.create(config);
+      const builder = yield* clientService.contractFrom(client, { module });
+      const contract = yield* contractBuilderService.deploy(builder);
+      return contract;
+    });
+    ```
+  </TabItem>
+</Tabs>
+
+## Running Effects
+
+### With runEffectPromise
+
+The simplest way to run an Effect:
+
+```typescript
+const result = await Midday.runEffectPromise(program);
+```
+
+### With Effect.runPromise
+
+For more control:
+
+```typescript
+const result = await Effect.runPromise(
+  program.pipe(Effect.provide(MainLive))
+);
+```
+
+## Available Services
+
+| Service | Layer | Description |
+|---------|-------|-------------|
+| `ClientService` | `ClientLive` | Client creation and contract loading |
+| `ContractBuilderService` | `ContractBuilderLive` | Contract deployment and joining |
+| `ContractService` | `ContractLive` | Contract operations (call, state) |
+| `WalletService` | `WalletLive` | Wallet initialization |
+| `ProvidersService` | `ProvidersLive` | Provider setup |
+| `ZkConfigService` | `ZkConfigLive` | ZK configuration loading |
+| `PrivateStateService` | `PrivateStateLive` | Private state management |
+| `WalletConnectorService` | `WalletConnectorLive` | Browser wallet connection |
+| `WalletProviderService` | `WalletProviderLive` | Wallet provider operations |
+
+## Composing Layers
+
+Combine layers for your application:
+
+```typescript
+import { Layer } from 'effect';
+
+// Minimal layer for basic operations
+const MinimalLive = Layer.mergeAll(
+  Midday.ClientLive,
+  Midday.ContractBuilderLive,
+  Midday.ContractLive,
+);
+
+// Full layer with all services
+const FullLive = Layer.mergeAll(
+  Midday.ClientLive,
+  Midday.ContractBuilderLive,
+  Midday.ContractLive,
+  Midday.WalletLive,
+  Midday.ProvidersLive,
+);
+```
+
+## Error Handling
+
+Effect makes errors explicit in the type system:
+
+```typescript
+const program = Effect.gen(function* () {
+  const contract = yield* Midday.ContractBuilder.effect.deploy(builder);
+  const result = yield* Midday.Contract.effect.call(contract, 'increment');
+  return result;
+}).pipe(
+  Effect.catchTag('ProofGenerationFailed', (error) => {
+    console.error('ZK proof failed:', error);
+    return Effect.succeed({ status: 'failed' });
+  }),
+  Effect.catchAll((error) => {
+    console.error('Unexpected error:', error);
+    return Effect.fail(error);
+  })
+);
+```
+
+## Testing with Effect
+
+Replace services with test implementations:
+
+```typescript
+import { Layer } from 'effect';
+
+const TestClientLive = Layer.succeed(
+  Midday.ClientService,
+  {
+    create: () => Effect.succeed(mockClient),
+    contractFrom: () => Effect.succeed(mockBuilder),
+  }
+);
+
+const TestLive = Layer.mergeAll(
+  TestClientLive,
+  Midday.ContractBuilderLive,
+  Midday.ContractLive,
+);
+
+// Run tests with mock services
+const result = await Effect.runPromise(
+  program.pipe(Effect.provide(TestLive))
+);
+```
+
+## Parallel Operations
+
+Effect makes concurrent operations easy:
+
+```typescript
+const program = Effect.gen(function* () {
+  // Run multiple contract calls in parallel
+  const [result1, result2] = yield* Effect.all([
+    Midday.Contract.effect.call(contract1, 'action1'),
+    Midday.Contract.effect.call(contract2, 'action2'),
+  ], { concurrency: 'unbounded' });
+
+  return { result1, result2 };
+});
+```

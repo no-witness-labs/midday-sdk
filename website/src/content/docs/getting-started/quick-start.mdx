@@ -1,0 +1,133 @@
+---
+title: Quick Start
+description: Create your first Midday SDK client and deploy a contract
+---
+
+import { Tabs, TabItem, Steps } from '@astrojs/starlight/components';
+
+This guide walks you through creating a client, deploying a contract, and calling contract actions.
+
+## Promise API
+
+The simplest way to get started:
+
+<Steps>
+
+1. **Import the SDK**
+
+   ```typescript
+   import * as Midday from '@no-witness-labs/midday-sdk';
+   ```
+
+2. **Create a client**
+
+   ```typescript
+   const client = await Midday.Client.create({
+     networkConfig: Midday.Config.NETWORKS.local,
+     zkConfigProvider: new Midday.HttpZkConfigProvider('http://localhost:3000/zk'),
+     privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+   });
+   ```
+
+3. **Load a contract**
+
+   ```typescript
+   const builder = await Midday.Client.contractFrom(client, {
+     module: await import('./contracts/counter/index.js'),
+   });
+   ```
+
+4. **Deploy the contract**
+
+   ```typescript
+   const contract = await Midday.ContractBuilder.deploy(builder);
+   console.log(`Deployed at: ${contract.address}`);
+   ```
+
+5. **Call contract actions**
+
+   ```typescript
+   await Midday.Contract.call(contract, 'increment');
+   ```
+
+6. **Read contract state**
+
+   ```typescript
+   const state = await Midday.Contract.ledgerState(contract);
+   console.log(state.counter);
+   ```
+
+</Steps>
+
+## Effect API
+
+For developers who prefer functional programming:
+
+```typescript
+import * as Midday from '@no-witness-labs/midday-sdk';
+import { Effect } from 'effect';
+
+const program = Effect.gen(function* () {
+  const client = yield* Midday.Client.effect.create({
+    networkConfig: Midday.Config.NETWORKS.local,
+    zkConfigProvider: new Midday.HttpZkConfigProvider('http://localhost:3000/zk'),
+    privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+  });
+
+  const builder = yield* Midday.Client.effect.contractFrom(client, {
+    module: await import('./contracts/counter/index.js'),
+  });
+
+  const contract = yield* Midday.ContractBuilder.effect.deploy(builder);
+  const result = yield* Midday.Contract.effect.call(contract, 'increment');
+
+  return result;
+});
+
+const result = await Midday.runEffectPromise(program);
+```
+
+## Effect with Dependency Injection
+
+For larger applications that benefit from testability:
+
+```typescript
+import * as Midday from '@no-witness-labs/midday-sdk';
+import { Effect, Layer } from 'effect';
+
+const program = Effect.gen(function* () {
+  const clientService = yield* Midday.ClientService;
+  const contractBuilderService = yield* Midday.ContractBuilderService;
+  const contractService = yield* Midday.ContractService;
+
+  const client = yield* clientService.create({
+    networkConfig: Midday.Config.NETWORKS.local,
+    zkConfigProvider: new Midday.HttpZkConfigProvider('http://localhost:3000/zk'),
+    privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+  });
+
+  const builder = yield* clientService.contractFrom(client, {
+    module: await import('./contracts/counter/index.js'),
+  });
+
+  const contract = yield* contractBuilderService.deploy(builder);
+  const result = yield* contractService.call(contract, 'increment');
+
+  return result;
+});
+
+// Compose layers
+const MainLive = Layer.mergeAll(
+  Midday.ClientLive,
+  Midday.ContractBuilderLive,
+  Midday.ContractLive,
+);
+
+const result = await Effect.runPromise(program.pipe(Effect.provide(MainLive)));
+```
+
+## Next Steps
+
+- Learn about [Configuration](/midday-sdk/guides/configuration/) options
+- Explore [Contract Operations](/midday-sdk/guides/contract-operations/)
+- Set up [Browser Usage](/midday-sdk/guides/browser-usage/) with Lace wallet

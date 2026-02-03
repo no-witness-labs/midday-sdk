@@ -281,9 +281,9 @@ const startEffect = (data: ClusterData) =>
         }),
     });
 
-    // Wait for indexer to be ready
+    // Wait for indexer to be healthy (uses Docker healthcheck which checks /var/run/indexer-standalone/running)
     yield* Effect.tryPromise({
-      try: () => Health.waitForIndexer(data.config.indexer.port),
+      try: () => Health.waitForContainerHealthy(data.indexer.name, { timeout: 120000 }),
       catch: (cause: unknown) =>
         new ClusterError({
           operation: 'start',
@@ -310,6 +310,18 @@ const startEffect = (data: ClusterData) =>
         new ClusterError({
           operation: 'start',
           cluster: data.proofServer.name,
+          cause,
+        }),
+    });
+
+    // Wait for indexer to fully sync genesis blocks (including dust allocation)
+    // The indexer healthcheck passes when running, but we need blocks to be indexed
+    yield* Effect.tryPromise({
+      try: () => Health.waitForIndexerSynced(data.config.indexer.port),
+      catch: (cause: unknown) =>
+        new ClusterError({
+          operation: 'start',
+          cluster: data.indexer.name,
           cause,
         }),
     });
@@ -395,6 +407,17 @@ const removeEffect = (data: ClusterData) =>
       ],
       { concurrency: 3 },
     );
+
+    // Remove the Docker network
+    yield* Effect.tryPromise({
+      try: () => Container.removeClusterNetwork(data.config.clusterName),
+      catch: () =>
+        new ClusterError({
+          operation: 'remove',
+          cluster: `${data.config.clusterName}-network`,
+          cause: 'Failed to remove network',
+        }),
+    }).pipe(Effect.either);
   });
 
 // =============================================================================
