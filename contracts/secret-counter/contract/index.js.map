@@ -1,0 +1,8 @@
+{
+  "version": 3,
+  "file": "index.js",
+  "sourceRoot": "../../../",
+  "sources": ["contracts/secret-counter/secret-counter.compact", "compiler/standard-library.compact"],
+  "names": [],
+  "mappings": ";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;EAAA;;;;;;;;;;;;;MAYA,AAAA,IAGC;;;;;cAHmB,MAAe;;;;;;;;;;;;;;;;;;yCAAf,MAAe;;;;;;;iEAAf,MAAe;;;OAGlC;MAGD,AAAA,SAGC;;;;;cAHwB,QAAgB;;;;;;;;;;;;;;;;;;yCAAhB,QAAgB;;;;;;;sEAAhB,QAAgB;;;OAGxC;MAGD,AAAA,SAGC;;;;;cAHwB,QAAgB;;;;;;;;;;;;;;;;;;yCAAhB,QAAgB;;;;;;;sEAAhB,QAAgB;;;OAGxC;;;;;;;GACA;EA5BD;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;IAKA;;;;;;;;;yEAA+B;IAC/B;;;;;;;;;yEAAuC;;;;;;;GAsBtC;ECoBD,AAAA,kBAAiC;oEAAA;;;EDvCjC,AAAA,mBAAsC;;0DAAtC,gBAAsC;;;;;;;;;;;;;;GAAA;EAGtC,AAAA,OAGC,4BAHmB,MAAe;kEAC1B;;;;;;;;;;;uIAAa;;;IACpB;;;;;;;2HAAyB,MAAI;;yEAAhB;;GACd;EAGD,AAAA,YAGC,4BAHwB,QAAgB;kEAChC;;;;;;;;;;;uIAAa;;;;IACpB;;;;;;;;;;6FAAoB,QAAM;;;;wEAAnB;;GACR;EAGD,AAAA,YAGC,4BAHwB,QAAgB;kEAChC;;;;;;;;;;;uIAAa;;;;IACpB;;;;;;;;;;6FAAoB,QAAM;;;;wEAAnB;;GACR;;;;;;;;;;;;;;;;;;;;;;;;;;;;IAtBD;qCAAA;;;;;;;;;;;0GAA+B;KAAA;IAC/B;qCAAA;;;;;;;;;;;0GAAuC;KAAA;;;;;;;;;;;;"
+}
