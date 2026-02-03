@@ -108,24 +108,28 @@ export class SdkConfigService extends Context.Tag('SdkConfigService')<SdkConfigS
  * @example
  * ```typescript
  * import { Effect } from 'effect';
- * import * as Midday from '@no-witness-labs/midday-sdk';
+ * import {
+ *   Config,
+ *   Providers,
+ *   SdkLogger,
+ * } from '@no-witness-labs/midday-sdk';
  *
- * const servicesLayer = Midday.Config.makeSdkLayer({
- *   networkConfig: Midday.Config.NETWORKS.local,
- *   zkConfigProvider: new Midday.HttpZkConfigProvider('http://localhost:3000/zk'),
- *   privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+ * const servicesLayer = Config.makeSdkLayer({
+ *   networkConfig: Config.NETWORKS.local,
+ *   zkConfigProvider: new Providers.HttpZkConfigProvider('http://localhost:3000/zk'),
+ *   privateStateProvider: Providers.inMemoryPrivateStateProvider(),
  * });
  *
  * // Use in Effect programs with debug logging
  * const program = Effect.gen(function* () {
- *   const config = yield* Midday.Config.NetworkConfigService;
+ *   const config = yield* Config.NetworkConfigService;
  *   yield* Effect.logDebug(`Using network: ${config.networkId}`);
  * });
  *
  * // Provide services and enable debug logging
  * await Effect.runPromise(program.pipe(
  *   Effect.provide(servicesLayer),
- *   Effect.provide(Midday.SdkLogger.withDebug),
+ *   Effect.provide(SdkLogger.withDebug),
  * ));
  * ```
  *
