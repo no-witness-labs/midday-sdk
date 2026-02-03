@@ -92,13 +92,14 @@ jobs:
         with:
           node-version: '22'
 
-      - name: settings '{"theme":"blackboard","backgroundColor":"#FD4B1B","windowTheme":"none","windowControls":true,"fontFamily":"JetBrains Mono","fontSize":"14px","lineNumbers":false,"paddingVertical":"40px","paddingHorizontal":"40px","dropShadow":true,"dropShadowOffsetY":"10px","dropShadowBlurRadius":"30px"
+      - name: Generate code image
+        if: steps.release.outputs.found == 'true' && steps.extract.outputs.has_code == 'true'
         run: |
           npx -y carbon-now-cli /tmp/snippet.ts \
             --save-to . \
             --save-as release-snippet \
             --headless \
-            --settings '{"theme":"one-dark","backgroundColor":"rgba(171,184,195,0)","windowTheme":"none","windowControls":true,"fontFamily":"JetBrains Mono","fontSize":"14px","lineNumbers":false,"paddingVertical":"40px","paddingHorizontal":"40px","dropShadow":true,"exportSize":"2x","watermark":false}'
+            --settings '{"theme":"blackboard","backgroundColor":"#FD4B1B","windowTheme":"none","windowControls":true,"fontFamily":"JetBrains Mono","fontSize":"14px","lineNumbers":false,"paddingVertical":"40px","paddingHorizontal":"40px","dropShadow":true,"dropShadowOffsetY":"10px","dropShadowBlurRadius":"30px","exportSize":"2x","watermark":false}'
 
       - name: Post to X with image
         if: steps.release.outputs.found == 'true' && steps.extract.outputs.has_code == 'true'
