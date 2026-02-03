@@ -16,23 +16,29 @@ The simplest way to get started:
 1. **Import the SDK**
 
    ```typescript
-   import * as Midday from '@no-witness-labs/midday-sdk';
+   import {
+     Client,
+     Contract,
+     ContractBuilder,
+     Config,
+     Providers,
+   } from '@no-witness-labs/midday-sdk';
    ```
 
 2. **Create a client**
 
    ```typescript
-   const client = await Midday.Client.create({
-     networkConfig: Midday.Config.NETWORKS.local,
-     zkConfigProvider: new Midday.HttpZkConfigProvider('http://localhost:3000/zk'),
-     privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+   const client = await Client.create({
+     networkConfig: Config.NETWORKS.local,
+     zkConfigProvider: new Providers.HttpZkConfigProvider('http://localhost:3000/zk'),
+     privateStateProvider: Providers.inMemoryPrivateStateProvider(),
    });
    ```
 
 3. **Load a contract**
 
    ```typescript
-   const builder = await Midday.Client.contractFrom(client, {
+   const builder = await Client.contractFrom(client, {
      module: await import('./contracts/counter/index.js'),
    });
    ```
@@ -40,20 +46,20 @@ The simplest way to get started:
 4. **Deploy the contract**
 
    ```typescript
-   const contract = await Midday.ContractBuilder.deploy(builder);
+   const contract = await ContractBuilder.deploy(builder);
    console.log(`Deployed at: ${contract.address}`);
    ```
 
 5. **Call contract actions**
 
    ```typescript
-   await Midday.Contract.call(contract, 'increment');
+   await Contract.call(contract, 'increment');
    ```
 
 6. **Read contract state**
 
    ```typescript
-   const state = await Midday.Contract.ledgerState(contract);
+   const state = await Contract.ledgerState(contract);
    console.log(state.counter);
    ```
 
@@ -64,27 +70,34 @@ The simplest way to get started:
 For developers who prefer functional programming:
 
 ```typescript
-import * as Midday from '@no-witness-labs/midday-sdk';
+import {
+  Client,
+  Contract,
+  ContractBuilder,
+  Config,
+  Providers,
+  runEffectPromise,
+} from '@no-witness-labs/midday-sdk';
 import { Effect } from 'effect';
 
 const program = Effect.gen(function* () {
-  const client = yield* Midday.Client.effect.create({
-    networkConfig: Midday.Config.NETWORKS.local,
-    zkConfigProvider: new Midday.HttpZkConfigProvider('http://localhost:3000/zk'),
-    privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+  const client = yield* Client.effect.create({
+    networkConfig: Config.NETWORKS.local,
+    zkConfigProvider: new Providers.HttpZkConfigProvider('http://localhost:3000/zk'),
+    privateStateProvider: Providers.inMemoryPrivateStateProvider(),
   });
 
-  const builder = yield* Midday.Client.effect.contractFrom(client, {
+  const builder = yield* Client.effect.contractFrom(client, {
     module: await import('./contracts/counter/index.js'),
   });
 
-  const contract = yield* Midday.ContractBuilder.effect.deploy(builder);
-  const result = yield* Midday.Contract.effect.call(contract, 'increment');
+  const contract = yield* ContractBuilder.effect.deploy(builder);
+  const result = yield* Contract.effect.call(contract, 'increment');
 
   return result;
 });
 
-const result = await Midday.runEffectPromise(program);
+const result = await runEffectPromise(program);
 ```
 
 ## Effect with Dependency Injection
@@ -92,18 +105,27 @@ const result = await Midday.runEffectPromise(program);
 For larger applications that benefit from testability:
 
 ```typescript
-import * as Midday from '@no-witness-labs/midday-sdk';
+import {
+  ClientService,
+  ContractBuilderService,
+  ContractService,
+  ClientLive,
+  ContractBuilderLive,
+  ContractLive,
+  Config,
+  Providers,
+} from '@no-witness-labs/midday-sdk';
 import { Effect, Layer } from 'effect';
 
 const program = Effect.gen(function* () {
-  const clientService = yield* Midday.ClientService;
-  const contractBuilderService = yield* Midday.ContractBuilderService;
-  const contractService = yield* Midday.ContractService;
+  const clientService = yield* ClientService;
+  const contractBuilderService = yield* ContractBuilderService;
+  const contractService = yield* ContractService;
 
   const client = yield* clientService.create({
-    networkConfig: Midday.Config.NETWORKS.local,
-    zkConfigProvider: new Midday.HttpZkConfigProvider('http://localhost:3000/zk'),
-    privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+    networkConfig: Config.NETWORKS.local,
+    zkConfigProvider: new Providers.HttpZkConfigProvider('http://localhost:3000/zk'),
+    privateStateProvider: Providers.inMemoryPrivateStateProvider(),
   });
 
   const builder = yield* clientService.contractFrom(client, {

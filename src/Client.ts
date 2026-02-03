@@ -1012,15 +1012,15 @@ export const ContractLive: Layer.Layer<ContractService> = Layer.succeed(Contract
  * @example
  * ```typescript
  * import { Effect } from 'effect';
- * import * as Midday from '@no-witness-labs/midday-sdk';
+ * import { Client, ClientService } from '@no-witness-labs/midday-sdk';
  *
  * const program = Effect.gen(function* () {
- *   const clientService = yield* Midday.ClientService;
+ *   const clientService = yield* ClientService;
  *   const client = yield* clientService.create(config);
  *   return client;
  * });
  *
- * await Effect.runPromise(program.pipe(Effect.provide(Midday.Client.services())));
+ * await Effect.runPromise(program.pipe(Effect.provide(Client.services())));
  * ```
  *
  * @since 0.3.0
@@ -1057,18 +1057,23 @@ export class MidnightClientService extends Context.Tag('MidnightClientService')<
  * @example
  * ```typescript
  * import { Effect } from 'effect';
- * import * as Midday from '@no-witness-labs/midday-sdk';
+ * import {
+ *   Client,
+ *   Config,
+ *   Providers,
+ *   MidnightClientService,
+ * } from '@no-witness-labs/midday-sdk';
  *
- * const clientLayer = Midday.Client.layer({
+ * const clientLayer = Client.layer({
  *   seed: 'your-64-char-hex-seed',
- *   networkConfig: Midday.Config.NETWORKS.local,
- *   zkConfigProvider: new Midday.HttpZkConfigProvider('http://localhost:3000/zk'),
- *   privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+ *   networkConfig: Config.NETWORKS.local,
+ *   zkConfigProvider: new Providers.HttpZkConfigProvider('http://localhost:3000/zk'),
+ *   privateStateProvider: Providers.inMemoryPrivateStateProvider(),
  * });
  *
  * const program = Effect.gen(function* () {
- *   const client = yield* Midday.MidnightClientService;
- *   const builder = yield* Midday.Client.effect.contractFrom(client, { module });
+ *   const client = yield* MidnightClientService;
+ *   const builder = yield* Client.effect.contractFrom(client, { module });
  *   return builder;
  * });
  *
@@ -1090,14 +1095,18 @@ export function layer(config: ClientConfig): Layer.Layer<MidnightClientService, 
  * @example
  * ```typescript
  * import { Effect } from 'effect';
- * import * as Midday from '@no-witness-labs/midday-sdk';
+ * import {
+ *   Client,
+ *   Providers,
+ *   Wallet,
+ * } from '@no-witness-labs/midday-sdk';
  *
  * // After connecting wallet
- * const connection = await Midday.connectWallet('testnet');
+ * const connection = await Wallet.connectWallet('testnet');
  *
- * const clientLayer = Midday.Client.layerFromWallet(connection, {
- *   zkConfigProvider: new Midday.HttpZkConfigProvider('https://cdn.example.com/zk'),
- *   privateStateProvider: Midday.indexedDBPrivateStateProvider({ privateStateStoreName: 'my-app' }),
+ * const clientLayer = Client.layerFromWallet(connection, {
+ *   zkConfigProvider: new Providers.HttpZkConfigProvider('https://cdn.example.com/zk'),
+ *   privateStateProvider: Providers.indexedDBPrivateStateProvider({ privateStateStoreName: 'my-app' }),
  * });
  *
  * const program = Effect.gen(function* () {

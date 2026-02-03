@@ -6,46 +6,59 @@
  * @example
  * ```typescript
  * // Browser with Lace wallet (Promise-based)
- * import * as Midday from '@no-witness-labs/midday-sdk';
+ * import {
+ *   Client,
+ *   Contract,
+ *   ContractBuilder,
+ *   Providers,
+ *   Wallet,
+ * } from '@no-witness-labs/midday-sdk';
  *
- * const connection = await Midday.connectWallet('testnet');
- * const client = await Midday.Client.fromWallet(connection, {
- *   zkConfigProvider: new Midday.HttpZkConfigProvider('https://cdn.example.com/zk'),
- *   privateStateProvider: Midday.indexedDBPrivateStateProvider({ privateStateStoreName: 'my-app' }),
+ * const connection = await Wallet.connectWallet('testnet');
+ * const client = await Client.fromWallet(connection, {
+ *   zkConfigProvider: new Providers.HttpZkConfigProvider('https://cdn.example.com/zk'),
+ *   privateStateProvider: Providers.indexedDBPrivateStateProvider({ privateStateStoreName: 'my-app' }),
  * });
  *
- * const builder = await Midday.Client.contractFrom(client, {
+ * const builder = await Client.contractFrom(client, {
  *   module: await import('./contracts/counter/index.js'),
  * });
- * const contract = await Midday.ContractBuilder.deploy(builder);
- * await Midday.Contract.call(contract, 'increment');
+ * const contract = await ContractBuilder.deploy(builder);
+ * await Contract.call(contract, 'increment');
  * ```
  *
  * @example
  * ```typescript
  * // Effect-based usage
- * import * as Midday from '@no-witness-labs/midday-sdk';
+ * import {
+ *   Client,
+ *   Contract,
+ *   ContractBuilder,
+ *   Config,
+ *   Providers,
+ *   runEffectPromise,
+ * } from '@no-witness-labs/midday-sdk';
  * import { Effect } from 'effect';
  *
  * const program = Effect.gen(function* () {
- *   const client = yield* Midday.Client.effect.create({
+ *   const client = yield* Client.effect.create({
  *     seed: 'your-64-char-hex-seed',
- *     networkConfig: Midday.Config.NETWORKS.local,
- *     zkConfigProvider: new Midday.HttpZkConfigProvider('http://localhost:3000/zk'),
- *     privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+ *     networkConfig: Config.NETWORKS.local,
+ *     zkConfigProvider: new Providers.HttpZkConfigProvider('http://localhost:3000/zk'),
+ *     privateStateProvider: Providers.inMemoryPrivateStateProvider(),
  *   });
  *
- *   const builder = yield* Midday.Client.effect.contractFrom(client, {
+ *   const builder = yield* Client.effect.contractFrom(client, {
  *     module: await import('./contracts/counter/index.js'),
  *   });
  *
- *   const contract = yield* Midday.ContractBuilder.effect.deploy(builder);
- *   const result = yield* Midday.Contract.effect.call(contract, 'increment');
+ *   const contract = yield* ContractBuilder.effect.deploy(builder);
+ *   const result = yield* Contract.effect.call(contract, 'increment');
  *
  *   return result;
  * });
  *
- * const result = await Midday.runEffectPromise(program);
+ * const result = await runEffectPromise(program);
  * ```
  *
  * @since 0.1.0
