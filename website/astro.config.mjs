@@ -50,6 +50,16 @@ export default defineConfig({
           ],
         },
         {
+          label: 'Architecture',
+          items: [
+            { label: 'Decision Records', slug: 'architecture' },
+            { label: 'ADR-001: Dual API Pattern', slug: 'architecture/adr-001-dual-api-pattern' },
+            { label: 'ADR-002: Module-Function Design', slug: 'architecture/adr-002-module-function-design' },
+            { label: 'ADR-003: Effect Framework', slug: 'architecture/adr-003-effect-framework' },
+            { label: 'ADR-004: Tagged Errors', slug: 'architecture/adr-004-tagged-errors' },
+          ],
+        },
+        {
           label: 'API Reference',
           autogenerate: { directory: 'api' },
         },

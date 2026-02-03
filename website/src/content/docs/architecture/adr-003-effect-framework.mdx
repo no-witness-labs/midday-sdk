@@ -1,0 +1,177 @@
+---
+title: "ADR-003: Effect as Core Runtime"
+description: Why Midday SDK uses Effect.ts as its foundation
+---
+
+## Status
+
+**Accepted**
+
+## Context
+
+Building a blockchain SDK involves complex challenges:
+
+- **Async operations**: Wallet sync, network calls, proof generation
+- **Error handling**: Many failure modes (network, wallet, contract, ZK proofs)
+- **Resource management**: Connections, caches, providers
+- **Composability**: Operations need to be combined in various ways
+- **Dependency injection**: For testing and modularity
+
+We evaluated several approaches:
+
+1. **Raw Promises**: Simple but error handling is implicit, no DI
+2. **fp-ts**: Good types but verbose, smaller ecosystem
+3. **Effect.ts**: Comprehensive, typed errors, DI, growing ecosystem
+
+## Decision
+
+We use **Effect.ts** as the core runtime for all SDK operations.
+
+### Core Effect Patterns
+
+#### Effect.gen for Sequential Composition
+
+```typescript
+function createEffect(config: ClientConfig): Effect.Effect<MidnightClient, ClientError> {
+  return Effect.gen(function* () {
+    yield* Effect.logDebug('Initializing wallet...');
+
+    const walletContext = yield* Wallet.effect.init(walletSeed, networkConfig).pipe(
+      Effect.mapError((e) => new ClientError({
+        cause: e,
+        message: `Failed to initialize wallet: ${e.message}`,
+      })),
+    );
+
+    yield* Wallet.effect.waitForSync(walletContext).pipe(
+      Effect.mapError((e) => new ClientError({
+        cause: e,
+        message: `Failed to sync wallet: ${e.message}`,
+      })),
+    );
+
+    yield* Effect.logDebug('Wallet synced');
+
+    const providers = Providers.create(walletContext, providerOptions);
+
+    return { wallet: walletContext, networkConfig, providers, logging };
+  });
+}
+```
+
+#### Effect.tryPromise for External Calls
+
+```typescript
+const txData = yield* Effect.tryPromise({
+  try: () => callTx[action](...args),
+  catch: (cause) => new ContractError({
+    cause,
+    message: `Failed to call ${action}: ${cause instanceof Error ? cause.message : String(cause)}`,
+  }),
+});
+```
+
+#### Context.Tag for Dependency Injection
+
+```typescript
+export class ClientService extends Context.Tag('ClientService')<
+  ClientService,
+  ClientServiceImpl
+>() {}
+
+export const ClientLive: Layer.Layer<ClientService> = Layer.succeed(ClientService, {
+  create: createEffect,
+  fromWallet: fromWalletEffect,
+  contractFrom: contractFromEffect,
+  waitForTx: waitForTxEffect,
+});
+```
+
+#### Layer for Pre-configured Dependencies
+
+```typescript
+export function layer(config: ClientConfig): Layer.Layer<MidnightClientService, ClientError> {
+  return Layer.effect(MidnightClientService, createEffect(config));
+}
+
+// Usage
+const clientLayer = Midday.Client.layer(config);
+const program = Effect.gen(function* () {
+  const client = yield* Midday.MidnightClientService;
+  // client is automatically available
+});
+await Effect.runPromise(program.pipe(Effect.provide(clientLayer)));
+```
+
+### Effect Runtime Utilities
+
+We provide utilities that clean up Effect internals from stack traces:
+
+```typescript
+// src/utils/effect-runtime.ts
+export async function runEffectPromise<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
+  const exit = await Effect.runPromiseExit(effect);
+  if (Exit.isFailure(exit)) {
+    const error = Cause.squash(exit.cause);
+    const cleanedError = cleanErrorChain(error); // Removes Effect internals
+    throw cleanedError;
+  }
+  return exit.value;
+}
+
+export async function runEffectWithLogging<A, E>(
+  effect: Effect.Effect<A, E>,
+  logging: boolean,
+): Promise<A> {
+  const loggerLayer = logging
+    ? Layer.merge(Logger.pretty, Logger.minimumLogLevel(LogLevel.Debug))
+    : Logger.pretty;
+  return runEffectPromise(Effect.provide(effect, loggerLayer));
+}
+```
+
+## Consequences
+
+### Benefits
+
+1. **Typed errors**: Error types are in the signature `Effect<A, E>`, not hidden
+2. **Composability**: Effects compose with `pipe`, `map`, `flatMap`, `gen`
+3. **Built-in logging**: `Effect.logDebug`, `Effect.logInfo`, etc.
+4. **Resource safety**: `Effect.acquireRelease` for cleanup
+5. **Concurrency**: `Effect.all`, `Effect.race`, `Effect.forEach` with concurrency control
+6. **Dependency injection**: Context.Tag and Layer for testability
+7. **Interruption**: Effects can be cancelled cleanly
+
+### Tradeoffs
+
+1. **Learning curve**: Effect.ts has concepts to learn (Effect, Layer, Context)
+2. **Bundle size**: Effect.ts adds to the bundle (~50KB gzipped)
+3. **Stack traces**: Effect adds frames (mitigated by our cleanup utilities)
+4. **Debugging**: Requires understanding Effect execution model
+
+### Why Not Just Promises?
+
+| Feature | Promises | Effect.ts |
+|---------|----------|-----------|
+| Error types | `Promise<T>` (errors untyped) | `Effect<T, E>` (errors typed) |
+| Composition | `.then()` chains | `pipe`, `gen`, `map`, `flatMap` |
+| Logging | Manual | Built-in `Effect.log*` |
+| DI | None | Context.Tag + Layer |
+| Cancellation | Complex | Built-in interruption |
+| Resource cleanup | try/finally | `acquireRelease` |
+
+### Integration with Promise API
+
+Effect is an implementation detail for Promise API users:
+
+```typescript
+// User writes:
+const client = await Midday.Client.create(config);
+
+// Under the hood:
+export async function create(config: ClientConfig): Promise<MidnightClient> {
+  return runEffectWithLogging(createEffect(config), config.logging ?? true);
+}
+```
+
+Promise API users never see Effect types unless they choose the Effect API.

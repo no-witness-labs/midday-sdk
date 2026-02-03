@@ -1,0 +1,120 @@
+---
+title: "ADR-001: Dual API Pattern"
+description: Why Midday SDK provides Promise, Effect, and Effect DI APIs
+---
+
+## Status
+
+**Accepted**
+
+## Context
+
+Midday SDK targets two distinct developer audiences:
+
+1. **Application developers** who want to quickly build dapps without learning new paradigms
+2. **Advanced developers** who want type-safe error handling, composability, and dependency injection
+
+The underlying Midnight Network libraries are complex and require significant boilerplate. We needed an API design that:
+
+- Lowers the barrier to entry for new developers
+- Provides power features for production applications
+- Avoids forcing developers to learn Effect.ts to use basic features
+- Maintains type safety across all API styles
+
+## Decision
+
+We provide **three complementary API styles** that share the same underlying implementation:
+
+### 1. Promise API (Beginner-Friendly)
+
+Simple async/await interface that feels familiar to JavaScript developers:
+
+```typescript
+const client = await Midday.Client.create(config);
+const builder = await Midday.Client.contractFrom(client, { module });
+const contract = await Midday.ContractBuilder.deploy(builder);
+await Midday.Contract.call(contract, 'increment');
+```
+
+### 2. Effect API (Functional Programming)
+
+For developers who want Effect's benefits without dependency injection:
+
+```typescript
+const program = Effect.gen(function* () {
+  const client = yield* Midday.Client.effect.create(config);
+  const builder = yield* Midday.Client.effect.contractFrom(client, { module });
+  const contract = yield* Midday.ContractBuilder.effect.deploy(builder);
+  return yield* Midday.Contract.effect.call(contract, 'increment');
+});
+
+await Midday.runEffectPromise(program);
+```
+
+### 3. Effect DI (Production Applications)
+
+Full dependency injection for testability and modularity:
+
+```typescript
+const program = Effect.gen(function* () {
+  const clientService = yield* Midday.ClientService;
+  const client = yield* clientService.create(config);
+  // ...
+});
+
+await Effect.runPromise(program.pipe(Effect.provide(Midday.ClientLive)));
+```
+
+### Implementation Strategy
+
+The core logic is written once using Effect.ts:
+
+```typescript
+// Core implementation (Effect-based)
+function createEffect(config: ClientConfig): Effect.Effect<MidnightClient, ClientError> {
+  return Effect.gen(function* () {
+    // ... implementation
+  });
+}
+
+// Promise wrapper
+export async function create(config: ClientConfig): Promise<MidnightClient> {
+  return runEffectWithLogging(createEffect(config), config.logging ?? true);
+}
+
+// Effect API export
+export const effect = {
+  create: createEffect,
+  // ...
+};
+
+// DI Service
+export class ClientService extends Context.Tag('ClientService')<ClientService, ClientServiceImpl>() {}
+export const ClientLive = Layer.succeed(ClientService, { create: createEffect, ... });
+```
+
+## Consequences
+
+### Benefits
+
+- **Low barrier to entry**: Developers can start with Promise API immediately
+- **Gradual adoption**: Teams can migrate to Effect API incrementally
+- **Single source of truth**: All APIs share the same implementation
+- **No runtime overhead**: Promise API adds minimal wrapper cost
+- **Type safety preserved**: All three APIs maintain full TypeScript types
+
+### Tradeoffs
+
+- **API surface area**: Three ways to do the same thing increases documentation needs
+- **Learning curve for Effect**: Advanced features require Effect.ts knowledge
+- **Maintenance burden**: Changes must be reflected in all API styles (mitigated by shared implementation)
+
+### Migration Path
+
+```
+Promise API → Effect API → Effect DI
+    ↑              ↑            ↑
+ Quick start   Composability  Testability
+```
+
+Developers can progressively adopt more powerful patterns as their needs grow.

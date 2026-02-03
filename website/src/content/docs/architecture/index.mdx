@@ -1,0 +1,52 @@
+---
+title: Architecture Decision Records
+description: Documentation of key architectural decisions in Midday SDK
+---
+
+Architecture Decision Records (ADRs) document the key design choices made during the development of Midday SDK. These records explain the context, decision, and consequences of each architectural choice.
+
+## What are ADRs?
+
+ADRs are short documents that capture important architectural decisions along with their context and consequences. They help:
+
+- **New contributors** understand why the codebase is structured the way it is
+- **Maintainers** remember the reasoning behind past decisions
+- **Users** understand the design philosophy of the SDK
+
+## Decision Records
+
+| ADR | Title | Status |
+|-----|-------|--------|
+| [ADR-001](/midday-sdk/architecture/adr-001-dual-api-pattern/) | Dual API Pattern (Promise + Effect) | Accepted |
+| [ADR-002](/midday-sdk/architecture/adr-002-module-function-design/) | Module-Function Design | Accepted |
+| [ADR-003](/midday-sdk/architecture/adr-003-effect-framework/) | Effect as Core Runtime | Accepted |
+| [ADR-004](/midday-sdk/architecture/adr-004-tagged-errors/) | Tagged Error Handling | Accepted |
+
+## ADR Template
+
+When proposing a new ADR, use the following structure:
+
+```markdown
+# ADR-XXX: Title
+
+## Status
+Proposed | Accepted | Deprecated | Superseded
+
+## Context
+What is the issue that we're seeing that motivates this decision?
+
+## Decision
+What is the change that we're proposing and/or doing?
+
+## Consequences
+What becomes easier or harder as a result of this decision?
+```
+
+## Contributing
+
+To propose a new architectural decision:
+
+1. Create a new ADR file following the template
+2. Submit a pull request with the proposed decision
+3. Discuss in the PR until consensus is reached
+4. Update status to "Accepted" when merged

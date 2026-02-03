@@ -1,0 +1,138 @@
+---
+title: "ADR-002: Module-Function Design"
+description: Why Midday SDK uses module-functions instead of classes
+---
+
+## Status
+
+**Accepted**
+
+## Context
+
+Traditional SDKs often use class-based OOP patterns:
+
+```typescript
+// Class-based approach (NOT what we do)
+class Client {
+  constructor(config: ClientConfig) { ... }
+  async contractFrom(options: ContractFromOptions): Promise<ContractBuilder> { ... }
+}
+
+const client = new Client(config);
+const builder = await client.contractFrom({ module });
+```
+
+We evaluated this approach against a **module-function pattern** where:
+- Data structures are plain immutable interfaces
+- Operations are standalone functions that take data as the first argument
+- Related functions are grouped into module objects
+
+## Decision
+
+We use the **module-function pattern** throughout the SDK:
+
+### Data as Plain Interfaces
+
+```typescript
+// Plain data - NO methods, NO state
+export interface MidnightClient {
+  readonly wallet: WalletContext | null;
+  readonly networkConfig: NetworkConfig;
+  readonly providers: ContractProviders;
+  readonly logging: boolean;
+}
+
+export interface ContractBuilder {
+  readonly module: LoadedContractModule;
+  readonly providers: ContractProviders;
+  readonly logging: boolean;
+}
+
+export interface ConnectedContract {
+  readonly address: string;
+  readonly instance: unknown;
+  readonly module: LoadedContractModule;
+  readonly providers: ContractProviders;
+  readonly logging: boolean;
+}
+```
+
+### Operations as Module Functions
+
+```typescript
+// Functions grouped by domain
+export async function create(config: ClientConfig): Promise<MidnightClient> { ... }
+export async function contractFrom(client: MidnightClient, options: ContractFromOptions): Promise<ContractBuilder> { ... }
+
+export const ContractBuilder = {
+  deploy: async (builder: ContractBuilder, options?: DeployOptions): Promise<ConnectedContract> => { ... },
+  join: async (builder: ContractBuilder, options: JoinOptions): Promise<ConnectedContract> => { ... },
+  effect: { deploy: deployEffect, join: joinEffect },
+};
+
+export const Contract = {
+  call: async (contract: ConnectedContract, action: string, ...args: unknown[]): Promise<CallResult> => { ... },
+  state: async (contract: ConnectedContract): Promise<unknown> => { ... },
+  ledgerState: async (contract: ConnectedContract): Promise<unknown> => { ... },
+  effect: { call: callEffect, state: stateEffect, ... },
+};
+```
+
+### Usage Pattern
+
+```typescript
+import * as Midday from '@no-witness-labs/midday-sdk';
+
+// Data flows through functions
+const client = await Midday.Client.create(config);
+const builder = await Midday.Client.contractFrom(client, { module });
+const contract = await Midday.ContractBuilder.deploy(builder);
+const result = await Midday.Contract.call(contract, 'increment');
+const state = await Midday.Contract.ledgerState(contract);
+```
+
+## Consequences
+
+### Benefits
+
+1. **Immutability by default**: Plain interfaces can't have hidden mutable state
+2. **Easy testing**: Functions are pure and take all inputs as arguments
+3. **Tree-shaking friendly**: Bundlers can eliminate unused functions
+4. **Explicit data flow**: All state is visible in function signatures
+5. **Composability**: Functions compose better than method chains
+6. **Effect.ts alignment**: Module-functions map naturally to Effect services
+
+### Tradeoffs
+
+1. **Verbosity**: `Midday.Contract.call(contract, 'increment')` vs `contract.call('increment')`
+2. **Discoverability**: IDE autocomplete shows all functions, not just relevant ones
+3. **Familiarity**: OOP developers may find the pattern unfamiliar initially
+
+### Why Not Classes?
+
+| Concern | Classes | Module-Functions |
+|---------|---------|------------------|
+| Hidden state | Easy to introduce | Impossible (no `this`) |
+| Testing | Requires mocking instances | Pure functions, easy to test |
+| Serialization | Complex (methods lost) | Trivial (plain data) |
+| Effect.ts | Awkward fit | Natural alignment |
+| Tree-shaking | Methods not tree-shakeable | Functions are tree-shakeable |
+
+### Pattern Examples
+
+The same pattern is used consistently across the SDK:
+
+```typescript
+// Wallet module
+Wallet.init(seed, networkConfig)
+Wallet.waitForSync(walletContext)
+
+// Providers module
+Providers.create(walletContext, options)
+
+// HttpZkConfigProvider module
+HttpZkConfigProvider.make(baseUrl)
+HttpZkConfigProvider.getZKIR(provider, circuitId)
+```
+
+This consistency makes the SDK predictable and easy to learn.
