@@ -41,20 +41,26 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 ## Quick Example
 
 ```typescript
-import * as Midday from '@no-witness-labs/midday-sdk';
+import {
+  Client,
+  Contract,
+  ContractBuilder,
+  Config,
+  Providers,
+} from '@no-witness-labs/midday-sdk';
 
 // Create client
-const client = await Midday.Client.create({
-  networkConfig: Midday.Config.NETWORKS.testnet,
+const client = await Client.create({
+  networkConfig: Config.NETWORKS.testnet,
   seed: 'your-64-char-hex-seed',
-  zkConfigProvider: new Midday.HttpZkConfigProvider('https://cdn.example.com/zk'),
-  privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+  zkConfigProvider: new Providers.HttpZkConfigProvider('https://cdn.example.com/zk'),
+  privateStateProvider: Providers.inMemoryPrivateStateProvider(),
 });
 
 // Deploy and interact with contracts
-const builder = await Midday.Client.contractFrom(client, {
+const builder = await Client.contractFrom(client, {
   module: await import('./contracts/counter/index.js'),
 });
-const contract = await Midday.ContractBuilder.deploy(builder);
-await Midday.Contract.call(contract, 'increment');
+const contract = await ContractBuilder.deploy(builder);
+await Contract.call(contract, 'increment');
 ```
