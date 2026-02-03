@@ -27,6 +27,7 @@ export default defineConfig({
           typeDoc: {
             excludePrivate: true,
             excludeInternal: true,
+            excludeExternals: true,
             readme: 'none',
           },
         }),
