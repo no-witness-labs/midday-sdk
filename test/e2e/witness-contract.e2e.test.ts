@@ -40,7 +40,7 @@ describe('Witness Contract E2E Tests', () => {
   const PORTS = {
     node: 19945,
     indexer: 18089,
-    proofServer: 16301,
+    proofServer: 16302,
   };
 
   // The secret password used for testing (converted to 32-byte array)
