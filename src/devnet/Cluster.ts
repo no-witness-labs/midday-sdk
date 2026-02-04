@@ -469,21 +469,6 @@ const isRunningImpl = async (data: ClusterData): Promise<boolean> => {
 };
 
 /**
- * Get the network configuration for use with midday-sdk client.
- *
- * @deprecated Prefer using `cluster.networkConfig` property instead.
- *
- * @since 0.2.0
- * @category utilities
- */
-export const toNetworkConfig = (cluster: Cluster | ClusterData): NetworkConfig =>
-  Config.toNetworkConfig({
-    node: cluster.config.node.port,
-    indexer: cluster.config.indexer.port,
-    proofServer: cluster.config.proofServer.port,
-  });
-
-/**
  * Helper function to run code with an automatically managed cluster.
  * The cluster is created, started, and cleaned up automatically.
  *
