@@ -3,16 +3,66 @@ title: Contract Operations
 description: Deploy, join, and interact with smart contracts
 ---
 
-import { Steps } from '@astrojs/starlight/components';
+import { Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
-## Loading a Contract Module
+## Loading a Contract
 
-Before deploying or joining a contract, you need to load its module:
+Each contract has its own zk circuits - this is a first principle. The SDK loads zkConfig automatically when you specify a path:
 
 ```typescript
-const builder = await Midday.Client.contractFrom(client, {
-  module: await import('./contracts/my-contract/index.js'),
+// Node.js - load from path (zkConfig loaded automatically)
+const contract = await client.loadContract({ 
+  path: join(__dirname, './contracts/my-contract') 
 });
+
+// Browser - load from URLs (zkConfig base URL specified)
+const contract = await client.loadContract({
+  moduleUrl: 'https://cdn.example.com/contracts/my-contract/index.js',
+  zkConfigBaseUrl: 'https://cdn.example.com/contracts/my-contract',
+});
+```
+
+## Creating a Client
+
+Create a client (zkConfig is per-contract, not per-client):
+
+```typescript
+const client = await Midday.create({
+  networkConfig: Midday.Config.NETWORKS.local,
+  privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+});
+```
+
+## Contract Loading Options
+
+### Option 1: Load from Path (Node.js)
+
+The simplest approach for Node.js - zkConfig loaded from the same directory:
+
+```typescript
+const contract = await client.loadContract({ 
+  path: join(__dirname, './contracts/my-contract') 
+});
+console.log(contract.state); // 'loaded'
+```
+
+### Option 2: Load from URLs (Browser)
+
+For browser environments, specify the module URL and zkConfig base URL:
+
+```typescript
+const contract = await client.loadContract({
+  moduleUrl: 'https://cdn.example.com/contracts/my-contract/index.js',
+  zkConfigBaseUrl: 'https://cdn.example.com/contracts/my-contract',
+});
+```
+
+### Option 3: Pre-loaded Module with zkConfig
+
+If you've already loaded the module and zkConfig separately:
+
+```typescript
+const contract = await client.loadContract({ module, zkConfig });
 ```
 
 ### With Witnesses
@@ -20,8 +70,8 @@ const builder = await Midday.Client.contractFrom(client, {
 Witnesses are client-side functions that provide private data to contract computations:
 
 ```typescript
-const builder = await Midday.Client.contractFrom(client, {
-  module: await import('./contracts/my-contract/index.js'),
+const contract = await client.loadContract({
+  path: './contracts/my-contract',
   witnesses: {
     my_witness_function: (context) => {
       // Return private data for the contract
@@ -31,12 +81,37 @@ const builder = await Midday.Client.contractFrom(client, {
 });
 ```
 
+### With Custom Private State ID
+
+```typescript
+const contract = await client.loadContract({
+  path: './contracts/my-contract',
+  privateStateId: 'my-unique-state-id',
+});
+```
+
+## Contract State Machine
+
+Contracts have two states:
+- **loaded**: Contract module loaded, ready for `deploy()` or `join()`
+- **deployed**: Connected to the network, ready for `call()` and `ledgerState()`
+
+```typescript
+const contract = await client.loadContract({ path: './contracts/my-contract' });
+console.log(contract.state);   // 'loaded'
+console.log(contract.address); // undefined
+
+await contract.deploy();
+console.log(contract.state);   // 'deployed'
+console.log(contract.address); // '0x1234...abcd'
+```
+
 ## Deploying a Contract
 
 Deploy a new instance of a contract to the network:
 
 ```typescript
-const contract = await Midday.ContractBuilder.deploy(builder);
+await contract.deploy();
 console.log(`Deployed at: ${contract.address}`);
 ```
 
@@ -45,16 +120,15 @@ The deploy operation:
 2. Generates the deployment transaction
 3. Submits it to the network
 4. Waits for confirmation
-5. Returns a connected contract instance
+5. Transitions the contract to "deployed" state
 
 ## Joining an Existing Contract
 
 Connect to a contract that's already deployed:
 
 ```typescript
-const contract = await Midday.ContractBuilder.join(builder, {
-  address: '0x1234...abcd'
-});
+await contract.join('0x1234...abcd');
+console.log(contract.address); // '0x1234...abcd'
 ```
 
 ## Calling Contract Actions
@@ -62,7 +136,7 @@ const contract = await Midday.ContractBuilder.join(builder, {
 Execute a state-changing action on the contract:
 
 ```typescript
-const result = await Midday.Contract.call(contract, 'increment');
+const result = await contract.call('increment');
 
 console.log(`TX Hash: ${result.txHash}`);
 console.log(`Block: ${result.blockHeight}`);
@@ -73,10 +147,7 @@ console.log(`Block: ${result.blockHeight}`);
 Pass arguments to contract actions:
 
 ```typescript
-const result = await Midday.Contract.call(contract, 'transfer', {
-  recipient: recipientAddress,
-  amount: 100n,
-});
+const result = await contract.call('transfer', recipientAddress, 100n);
 ```
 
 ## Reading Contract State
@@ -86,7 +157,7 @@ const result = await Midday.Contract.call(contract, 'transfer', {
 Get the parsed ledger state:
 
 ```typescript
-const state = await Midday.Contract.ledgerState(contract);
+const state = await contract.ledgerState();
 console.log(state.counter); // Access state fields
 ```
 
@@ -95,7 +166,7 @@ console.log(state.counter); // Access state fields
 Get the unparsed state:
 
 ```typescript
-const rawState = await Midday.Contract.state(contract);
+const rawState = await contract.state();
 ```
 
 ### Historical State
@@ -103,34 +174,66 @@ const rawState = await Midday.Contract.state(contract);
 Query state at a specific block height:
 
 ```typescript
-const historicalState = await Midday.Contract.ledgerStateAt(contract, blockHeight);
+const historicalState = await contract.ledgerStateAt(blockHeight);
 ```
 
-## Effect API Examples
+## Complete Example
 
-All contract operations are also available via the Effect API:
+<Tabs>
+  <TabItem label="Promise API">
+    ```typescript
+    import * as Midday from '@no-witness-labs/midday-sdk';
+    import { join } from 'path';
 
-```typescript
-import { Effect } from 'effect';
+    // Create client (no zkConfig needed at client level)
+    const client = await Midday.create({
+      networkConfig: Midday.Config.NETWORKS.local,
+      privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+    });
 
-const program = Effect.gen(function* () {
-  // Load contract
-  const builder = yield* Midday.Client.effect.contractFrom(client, {
-    module: await import('./contracts/counter/index.js'),
-  });
+    // Load contract from path (zkConfig loaded automatically)
+    const contract = await client.loadContract({ 
+      path: join(__dirname, './contracts/counter') 
+    });
+    
+    // Deploy and interact
+    await contract.deploy();
+    await contract.call('increment');
+    const state = await contract.ledgerState();
+    console.log(`Counter: ${state.counter}`);
+    ```
+  </TabItem>
+  <TabItem label="Effect API">
+    ```typescript
+    import * as Midday from '@no-witness-labs/midday-sdk';
+    import { Effect } from 'effect';
+    import { join } from 'path';
 
-  // Deploy
-  const contract = yield* Midday.ContractBuilder.effect.deploy(builder);
+    const program = Effect.gen(function* () {
+      // Create client
+      const client = yield* Midday.effect.create({
+        networkConfig: Midday.Config.NETWORKS.local,
+        privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+      });
 
-  // Call action
-  const result = yield* Midday.Contract.effect.call(contract, 'increment');
+      // Load contract from path (zkConfig loaded automatically)
+      const contract = yield* client.effect.loadContract({ 
+        path: join(__dirname, './contracts/counter') 
+      });
+      
+      // Deploy and interact
+      yield* contract.effect.deploy();
+      yield* contract.effect.call('increment');
+      const state = yield* contract.effect.ledgerState();
 
-  // Read state
-  const state = yield* Midday.Contract.effect.ledgerState(contract);
+      return state;
+    });
 
-  return { result, state };
-});
-```
+    const result = await Midday.runEffectPromise(program);
+    console.log(`Counter: ${result.counter}`);
+    ```
+  </TabItem>
+</Tabs>
 
 ## Error Handling
 
@@ -138,18 +241,26 @@ Contract operations can fail for various reasons:
 
 | Error | Cause |
 |-------|-------|
-| `ContractNotFound` | The contract address doesn't exist |
-| `InsufficientFunds` | Not enough balance for the transaction |
-| `ProofGenerationFailed` | ZK proof generation failed |
-| `TransactionRejected` | The network rejected the transaction |
+| `ContractError` | General contract operation failure |
+| `ClientError` | Client initialization or configuration error |
 
 With the Effect API, errors are typed and can be handled explicitly:
 
 ```typescript
-const program = Midday.Contract.effect.call(contract, 'increment').pipe(
-  Effect.catchTag('ProofGenerationFailed', (error) => {
-    console.error('Proof failed:', error.message);
+const program = contract.effect.call('increment').pipe(
+  Effect.catchTag('ContractError', (error) => {
+    console.error('Contract operation failed:', error.message);
     return Effect.fail(error);
   })
 );
+```
+
+## Waiting for Transactions
+
+If you need to wait for a specific transaction to be finalized:
+
+```typescript
+const result = await contract.call('increment');
+const finalized = await client.waitForTx(result.txHash);
+console.log(`Finalized at block: ${finalized.blockHeight}`);
 ```

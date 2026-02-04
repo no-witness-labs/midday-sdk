@@ -19,9 +19,9 @@ Midday SDK supports browser environments with integration for the [Lace wallet](
 1. **Connect to the wallet**
 
    ```typescript
-   import { Wallet } from '@no-witness-labs/midday-sdk';
+   import * as Midday from '@no-witness-labs/midday-sdk';
 
-   const connection = await Wallet.connectWallet('testnet');
+   const connection = await Midday.connectWallet('testnet');
    ```
 
    This will prompt the user to approve the connection in their Lace wallet.
@@ -29,26 +29,22 @@ Midday SDK supports browser environments with integration for the [Lace wallet](
 2. **Create a client from the connection**
 
    ```typescript
-   import { Client, Providers } from '@no-witness-labs/midday-sdk';
-
-   const client = await Client.fromWallet(connection, {
-     zkConfigProvider: new Providers.HttpZkConfigProvider('https://cdn.example.com/zk'),
-     privateStateProvider: Providers.indexedDBPrivateStateProvider({
+   const client = await Midday.fromWallet(connection, {
+     privateStateProvider: Midday.indexedDBPrivateStateProvider({
        privateStateStoreName: 'my-app'
      }),
    });
    ```
 
-3. **Use the client normally**
+3. **Load a contract (zkConfig loaded per-contract)**
 
    ```typescript
-   import { Contract, ContractBuilder } from '@no-witness-labs/midday-sdk';
-
-   const builder = await Client.contractFrom(client, {
-     module: await import('./contracts/counter/index.js'),
+   const contract = await client.loadContract({
+     moduleUrl: 'https://cdn.example.com/contracts/counter/index.js',
+     zkConfigBaseUrl: 'https://cdn.example.com/contracts/counter',
    });
-   const contract = await ContractBuilder.deploy(builder);
-   await Contract.call(contract, 'increment');
+   await contract.deploy();
+   await contract.call('increment');
    ```
 
 </Steps>
@@ -56,37 +52,31 @@ Midday SDK supports browser environments with integration for the [Lace wallet](
 ## Complete Example
 
 ```typescript
-import {
-  Client,
-  Contract,
-  ContractBuilder,
-  Providers,
-  Wallet,
-} from '@no-witness-labs/midday-sdk';
+import * as Midday from '@no-witness-labs/midday-sdk';
 
 async function main() {
   // Connect to Lace wallet
-  const connection = await Wallet.connectWallet('testnet');
+  const connection = await Midday.connectWallet('testnet');
 
-  // Create client from wallet connection
-  const client = await Client.fromWallet(connection, {
-    zkConfigProvider: new Providers.HttpZkConfigProvider('https://cdn.example.com/zk'),
-    privateStateProvider: Providers.indexedDBPrivateStateProvider({
+  // Create client from wallet connection (no zkConfig at client level)
+  const client = await Midday.fromWallet(connection, {
+    privateStateProvider: Midday.indexedDBPrivateStateProvider({
       privateStateStoreName: 'my-app'
     }),
   });
 
-  // Load and deploy contract
-  const builder = await Client.contractFrom(client, {
-    module: await import('./contracts/counter/index.js'),
+  // Load contract with zkConfig (each contract has its own zk circuits)
+  const contract = await client.loadContract({
+    moduleUrl: 'https://cdn.example.com/contracts/counter/index.js',
+    zkConfigBaseUrl: 'https://cdn.example.com/contracts/counter',
   });
-  const contract = await ContractBuilder.deploy(builder);
 
-  // Interact with contract
-  await Contract.call(contract, 'increment');
+  // Deploy and interact
+  await contract.deploy();
+  await contract.call('increment');
 
   // Read state
-  const state = await Contract.ledgerState(contract);
+  const state = await contract.ledgerState();
   console.log('Counter:', state.counter);
 }
 ```
@@ -109,14 +99,17 @@ Use a unique store name per application to avoid conflicts.
 
 ### ZK Configuration
 
-ZK configs must be served over HTTP in browser environments:
+In browser environments, zkConfig is loaded per-contract from a URL:
 
 ```typescript
-const zkConfigProvider = new Midday.HttpZkConfigProvider('https://cdn.example.com/zk');
+const contract = await client.loadContract({
+  moduleUrl: 'https://cdn.example.com/contracts/counter/index.js',
+  zkConfigBaseUrl: 'https://cdn.example.com/contracts/counter',
+});
 ```
 
 :::note
-Ensure your ZK config server has proper CORS headers configured.
+Ensure your ZK config server has proper CORS headers configured. The server should serve the contract's keys and zkir directories.
 :::
 
 ### Network Selection

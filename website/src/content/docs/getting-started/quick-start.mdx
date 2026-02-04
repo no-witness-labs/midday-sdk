@@ -9,57 +9,50 @@ This guide walks you through creating a client, deploying a contract, and callin
 
 ## Promise API
 
-The simplest way to get started:
+The simplest way to get started. The SDK uses a **Client-centric hub pattern** - everything flows from the client:
 
 <Steps>
 
 1. **Import the SDK**
 
    ```typescript
-   import {
-     Client,
-     Contract,
-     ContractBuilder,
-     Config,
-     Providers,
-   } from '@no-witness-labs/midday-sdk';
+   import * as Midday from '@no-witness-labs/midday-sdk';
    ```
 
 2. **Create a client**
 
    ```typescript
-   const client = await Client.create({
-     networkConfig: Config.NETWORKS.local,
-     zkConfigProvider: new Providers.HttpZkConfigProvider('http://localhost:3000/zk'),
-     privateStateProvider: Providers.inMemoryPrivateStateProvider(),
+   const client = await Midday.create({
+     networkConfig: Midday.Config.NETWORKS.local,
+     privateStateProvider: Midday.inMemoryPrivateStateProvider(),
    });
    ```
 
-3. **Load a contract**
+3. **Load contract** (with path - zkConfig loaded automatically)
 
    ```typescript
-   const builder = await Client.contractFrom(client, {
-     module: await import('./contracts/counter/index.js'),
+   const contract = await client.loadContract({ 
+     path: join(__dirname, './contracts/counter') 
    });
    ```
 
 4. **Deploy the contract**
 
    ```typescript
-   const contract = await ContractBuilder.deploy(builder);
+   await contract.deploy();
    console.log(`Deployed at: ${contract.address}`);
    ```
 
 5. **Call contract actions**
 
    ```typescript
-   await Contract.call(contract, 'increment');
+   await contract.call('increment');
    ```
 
 6. **Read contract state**
 
    ```typescript
-   const state = await Contract.ledgerState(contract);
+   const state = await contract.ledgerState();
    console.log(state.counter);
    ```
 
@@ -67,85 +60,98 @@ The simplest way to get started:
 
 ## Effect API
 
-For developers who prefer functional programming:
+For developers who prefer functional programming. Effect users get composable operations via the `.effect` namespace:
 
 ```typescript
-import {
-  Client,
-  Contract,
-  ContractBuilder,
-  Config,
-  Providers,
-  runEffectPromise,
-} from '@no-witness-labs/midday-sdk';
+import * as Midday from '@no-witness-labs/midday-sdk';
 import { Effect } from 'effect';
 
 const program = Effect.gen(function* () {
-  const client = yield* Client.effect.create({
-    networkConfig: Config.NETWORKS.local,
-    zkConfigProvider: new Providers.HttpZkConfigProvider('http://localhost:3000/zk'),
-    privateStateProvider: Providers.inMemoryPrivateStateProvider(),
+  // Create client (Effect version)
+  const client = yield* Midday.effect.create({
+    networkConfig: Midday.Config.NETWORKS.local,
+    privateStateProvider: Midday.inMemoryPrivateStateProvider(),
   });
 
-  const builder = yield* Client.effect.contractFrom(client, {
-    module: await import('./contracts/counter/index.js'),
+  // Load contract via client (Effect version) - zkConfig loaded from path
+  const contract = yield* client.effect.loadContract({ 
+    path: join(__dirname, './contracts/counter') 
   });
 
-  const contract = yield* ContractBuilder.effect.deploy(builder);
-  const result = yield* Contract.effect.call(contract, 'increment');
+  // Deploy (Effect version)
+  yield* contract.effect.deploy();
 
-  return result;
+  // Call action (Effect version)
+  yield* contract.effect.call('increment');
+
+  // Read state (Effect version)
+  const state = yield* contract.effect.ledgerState();
+
+  return state;
 });
 
-const result = await runEffectPromise(program);
+const result = await Midday.runEffectPromise(program);
 ```
 
 ## Effect with Dependency Injection
 
-For larger applications that benefit from testability:
+For larger applications that benefit from testability, use the Layer-based approach:
 
 ```typescript
-import {
-  ClientService,
-  ContractBuilderService,
-  ContractService,
-  ClientLive,
-  ContractBuilderLive,
-  ContractLive,
-  Config,
-  Providers,
-} from '@no-witness-labs/midday-sdk';
+import * as Midday from '@no-witness-labs/midday-sdk';
 import { Effect, Layer } from 'effect';
 
-const program = Effect.gen(function* () {
-  const clientService = yield* ClientService;
-  const contractBuilderService = yield* ContractBuilderService;
-  const contractService = yield* ContractService;
-
-  const client = yield* clientService.create({
-    networkConfig: Config.NETWORKS.local,
-    zkConfigProvider: new Providers.HttpZkConfigProvider('http://localhost:3000/zk'),
-    privateStateProvider: Providers.inMemoryPrivateStateProvider(),
-  });
-
-  const builder = yield* clientService.contractFrom(client, {
-    module: await import('./contracts/counter/index.js'),
-  });
-
-  const contract = yield* contractBuilderService.deploy(builder);
-  const result = yield* contractService.call(contract, 'increment');
-
-  return result;
+// Create a client layer with your configuration
+const ClientLayer = Midday.Client.layer({
+  networkConfig: Midday.Config.NETWORKS.local,
+  privateStateProvider: Midday.inMemoryPrivateStateProvider(),
 });
 
-// Compose layers
-const MainLive = Layer.mergeAll(
-  Midday.ClientLive,
-  Midday.ContractBuilderLive,
-  Midday.ContractLive,
-);
+const program = Effect.gen(function* () {
+  // Get the pre-configured client from context
+  const client = yield* Midday.MiddayClientService;
 
-const result = await Effect.runPromise(program.pipe(Effect.provide(MainLive)));
+  // Load contract via client (path option loads zkConfig automatically)
+  const contract = yield* client.effect.loadContract({ 
+    path: join(__dirname, './contracts/counter') 
+  });
+  yield* contract.effect.deploy();
+
+  // Call and read state
+  yield* contract.effect.call('increment');
+  const state = yield* contract.effect.ledgerState();
+
+  return state;
+});
+
+// Run with the layer
+const result = await Effect.runPromise(
+  program.pipe(Effect.provide(ClientLayer))
+);
+```
+
+## API Pattern
+
+The SDK follows these principles:
+
+- **Effect is source of truth**: All logic is implemented as Effect functions
+- **Client is the hub**: Everything flows from the client
+- **Two interfaces**: `.effect.method()` for Effect users, `.method()` for Promise users
+- **Per-contract zkConfig**: Each contract loads its own zk circuits via `loadContract`
+- **Contract state machine**: Contracts have states (`loaded` → `deployed`)
+
+```typescript
+// Promise user - simple flow
+const client = await Midday.create(config);
+const contract = await client.loadContract({ path: './contracts/counter' });
+await contract.deploy();
+await contract.call('increment');
+
+// Effect user - compositional
+const client = yield* Midday.effect.create(config);
+const contract = yield* client.effect.loadContract({ path: './contracts/counter' });
+yield* contract.effect.deploy();
+yield* contract.effect.call('increment');
 ```
 
 ## Next Steps

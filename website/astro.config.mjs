@@ -46,6 +46,7 @@ export default defineConfig({
           items: [
             { label: 'Configuration', slug: 'guides/configuration' },
             { label: 'Contract Operations', slug: 'guides/contract-operations' },
+            { label: 'Witness Tutorial', slug: 'guides/witness-tutorial' },
             { label: 'Effect API', slug: 'guides/effect-api' },
             { label: 'Browser Usage', slug: 'guides/browser-usage' },
           ],

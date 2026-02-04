@@ -14,20 +14,27 @@ Midday SDK comes with pre-configured network settings for common environments.
 <Tabs>
   <TabItem label="Local">
     ```typescript
-    const client = await Midday.Client.create({
+    const client = await Midday.create({
       networkConfig: Midday.Config.NETWORKS.local,
-      zkConfigProvider: new Midday.HttpZkConfigProvider('http://localhost:3000/zk'),
       privateStateProvider: Midday.inMemoryPrivateStateProvider(),
     });
+
+    // Load contract (zkConfig loaded per-contract)
+    const contract = await client.loadContract({ path: './contracts/counter' });
     ```
   </TabItem>
   <TabItem label="Testnet">
     ```typescript
-    const client = await Midday.Client.create({
+    const client = await Midday.create({
       networkConfig: Midday.Config.NETWORKS.testnet,
       seed: 'your-64-char-hex-seed',
-      zkConfigProvider: new Midday.HttpZkConfigProvider('https://cdn.example.com/zk'),
       privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+    });
+
+    // Load contract from URL (browser)
+    const contract = await client.loadContract({
+      moduleUrl: 'https://cdn.example.com/contracts/counter/index.js',
+      zkConfigBaseUrl: 'https://cdn.example.com/contracts/counter',
     });
     ```
   </TabItem>
@@ -38,7 +45,7 @@ Midday SDK comes with pre-configured network settings for common environments.
 For custom deployments, provide the full network configuration:
 
 ```typescript
-const client = await Midday.Client.create({
+const client = await Midday.create({
   networkConfig: {
     networkId: 'testnet',
     indexer: 'https://indexer.testnet.midnight.network/graphql',
@@ -47,29 +54,38 @@ const client = await Midday.Client.create({
     proofServer: 'https://proof.testnet.midnight.network',
   },
   seed: 'your-64-char-hex-seed',
-  zkConfigProvider: new Midday.HttpZkConfigProvider('https://cdn.example.com/zk'),
   privateStateProvider: Midday.inMemoryPrivateStateProvider(),
 });
 ```
 
-## ZK Configuration Provider
+## ZK Configuration (Per-Contract)
 
-The ZK configuration provider supplies zero-knowledge circuit configurations needed for proof generation.
+Each contract has its own zk circuits. zkConfig is loaded when you load a contract, not at client creation.
 
-### HTTP Provider
-
-Fetches ZK configs from a remote URL:
+### From Path (Node.js)
 
 ```typescript
-const zkConfigProvider = new Midday.HttpZkConfigProvider('https://cdn.example.com/zk');
+// Automatically loads zkConfig from the same directory
+const contract = await client.loadContract({ 
+  path: './contracts/my-contract' 
+});
 ```
 
-### Node Provider
-
-For Node.js environments, loads configs from the local filesystem:
+### From URL (Browser)
 
 ```typescript
-const zkConfigProvider = new Midday.NodeZkConfigProvider('./zk-configs');
+const contract = await client.loadContract({
+  moduleUrl: 'https://cdn.example.com/contracts/counter/index.js',
+  zkConfigBaseUrl: 'https://cdn.example.com/contracts/counter',
+});
+```
+
+### Pre-loaded Module
+
+```typescript
+// For advanced use cases where you pre-load the module
+const zkConfig = Midday.ZkConfigProviders.fromPath('./contracts/counter');
+const contract = await client.loadContract({ module, zkConfig });
 ```
 
 ## Private State Provider
@@ -97,10 +113,10 @@ const privateStateProvider = Midday.indexedDBPrivateStateProvider({
 For server-side applications, provide a 64-character hex seed:
 
 ```typescript
-const client = await Midday.Client.create({
+const client = await Midday.create({
   networkConfig: Midday.Config.NETWORKS.testnet,
   seed: 'your-64-char-hex-seed', // 32 bytes as hex
-  // ...
+  privateStateProvider: Midday.inMemoryPrivateStateProvider(),
 });
 ```
 
@@ -114,11 +130,16 @@ For browser applications, connect to the Lace wallet extension:
 
 ```typescript
 const connection = await Midday.connectWallet('testnet');
-const client = await Midday.Client.fromWallet(connection, {
-  zkConfigProvider: new Midday.HttpZkConfigProvider('https://cdn.example.com/zk'),
+const client = await Midday.fromWallet(connection, {
   privateStateProvider: Midday.indexedDBPrivateStateProvider({
     privateStateStoreName: 'my-app'
   }),
+});
+
+// Load contract with zkConfig
+const contract = await client.loadContract({
+  moduleUrl: 'https://cdn.example.com/contracts/counter/index.js',
+  zkConfigBaseUrl: 'https://cdn.example.com/contracts/counter',
 });
 ```
 

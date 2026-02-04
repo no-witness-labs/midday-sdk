@@ -1,0 +1,265 @@
+---
+title: "Tutorial: Password-Protected Counter"
+description: Build a contract with witness functions for private authentication
+---
+
+import { Steps, Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+This tutorial walks through building a complete password-protected counter contract. You'll learn how to use **witness functions** to keep sensitive data private while still proving correctness in zero-knowledge.
+
+## What We're Building
+
+A counter contract where:
+- Only users with the correct password can increment/decrement
+- The password is **never revealed on-chain**
+- Authentication happens via zero-knowledge proof
+
+## Prerequisites
+
+- Midday SDK installed
+- A local devnet running (or testnet access)
+- Basic familiarity with Compact language
+
+---
+
+## Step 1: Write the Contract
+
+Create `contracts/secret-counter/secret-counter.compact`:
+
+```compact
+pragma language_version >= 0.19;
+
+import CompactStandardLibrary;
+
+// Ledger state
+export ledger counter: Counter;
+export ledger password_hash: Bytes<32>;
+
+// Witness: provides the secret password (as 32-byte hash)
+witness provide_password(): Bytes<32>;
+
+// Initialize with a password hash (can only be called once)
+export circuit init(hash: Bytes<32>): [] {
+  assert(password_hash == default<Bytes<32>>, "already initialized");
+  password_hash = disclose(hash);
+}
+
+// Protected increment: requires correct password via witness
+export circuit increment(amount: Uint<16>): [] {
+  assert(password_hash == persistentHash<Bytes<32>>(provide_password()), "invalid password");
+  counter += disclose(amount);
+}
+
+// Protected decrement: requires correct password via witness
+export circuit decrement(amount: Uint<16>): [] {
+  assert(password_hash == persistentHash<Bytes<32>>(provide_password()), "invalid password");
+  counter -= disclose(amount);
+}
+```
+
+<Aside type="tip">
+The `witness` function runs client-side. The password value flows into the ZK proof but is never published on-chain.
+</Aside>
+
+### Key Concepts
+
+| Element | Purpose |
+|---------|---------|
+| `password_hash` | Stored on-chain (public ledger) |
+| `provide_password()` | Witness function - runs locally, value stays private |
+| `persistentHash<Bytes<32>>()` | Deterministic hash for ZK circuits |
+| `disclose()` | Makes a value public in the transaction |
+
+---
+
+## Step 2: Compile the Contract
+
+```bash
+compactc contracts/secret-counter/secret-counter.compact contracts/secret-counter
+```
+
+This generates:
+- `contract/index.js` - TypeScript bindings
+- `keys/` - Prover and verifier keys
+- `zkir/` - Zero-knowledge intermediate representation
+
+---
+
+## Step 3: Start a Local Devnet
+
+The SDK includes a devnet cluster for local development. Start it before running your code:
+
+```typescript
+import { Cluster } from '@no-witness-labs/midday-sdk/devnet';
+
+const cluster = await Cluster.make({
+  clusterName: 'my-devnet',
+  node: { port: 9945 },
+  indexer: { port: 8089 },
+  proofServer: { port: 6301 },
+});
+
+await cluster.start();
+```
+
+<Aside type="note">
+This spins up Docker containers for the Midnight node, indexer, and proof server. Requires Docker to be running.
+</Aside>
+
+When you're done, clean up:
+
+```typescript
+await cluster.remove();
+```
+
+---
+
+## Step 4: Set Up the Client
+
+```typescript
+import * as Midday from '@no-witness-labs/midday-sdk';
+import { Cluster } from '@no-witness-labs/midday-sdk/devnet';
+import * as SecretCounterContract from './contracts/secret-counter/contract/index.js';
+```
+
+No external Midnight imports needed - everything comes from the SDK.
+
+---
+
+## Step 5: Create the Client
+
+<Steps>
+
+1. **Initialize the client**
+
+   ```typescript
+   const client = await Midday.create({
+     networkConfig: cluster.networkConfig, // from devnet cluster
+     privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+   });
+   ```
+
+2. **Define your password**
+
+   ```typescript
+   const SECRET_PASSWORD = Midday.Hash.stringToBytes32('my-secret-password');
+   const PASSWORD_HASH = Midday.Hash.bytes32(SECRET_PASSWORD);
+   ```
+
+3. **Create the witness function**
+
+   ```typescript
+   interface PasswordState {
+     password: Uint8Array;
+   }
+
+   function createWitnesses(password: Uint8Array): SecretCounterContract.Witnesses<PasswordState> {
+     return {
+       provide_password: () => [{ password }, password],
+     };
+   }
+   ```
+
+   <Aside>
+   Witness functions return `[newPrivateState, returnValue]`. The private state persists between calls.
+   </Aside>
+
+</Steps>
+
+---
+
+## Step 6: Deploy and Initialize
+
+```typescript
+// Load the contract with witnesses (zkConfig loaded from path)
+const contract = await client.loadContract({
+  path: './contracts/secret-counter',
+  privateStateId: 'my-secret-counter',
+  witnesses: createWitnesses(SECRET_PASSWORD),
+});
+
+// Deploy
+await contract.deploy();
+console.log(`Deployed at: ${contract.address}`);
+
+// Initialize with the password hash
+await contract.call('init', PASSWORD_HASH);
+```
+
+<Aside type="caution">
+The `PASSWORD_HASH` is stored on-chain. The actual password (`SECRET_PASSWORD`) stays local.
+</Aside>
+
+---
+
+## Step 7: Use the Contract
+
+### Increment (with correct password)
+
+```typescript
+await contract.call('increment', 5n);
+
+const state = await contract.ledgerState();
+console.log(`Counter: ${state.counter}`); // 5n
+```
+
+### Decrement (with correct password)
+
+```typescript
+await contract.call('decrement', 2n);
+
+const state = await contract.ledgerState();
+console.log(`Counter: ${state.counter}`); // 3n
+```
+
+### Wrong password fails
+
+```typescript
+// Another user tries with wrong password
+const wrongWitnesses = createWitnesses(stringToBytes32('wrong-password'));
+
+const attackerContract = await otherClient.loadContract({
+  path: './contracts/secret-counter',
+  witnesses: wrongWitnesses,
+});
+
+await attackerContract.join(contract.address);
+
+// This throws: "invalid password"
+await attackerContract.call('increment', 1n);
+```
+
+---
+
+## How It Works
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        Client Side                          │
+├─────────────────────────────────────────────────────────────┤
+│  password: "my-secret-password"                             │
+│       ↓                                                     │
+│  stringToBytes32() → Uint8Array(32)                         │
+│       ↓                                                     │
+│  witness provide_password() returns bytes                   │
+│       ↓                                                     │
+│  ZK Proof generated (password hidden)                       │
+└─────────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────────┐
+│                         On-Chain                            │
+├─────────────────────────────────────────────────────────────┤
+│  password_hash: 0x7f3a...  (stored at init)                 │
+│  Verifier checks: hash(witness) == password_hash            │
+│  ✓ Proof valid → counter updated                            │
+│  ✗ Proof invalid → transaction rejected                     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+The password flows through the ZK circuit but the proof only reveals that `hash(password) == stored_hash`, not the password itself.
+
+---
+
+## Complete Example
+
+See the full working test at [`test/e2e/witness-contract.e2e.test.ts`](https://github.com/no-witness-labs/midday-sdk/blob/main/test/e2e/witness-contract.e2e.test.ts).
