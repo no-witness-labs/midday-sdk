@@ -508,10 +508,10 @@ export const effect = {
  *   password: 'user-password',
  * });
  *
- * // Use with Client.create()
- * const client = await Client.create({
+ * // Use with Midday.create()
+ * const client = await Midday.create({
+ *   networkConfig: Midday.Config.NETWORKS.testnet,
  *   privateStateProvider: provider,
- *   // ...
  * });
  * ```
  *
@@ -562,10 +562,10 @@ export function indexedDBPrivateStateProvider(
  * ```typescript
  * const provider = inMemoryPrivateStateProvider();
  *
- * // Use with Client.create()
- * const client = await Client.create({
+ * // Use with Midday.create()
+ * const client = await Midday.create({
+ *   networkConfig: Midday.Config.NETWORKS.local,
  *   privateStateProvider: provider,
- *   // ...
  * });
  * ```
  *

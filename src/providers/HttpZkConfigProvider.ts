@@ -260,13 +260,15 @@ export const effect = {
  *
  * @example
  * ```typescript
- * const zkConfig = new HttpZkConfigProvider('https://cdn.example.com/contracts/counter');
- *
- * // Use with midnight-js
- * const client = await Client.create({
- *   zkConfigProvider: zkConfig,
- *   // ...
+ * // Preferred: Use loadContract with zkConfigBaseUrl option
+ * const contract = await client.loadContract({
+ *   moduleUrl: 'https://cdn.example.com/contracts/counter/index.js',
+ *   zkConfigBaseUrl: 'https://cdn.example.com/contracts/counter',
  * });
+ *
+ * // Alternative: Create provider directly for advanced use
+ * const zkConfig = new HttpZkConfigProvider('https://cdn.example.com/contracts/counter');
+ * const contract = await client.loadContract({ module, zkConfig });
  * ```
  *
  * @since 0.2.0
