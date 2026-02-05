@@ -20,10 +20,13 @@ interface PasswordState {
  * The password is captured in the closure and stored in private state
  * for persistence. While the private state could be read on subsequent
  * calls, we always use the closure value for simplicity.
+ * 
+ * Note: Witness functions receive a context parameter (WitnessContext)
+ * containing ledger state and private state access.
  */
 function createWitnesses(password: Uint8Array): SecretCounterContract.Witnesses<PasswordState> {
   return {
-    provide_password: () => [{ password }, password],
+    provide_password: (_context) => [{ password }, password],
   };
 }
 
