@@ -7,22 +7,23 @@
  * @example Promise API (default)
  * ```typescript
  * import { Cluster } from '@no-witness-labs/midday-sdk/devnet';
- * import { createClient } from '@no-witness-labs/midday-sdk';
+ * import * as Midday from '@no-witness-labs/midday-sdk';
  *
  * // Create and start a local devnet
  * const cluster = await Cluster.make();
- * await Cluster.start(cluster);
+ * await cluster.start();
  *
  * // Use with midday-sdk
- * const client = await createClient({
- *   networkConfig: Cluster.toNetworkConfig(cluster),
- *   seed: 'your-wallet-seed',
+ * const client = await Midday.Client.create({
+ *   networkConfig: cluster.networkConfig,
+ *   privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
  * });
  *
- * // ... run your tests or development ...
+ * // Load contract (zkConfig loaded per-contract)
+ * const contract = await client.loadContract({ path: './contracts/counter' });
  *
  * // Cleanup
- * await Cluster.remove(cluster);
+ * await cluster.remove();
  * ```
  *
  * @example Effect API (composable)
@@ -51,7 +52,7 @@
  *   const svc = yield* ClusterService;
  *   const cluster = yield* svc.make();
  *   yield* svc.start(cluster);
- *   return Cluster.toNetworkConfig(cluster);
+ *   return cluster.networkConfig;
  * });
  *
  * await Effect.runPromise(program.pipe(Effect.provide(Cluster.Live)));

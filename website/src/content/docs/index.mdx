@@ -41,26 +41,23 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 ## Quick Example
 
 ```typescript
-import {
-  Client,
-  Contract,
-  ContractBuilder,
-  Config,
-  Providers,
-} from '@no-witness-labs/midday-sdk';
+import * as Midday from '@no-witness-labs/midday-sdk';
 
-// Create client
-const client = await Client.create({
-  networkConfig: Config.NETWORKS.testnet,
+// Create client (no zkConfig at client level)
+const client = await Midday.Client.create({
+  networkConfig: Midday.Config.NETWORKS.testnet,
   seed: 'your-64-char-hex-seed',
-  zkConfigProvider: new Providers.HttpZkConfigProvider('https://cdn.example.com/zk'),
-  privateStateProvider: Providers.inMemoryPrivateStateProvider(),
+  privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
 });
 
-// Deploy and interact with contracts
-const builder = await Client.contractFrom(client, {
-  module: await import('./contracts/counter/index.js'),
+// Load contract (zkConfig loaded per-contract)
+const contract = await client.loadContract({
+  moduleUrl: 'https://cdn.example.com/contracts/counter/index.js',
+  zkConfigBaseUrl: 'https://cdn.example.com/contracts/counter',
 });
-const contract = await ContractBuilder.deploy(builder);
-await Contract.call(contract, 'increment');
+
+// Deploy and interact
+await contract.deploy();
+await contract.call('increment');
+const state = await contract.ledgerState();
 ```

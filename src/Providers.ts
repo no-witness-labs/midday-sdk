@@ -8,7 +8,7 @@
  * @module
  */
 
-import { Context, Effect, Layer } from 'effect';
+import { Effect } from 'effect';
 import * as ledger from '@midnight-ntwrk/ledger-v6';
 import { setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
@@ -26,57 +26,69 @@ import type { WalletContext } from './Wallet.js';
 import { ProviderError } from './providers/errors.js';
 import { runEffect } from './utils/effect-runtime.js';
 
+// Re-export error type
+export { ProviderError } from './providers/errors.js';
+
 export interface StorageConfig {
   /** Storage password */
   password?: string;
 }
 
-export interface ContractProviders {
+/**
+ * Base providers without zkConfig (shared at client level).
+ * zkConfig is per-contract, so it's added when loading a contract.
+ *
+ * @since 0.5.0
+ * @category model
+ */
+export interface BaseProviders {
   walletProvider: WalletProvider;
   midnightProvider: MidnightProvider;
   publicDataProvider: ReturnType<typeof indexerPublicDataProvider>;
   privateStateProvider: PrivateStateProvider;
   proofProvider: ReturnType<typeof httpClientProofProvider>;
+}
+
+/**
+ * Full contract providers including zkConfig (per-contract).
+ *
+ * @since 0.1.0
+ * @category model
+ */
+export interface ContractProviders extends BaseProviders {
   zkConfigProvider: ZKConfigProvider<string>;
 }
 
 /**
- * Options for creating providers.
+ * Options for creating base providers (without zkConfig).
+ *
+ * @since 0.5.0
+ * @category model
  */
-export interface CreateProvidersOptions {
+export interface CreateBaseProvidersOptions {
   /** Network configuration */
   networkConfig: NetworkConfig;
-  /** ZK configuration provider */
-  zkConfigProvider: ZKConfigProvider<string>;
   /** Private state provider */
   privateStateProvider: PrivateStateProvider;
   /** Storage configuration */
   storageConfig?: StorageConfig;
 }
 
+// =============================================================================
+// Base Providers (without zkConfig - shared at client level)
+// =============================================================================
+
 /**
- * Effect-based interface for provider creation.
+ * Create base providers without zkConfig.
+ * @internal
  */
-export interface ContractProvidersEffect {
-  readonly create: (walletContext: WalletContext, options: CreateProvidersOptions) => Effect.Effect<ContractProviders, ProviderError>;
-  readonly createFromWalletProviders: (
-    walletProvider: WalletProvider,
-    midnightProvider: MidnightProvider,
-    options: CreateProvidersOptions,
-  ) => Effect.Effect<ContractProviders, ProviderError>;
-}
-
-// =============================================================================
-// Effect API
-// =============================================================================
-
-function createEffect(
+function createBaseEffect(
   walletContext: WalletContext,
-  options: CreateProvidersOptions,
-): Effect.Effect<ContractProviders, ProviderError> {
+  options: CreateBaseProvidersOptions,
+): Effect.Effect<BaseProviders, ProviderError> {
   return Effect.try({
     try: () => {
-      const { networkConfig, zkConfigProvider, privateStateProvider } = options;
+      const { networkConfig, privateStateProvider } = options;
 
       // Set network ID
       setNetworkId(networkConfig.networkId as 'undeployed');
@@ -119,25 +131,28 @@ function createEffect(
         publicDataProvider,
         privateStateProvider,
         proofProvider,
-        zkConfigProvider,
       };
     },
     catch: (cause) =>
       new ProviderError({
         cause,
-        message: `Failed to create providers: ${cause instanceof Error ? cause.message : String(cause)}`,
+        message: `Failed to create base providers: ${cause instanceof Error ? cause.message : String(cause)}`,
       }),
   });
 }
 
-function createFromWalletProvidersEffect(
+/**
+ * Create base providers from wallet connector (no zkConfig).
+ * @internal
+ */
+function createBaseFromWalletProvidersEffect(
   walletProvider: WalletProvider,
   midnightProvider: MidnightProvider,
-  options: CreateProvidersOptions,
-): Effect.Effect<ContractProviders, ProviderError> {
+  options: CreateBaseProvidersOptions,
+): Effect.Effect<BaseProviders, ProviderError> {
   return Effect.try({
     try: () => {
-      const { networkConfig, zkConfigProvider, privateStateProvider } = options;
+      const { networkConfig, privateStateProvider } = options;
 
       // Set network ID
       setNetworkId(networkConfig.networkId as 'undeployed');
@@ -154,69 +169,52 @@ function createFromWalletProvidersEffect(
         publicDataProvider,
         privateStateProvider,
         proofProvider,
-        zkConfigProvider,
       };
     },
     catch: (cause) =>
       new ProviderError({
         cause,
-        message: `Failed to create providers from wallet: ${cause instanceof Error ? cause.message : String(cause)}`,
+        message: `Failed to create base providers from wallet: ${cause instanceof Error ? cause.message : String(cause)}`,
       }),
   });
 }
 
-/**
- * Effect-based API for provider creation.
- */
-export const ProvidersEffectAPI: ContractProvidersEffect = {
-  create: createEffect,
-  createFromWalletProviders: createFromWalletProvidersEffect,
-};
-
 // =============================================================================
-// Promise API (backwards compatible)
+// Promise API
 // =============================================================================
 
 /**
- * Create contract providers from wallet context.
+ * Create base providers without zkConfig (for client-level sharing).
  *
  * @param walletContext - Initialized wallet context
- * @param options - Provider options including zkConfig and privateState providers
- * @returns Contract providers for deploying and interacting with contracts
+ * @param options - Provider options (no zkConfig)
+ * @returns Base providers without zkConfig
  *
- * @example
- * ```typescript
- * // Effect-based usage
- * const providers = yield* Midday.Providers.effect.create(walletContext, options);
- *
- * // Synchronous usage
- * const providers = Midday.Providers.create(walletContext, options);
- * ```
+ * @since 0.5.0
  */
-export function create(
+export function createBase(
   walletContext: WalletContext,
-  options: CreateProvidersOptions,
-): ContractProviders {
-  return runEffect(createEffect(walletContext, options));
+  options: CreateBaseProvidersOptions,
+): BaseProviders {
+  return runEffect(createBaseEffect(walletContext, options));
 }
 
 /**
- * Create contract providers from pre-configured wallet and midnight providers.
- *
- * This is used when connecting via wallet connector (browser) where the wallet
- * handles balancing and submission.
+ * Create base providers from wallet connector (no zkConfig).
  *
  * @param walletProvider - Provider for transaction balancing
  * @param midnightProvider - Provider for transaction submission
- * @param options - Additional provider options
- * @returns Contract providers for deploying and interacting with contracts
+ * @param options - Provider options (no zkConfig)
+ * @returns Base providers without zkConfig
+ *
+ * @since 0.5.0
  */
-export function createFromWalletProviders(
+export function createBaseFromWalletProviders(
   walletProvider: WalletProvider,
   midnightProvider: MidnightProvider,
-  options: CreateProvidersOptions,
-): ContractProviders {
-  return runEffect(createFromWalletProvidersEffect(walletProvider, midnightProvider, options));
+  options: CreateBaseProvidersOptions,
+): BaseProviders {
+  return runEffect(createBaseFromWalletProvidersEffect(walletProvider, midnightProvider, options));
 }
 
 /**
@@ -226,54 +224,8 @@ export function createFromWalletProviders(
  * @category effect
  */
 export const effect = {
-  create: createEffect,
-  createFromWalletProviders: createFromWalletProvidersEffect,
+  createBase: createBaseEffect,
+  createBaseFromWalletProviders: createBaseFromWalletProvidersEffect,
 };
 
-// =============================================================================
-// Effect DI - Service Definitions
-// =============================================================================
 
-/**
- * Service interface for Providers operations.
- *
- * @since 0.2.0
- * @category service
- */
-export interface ProvidersServiceImpl {
-  readonly create: (
-    walletContext: WalletContext,
-    options: CreateProvidersOptions,
-  ) => Effect.Effect<ContractProviders, ProviderError>;
-  readonly createFromWalletProviders: (
-    walletProvider: WalletProvider,
-    midnightProvider: MidnightProvider,
-    options: CreateProvidersOptions,
-  ) => Effect.Effect<ContractProviders, ProviderError>;
-}
-
-/**
- * Context.Tag for ProvidersService dependency injection.
- *
- * @since 0.2.0
- * @category service
- */
-export class ProvidersService extends Context.Tag('ProvidersService')<
-  ProvidersService,
-  ProvidersServiceImpl
->() {}
-
-// =============================================================================
-// Effect DI - Live Layer
-// =============================================================================
-
-/**
- * Live Layer for ProvidersService.
- *
- * @since 0.2.0
- * @category layer
- */
-export const ProvidersLive: Layer.Layer<ProvidersService> = Layer.succeed(ProvidersService, {
-  create: createEffect,
-  createFromWalletProviders: createFromWalletProvidersEffect,
-});

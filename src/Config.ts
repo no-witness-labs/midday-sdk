@@ -5,14 +5,7 @@
  * @module
  */
 
-import { Context, Layer } from 'effect';
-import type { ZKConfigProvider, PrivateStateProvider } from '@midnight-ntwrk/midnight-js-types';
-
-import { ZkConfigProviderService } from './providers/HttpZkConfigProvider.js';
-import { PrivateStateProviderService } from './providers/IndexedDBPrivateStateProvider.js';
-
-// Re-export for convenience
-export { ZkConfigProviderService, PrivateStateProviderService };
+import { Context } from 'effect';
 
 // =============================================================================
 // Types
@@ -80,69 +73,3 @@ export class NetworkConfigService extends Context.Tag('NetworkConfigService')<
   NetworkConfigService,
   NetworkConfig
 >() {}
-
-/**
- * Combined SDK configuration for convenience.
- *
- * @since 0.3.0
- * @category services
- */
-export interface SdkConfig {
-  readonly networkConfig: NetworkConfig;
-  readonly zkConfigProvider: ZKConfigProvider<string>;
-  readonly privateStateProvider: PrivateStateProvider;
-}
-
-/**
- * Combined SDK configuration service.
- * Provides all SDK services in one tag for convenience.
- *
- * @since 0.3.0
- * @category services
- */
-export class SdkConfigService extends Context.Tag('SdkConfigService')<SdkConfigService, SdkConfig>() {}
-
-/**
- * Create a Layer providing all SDK services from a config object.
- *
- * @example
- * ```typescript
- * import { Effect } from 'effect';
- * import {
- *   Config,
- *   Providers,
- *   SdkLogger,
- * } from '@no-witness-labs/midday-sdk';
- *
- * const servicesLayer = Config.makeSdkLayer({
- *   networkConfig: Config.NETWORKS.local,
- *   zkConfigProvider: new Providers.HttpZkConfigProvider('http://localhost:3000/zk'),
- *   privateStateProvider: Providers.inMemoryPrivateStateProvider(),
- * });
- *
- * // Use in Effect programs with debug logging
- * const program = Effect.gen(function* () {
- *   const config = yield* Config.NetworkConfigService;
- *   yield* Effect.logDebug(`Using network: ${config.networkId}`);
- * });
- *
- * // Provide services and enable debug logging
- * await Effect.runPromise(program.pipe(
- *   Effect.provide(servicesLayer),
- *   Effect.provide(SdkLogger.withDebug),
- * ));
- * ```
- *
- * @since 0.3.0
- * @category services
- */
-export function makeSdkLayer(config: SdkConfig): Layer.Layer<
-  NetworkConfigService | ZkConfigProviderService | PrivateStateProviderService | SdkConfigService
-> {
-  return Layer.mergeAll(
-    Layer.succeed(NetworkConfigService, config.networkConfig),
-    Layer.succeed(ZkConfigProviderService, config.zkConfigProvider),
-    Layer.succeed(PrivateStateProviderService, config.privateStateProvider),
-    Layer.succeed(SdkConfigService, config),
-  );
-}

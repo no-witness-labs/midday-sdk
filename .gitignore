@@ -13,3 +13,5 @@ website/src/content/docs/api/
 .direnv/
 .claude
 openspec
+.github/instructions/
+.tmp/

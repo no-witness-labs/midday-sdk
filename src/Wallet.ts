@@ -32,6 +32,9 @@ import { WalletError } from './wallet/errors.js';
 import { hexToBytes } from './utils/hex.js';
 import { runEffect, runEffectPromise } from './utils/effect-runtime.js';
 
+// Re-export WalletError so it's available from Wallet namespace
+export { WalletError } from './wallet/errors.js';
+
 // =============================================================================
 // Types
 // =============================================================================
