@@ -3,8 +3,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { Cluster } from '../../src/devnet/index.js';
 import * as Midday from '../../src/index.js';
-import * as CounterContract from '../../contracts/counter/index.js';
-import { NodeZkConfigProvider } from '@midnight-ntwrk/midnight-js-node-zk-config-provider';
+import * as CounterContract from '../../contracts/counter/contract/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -75,12 +74,9 @@ describe('Contract E2E Tests', () => {
     });
 
     it('should deploy counter contract', { timeout: 180_000 }, async () => {
-      // Load contract with zkConfig (per-contract)
-      const zkConfig = new NodeZkConfigProvider(COUNTER_CONTRACT_DIR);
-
       contract = await client.loadContract({
-        module: CounterContract as Midday.Client.ContractModule,
-        zkConfig,
+        module: CounterContract,
+        zkConfig: Midday.ZkConfig.fromPath(COUNTER_CONTRACT_DIR),
         privateStateId: 'counter-e2e-test',
       });
 
@@ -133,12 +129,9 @@ describe('Contract E2E Tests', () => {
         logging: true,
       });
 
-      // Load contract with zkConfig (per-contract)
-      const zkConfig = new NodeZkConfigProvider(COUNTER_CONTRACT_DIR);
-
       const joinedContract = await client2.loadContract({
-        module: CounterContract as Midday.Client.ContractModule,
-        zkConfig,
+        module: CounterContract,
+        zkConfig: Midday.ZkConfig.fromPath(COUNTER_CONTRACT_DIR),
         privateStateId: 'counter-e2e-test-client2',
       });
 

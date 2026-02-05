@@ -107,13 +107,15 @@ export interface ClientConfig {
  * - `path`: Load from filesystem path (Node.js only)
  * - `moduleUrl` + `zkConfigBaseUrl`: Load from URLs (browser)
  *
+ * @typeParam M - The contract module type (for type inference)
+ *
  * @since 0.2.0
  * @category model
  */
-export interface LoadContractOptions {
+export interface LoadContractOptions<M extends ContractModule = ContractModule> {
   // --- Direct loading (works everywhere) ---
   /** Contract module */
-  module?: ContractModule;
+  module?: M;
   /** ZK configuration provider for this contract */
   zkConfig?: ZKConfigProvider<string>;
 
@@ -171,23 +173,63 @@ export interface FinalizedTxData {
 /**
  * A contract module definition.
  *
- * @since 0.2.0
- * @category model
- */
-export interface ContractModule {
-  Contract: new (witnesses: unknown) => unknown;
-  ledger: (state: unknown) => unknown;
-}
-
-/**
- * A loaded contract module with configuration.
+ * @typeParam TLedger - The ledger state type returned by the ledger function
+ * @typeParam TCircuits - Union of circuit names (e.g., 'increment' | 'decrement')
  *
  * @since 0.2.0
  * @category model
  */
-export interface LoadedContractModule {
-  Contract: new (witnesses: unknown) => unknown;
-  ledger: (state: unknown) => unknown;
+export interface ContractModule<
+  TLedger = unknown,
+  TCircuits extends string = string,
+> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  Contract: new (witnesses: any) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    impureCircuits: Record<TCircuits, (...args: any[]) => any>;
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ledger: (state: any) => TLedger;
+}
+
+/**
+ * Infer the Ledger type from a contract module.
+ *
+ * @since 0.2.6
+ * @category type
+ */
+export type InferLedger<M> = M extends ContractModule<infer L, string> ? L : unknown;
+
+/**
+ * Infer the circuit names from a contract module.
+ *
+ * @since 0.2.6
+ * @category type
+ */
+export type InferCircuits<M> = M extends {
+  Contract: new (...args: any[]) => { impureCircuits: infer IC }
+} ? keyof IC & string : string;
+
+/**
+ * A loaded contract module with configuration.
+ *
+ * @typeParam TLedger - The ledger state type
+ * @typeParam TCircuits - Union of circuit names
+ *
+ * @since 0.2.0
+ * @category model
+ */
+export interface LoadedContractModule<
+  TLedger = unknown,
+  TCircuits extends string = string,
+> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  Contract: new (witnesses: any) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    impureCircuits: Record<TCircuits, (...args: any[]) => any>;
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ledger: (state: any) => TLedger;
   privateStateId: string;
   witnesses: Record<string, unknown>;
 }
@@ -266,22 +308,24 @@ export interface MiddayClient {
    * Load a contract module. Returns a Contract in "loaded" state.
    * Call `deploy()` or `join()` on it to connect to the network.
    *
+   * @typeParam M - Contract module type (inferred from options.module)
+   *
    * @example
    * ```typescript
-   * // Load from path (Node.js)
-   * const contract = await client.loadContract({ path: './contracts/counter' });
+   * // Load with module - types are inferred!
+   * import * as CounterContract from './contracts/counter/contract';
    *
-   * // Load with direct module + zkConfig
-   * const contract = await client.loadContract({ module, zkConfig });
-   *
-   * // Load from URLs (browser)
-   * const contract = await client.loadContract({ 
-   *   moduleUrl: 'https://example.com/contract.js',
-   *   zkConfigBaseUrl: 'https://example.com/zk'
+   * const contract = await client.loadContract({
+   *   module: CounterContract,
+   *   zkConfig: Midday.ZkConfig.fromPath('./contracts/counter'),
    * });
+   * const state = await contract.ledgerState(); // state.counter is typed
+   * await contract.call('increment'); // autocompletes circuit names
    * ```
    */
-  loadContract(options: LoadContractOptions): Promise<Contract>;
+  loadContract<M extends ContractModule>(
+    options: LoadContractOptions<M>
+  ): Promise<Contract<InferLedger<M>, InferCircuits<M>>>;
 
   /**
    * Wait for a transaction to be finalized.
@@ -291,7 +335,9 @@ export interface MiddayClient {
   // Effect API - for composition
   /** Effect versions of client methods */
   readonly effect: {
-    loadContract(options: LoadContractOptions): Effect.Effect<Contract, ClientError>;
+    loadContract<M extends ContractModule>(
+      options: LoadContractOptions<M>
+    ): Effect.Effect<Contract<InferLedger<M>, InferCircuits<M>>, ClientError>;
     waitForTx(txHash: string): Effect.Effect<FinalizedTxData, ClientError>;
   };
 }
@@ -311,16 +357,22 @@ export type ContractState = 'loaded' | 'deployed';
  * - **loaded**: Contract module loaded, ready for deploy() or join()
  * - **deployed**: Connected to network, ready for call() and ledgerState()
  *
- * @since 0.5.0
+ * @typeParam TLedger - The ledger state type (inferred from module)
+ * @typeParam TCircuits - Union of circuit names (inferred from module)
+ *
+ * @since 0.2.6
  * @category model
  */
-export interface Contract {
+export interface Contract<
+  TLedger = unknown,
+  TCircuits extends string = string,
+> {
   /** Current state of the contract */
   readonly state: ContractState;
   /** The deployed contract address (undefined until deployed/joined) */
   readonly address: string | undefined;
   /** The loaded contract module */
-  readonly module: LoadedContractModule;
+  readonly module: LoadedContractModule<TLedger, TCircuits>;
   /** Contract providers (for advanced use) */
   readonly providers: ContractProviders;
 
@@ -357,10 +409,10 @@ export interface Contract {
    * @throws {ContractError} If not deployed
    * @example
    * ```typescript
-   * const result = await contract.call('increment', 5n);
+   * const result = await contract.call('increment');
    * ```
    */
-  call(action: string, ...args: unknown[]): Promise<CallResult>;
+  call(action: TCircuits, ...args: unknown[]): Promise<CallResult>;
 
   /**
    * Get raw contract state.
@@ -382,28 +434,29 @@ export interface Contract {
    * @throws {ContractError} If not deployed
    * @example
    * ```typescript
-   * const state = await contract.ledgerState() as MyContractLedger;
+   * const state = await contract.ledgerState();
+   * console.log(state.counter); // Typed!
    * ```
    */
-  ledgerState(): Promise<unknown>;
+  ledgerState(): Promise<TLedger>;
 
   /**
    * Get parsed ledger state at a specific block height.
    *
    * @throws {ContractError} If not deployed
    */
-  ledgerStateAt(blockHeight: number): Promise<unknown>;
+  ledgerStateAt(blockHeight: number): Promise<TLedger>;
 
   // Effect API
   /** Effect versions of contract methods */
   readonly effect: {
     deploy(options?: DeployOptions): Effect.Effect<void, ContractError>;
     join(address: string, options?: JoinOptions): Effect.Effect<void, ContractError>;
-    call(action: string, ...args: unknown[]): Effect.Effect<CallResult, ContractError>;
+    call(action: TCircuits, ...args: unknown[]): Effect.Effect<CallResult, ContractError>;
     getState(): Effect.Effect<unknown, ContractError>;
     getStateAt(blockHeight: number): Effect.Effect<unknown, ContractError>;
-    ledgerState(): Effect.Effect<unknown, ContractError>;
-    ledgerStateAt(blockHeight: number): Effect.Effect<unknown, ContractError>;
+    ledgerState(): Effect.Effect<TLedger, ContractError>;
+    ledgerStateAt(blockHeight: number): Effect.Effect<TLedger, ContractError>;
   };
 }
 
@@ -938,20 +991,22 @@ function createClientHandle(data: ClientData): MiddayClient {
     wallet: data.wallet,
 
     // Promise API - returns Contract directly (new API)
-    loadContract: async (options) => {
+    loadContract: async <M extends ContractModule>(options: LoadContractOptions<M>) => {
       const contractData = await runEffectWithLogging(
         loadContractEffect(data, options),
         data.logging
       );
-      return createContractHandle(contractData);
+      return createContractHandle(contractData) as Contract<InferLedger<M>, InferCircuits<M>>;
     },
     waitForTx: (txHash) =>
       runEffectWithLogging(waitForTxEffect(data, txHash), data.logging),
 
     // Effect API
     effect: {
-      loadContract: (options) =>
-        loadContractEffect(data, options).pipe(Effect.map(createContractHandle)),
+      loadContract: <M extends ContractModule>(options: LoadContractOptions<M>) =>
+        loadContractEffect(data, options).pipe(
+          Effect.map((contractData) => createContractHandle(contractData) as Contract<InferLedger<M>, InferCircuits<M>>)
+        ),
       waitForTx: (txHash) => waitForTxEffect(data, txHash),
     },
   };
