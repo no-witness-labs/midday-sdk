@@ -58,6 +58,13 @@ describe('Contract E2E Tests', () => {
     let contract: Midday.Client.Contract;
     let contractAddress: string;
 
+    afterAll(async () => {
+      // Close shared client before cluster teardown to avoid Wallet.Sync noise
+      if (client) {
+        try { await client.close(); } catch { /* ignore */ }
+      }
+    }, 30_000);
+
     // Genesis wallet seed - pre-funded on devnet
     const GENESIS_SEED = '0000000000000000000000000000000000000000000000000000000000000001';
 
@@ -122,32 +129,32 @@ describe('Contract E2E Tests', () => {
       // Create a second client with different seed
       const SECOND_SEED = 'b'.repeat(64);
 
-      const client2 = await Midday.Client.create({
+      await Midday.Client.withClient({
         seed: SECOND_SEED,
         networkConfig: cluster.networkConfig,
         privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
         logging: true,
+      }, async (client2) => {
+        const joinedContract = await client2.loadContract({
+          module: CounterContract,
+          zkConfig: Midday.ZkConfig.fromPath(COUNTER_CONTRACT_DIR),
+          privateStateId: 'counter-e2e-test-client2',
+        });
+
+        // Verify it's in loaded state
+        expect(joinedContract.state).toBe('loaded');
+
+        // Join the deployed contract (transitions to "deployed" state)
+        await joinedContract.join(contractAddress);
+
+        // Verify it's now deployed
+        expect(joinedContract.state).toBe('deployed');
+        expect(joinedContract.address).toBe(contractAddress);
+
+        // Read state via joined contract handle
+        const state = await joinedContract.ledgerState();
+        expect(state).toBeDefined();
       });
-
-      const joinedContract = await client2.loadContract({
-        module: CounterContract,
-        zkConfig: Midday.ZkConfig.fromPath(COUNTER_CONTRACT_DIR),
-        privateStateId: 'counter-e2e-test-client2',
-      });
-
-      // Verify it's in loaded state
-      expect(joinedContract.state).toBe('loaded');
-
-      // Join the deployed contract (transitions to "deployed" state)
-      await joinedContract.join(contractAddress);
-
-      // Verify it's now deployed
-      expect(joinedContract.state).toBe('deployed');
-      expect(joinedContract.address).toBe(contractAddress);
-
-      // Read state via joined contract handle
-      const state = await joinedContract.ledgerState();
-      expect(state).toBeDefined();
     });
 
     it('should call decrement() and verify state', { timeout: 120_000 }, async () => {
