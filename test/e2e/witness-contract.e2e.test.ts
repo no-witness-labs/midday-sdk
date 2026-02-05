@@ -3,9 +3,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { Cluster } from '../../src/devnet/index.js';
 import * as Midday from '../../src/index.js';
-
-// Import contract types only (module will be loaded dynamically)
-import type * as SecretCounterContract from '../../contracts/secret-counter/contract/index.js';
+import * as SecretCounterContract from '../../contracts/secret-counter/contract/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -83,13 +81,8 @@ describe('Witness Contract E2E Tests', () => {
      */
 
     it('should deploy and initialize with password hash', { timeout: 180_000 }, async () => {
-      // Load both module and zkConfig from single path
-      const { module, zkConfig } = await Midday.Client.loadContractModule<typeof SecretCounterContract>(
-        SECRET_COUNTER_DIR
-      );
       const privateStateProvider = Midday.PrivateState.inMemoryPrivateStateProvider();
 
-      // Create client - zkConfig is now per-contract
       const client = await Midday.Client.create({
         seed: GENESIS_SEED,
         networkConfig: cluster.networkConfig,
@@ -97,10 +90,9 @@ describe('Witness Contract E2E Tests', () => {
         logging: true,
       });
 
-      // Load contract with zkConfig (per-contract)
       const contract = await client.loadContract({
-        module: module as Midday.Client.ContractModule,
-        zkConfig,
+        module: SecretCounterContract,
+        zkConfig: Midday.ZkConfig.fromPath(SECRET_COUNTER_DIR),
         privateStateId: 'secret-counter-init-test',
         witnesses: createWitnesses(SECRET_PASSWORD),
       });
@@ -119,14 +111,11 @@ describe('Witness Contract E2E Tests', () => {
       const initResult = await contract.call('init', PASSWORD_HASH);
       expect(initResult.txHash).toBeDefined();
 
-      const state = await contract.ledgerState() as SecretCounterContract.Ledger;
+      const state = await contract.ledgerState();
       expect(state.password_hash).toEqual(PASSWORD_HASH);
     });
 
     it('should increment counter with correct password', { timeout: 180_000 }, async () => {
-      const { module, zkConfig } = await Midday.Client.loadContractModule<typeof SecretCounterContract>(
-        SECRET_COUNTER_DIR
-      );
       const privateStateProvider = Midday.PrivateState.inMemoryPrivateStateProvider();
 
       const client = await Midday.Client.create({
@@ -137,8 +126,8 @@ describe('Witness Contract E2E Tests', () => {
       });
 
       const contract = await client.loadContract({
-        module: module as Midday.Client.ContractModule,
-        zkConfig,
+        module: SecretCounterContract,
+        zkConfig: Midday.ZkConfig.fromPath(SECRET_COUNTER_DIR),
         privateStateId: 'secret-counter-incr-test',
         witnesses: createWitnesses(SECRET_PASSWORD),
       });
@@ -152,14 +141,11 @@ describe('Witness Contract E2E Tests', () => {
       const incrResult = await contract.call('increment', 5n);
       expect(incrResult.txHash).toBeDefined();
 
-      const state = await contract.ledgerState() as SecretCounterContract.Ledger;
+      const state = await contract.ledgerState();
       expect(state.counter).toBe(5n);
     });
 
     it('should decrement counter with correct password', { timeout: 180_000 }, async () => {
-      const { module, zkConfig } = await Midday.Client.loadContractModule<typeof SecretCounterContract>(
-        SECRET_COUNTER_DIR
-      );
       const privateStateProvider = Midday.PrivateState.inMemoryPrivateStateProvider();
 
       const client = await Midday.Client.create({
@@ -170,8 +156,8 @@ describe('Witness Contract E2E Tests', () => {
       });
 
       const contract = await client.loadContract({
-        module: module as Midday.Client.ContractModule,
-        zkConfig,
+        module: SecretCounterContract,
+        zkConfig: Midday.ZkConfig.fromPath(SECRET_COUNTER_DIR),
         privateStateId: 'secret-counter-decr-test',
         witnesses: createWitnesses(SECRET_PASSWORD),
       });
@@ -188,20 +174,13 @@ describe('Witness Contract E2E Tests', () => {
       const decrResult = await contract.call('decrement', 3n);
       expect(decrResult.txHash).toBeDefined();
 
-      const state = await contract.ledgerState() as SecretCounterContract.Ledger;
+      const state = await contract.ledgerState();
       expect(state.counter).toBe(7n);
     });
 
     it('should reject operations with wrong password', { timeout: 180_000 }, async () => {
-      // Load contract
-      const { module, zkConfig } = await Midday.Client.loadContractModule<typeof SecretCounterContract>(
-        SECRET_COUNTER_DIR
-      );
-
-      // Create private state provider
       const privateStateProvider = Midday.PrivateState.inMemoryPrivateStateProvider();
 
-      // Create first client with correct password
       const correctClient = await Midday.Client.create({
         seed: GENESIS_SEED,
         networkConfig: cluster.networkConfig,
@@ -209,10 +188,9 @@ describe('Witness Contract E2E Tests', () => {
         logging: true,
       });
 
-      // Load and deploy with correct password
       const contract = await correctClient.loadContract({
-        module: module as Midday.Client.ContractModule,
-        zkConfig,
+        module: SecretCounterContract,
+        zkConfig: Midday.ZkConfig.fromPath(SECRET_COUNTER_DIR),
         privateStateId: 'secret-counter-wrong-pw-test',
         witnesses: createWitnesses(SECRET_PASSWORD),
       });
@@ -233,10 +211,10 @@ describe('Witness Contract E2E Tests', () => {
       });
 
       const joinedContract = await wrongClient.loadContract({
-        module: module as Midday.Client.ContractModule,
-        zkConfig,
+        module: SecretCounterContract,
+        zkConfig: Midday.ZkConfig.fromPath(SECRET_COUNTER_DIR),
         privateStateId: 'secret-counter-wrong-pw-attacker',
-        witnesses: createWitnesses(Midday.Hash.stringToBytes32('wrong-password')), // Wrong password
+        witnesses: createWitnesses(Midday.Hash.stringToBytes32('wrong-password')),
       });
 
       // Join the existing contract with wrong password client
