@@ -19,11 +19,11 @@
           compactMeta = {
             "x86_64-linux" = {
               arch = "x86_64-unknown-linux-musl";
-              hash = "";
+              hash = "sha256-cHvoNZf99ZCMxRiH96c16gXphc7pSjFqXdTB8eIr5Ms=";
             };
             "x86_64-darwin" = {
               arch = "x86_64-darwin";
-              hash = "";
+              hash = "sha256-yrPeRHljfri8QypmyYDIXHMnbfewOe8J9RM1Lo5BRqQ=";
             };
             "aarch64-darwin" = {
               arch = "aarch64-darwin";
