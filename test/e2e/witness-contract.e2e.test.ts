@@ -170,7 +170,7 @@ describe('Witness Contract E2E Tests', () => {
       });
 
       const contract = await client.loadContract({
-        module: module as Midday.ContractModule,
+        module: module as Midday.Client.ContractModule,
         zkConfig,
         privateStateId: 'secret-counter-decr-test',
         witnesses: createWitnesses(SECRET_PASSWORD),
