@@ -33,9 +33,9 @@ jobs:
 
       - name: Pull Midnight Docker images
         run: |
-          docker pull midnightntwrk/midnight-node:0.18.0
-          docker pull midnightntwrk/indexer-standalone:3.0.0-alpha.20
-          docker pull bricktowers/proof-server:6.1.0-alpha.6
+          docker pull midnightntwrk/midnight-node:0.20.1
+          docker pull midnightntwrk/indexer-standalone:3.0.0
+          docker pull bricktowers/proof-server:7.0.0
 
       - name: Run E2E tests
         run: pnpm test:e2e

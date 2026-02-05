@@ -1,8 +1,8 @@
 {
   "version": 3,
   "file": "index.js",
-  "sourceRoot": "../../../",
-  "sources": ["contracts/counter/simple-counter.compact"],
+  "sourceRoot": "../",
+  "sources": ["simple-counter.compact"],
   "names": [],
   "mappings": ";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;EAAA;;;;;;;;;;MAMA,AAAA,SAEC;;;;;;;;;;;;;;;;;;;;;;OAAA;MAED,AAAA,SAEC;;;;;;;;;;;;;;;;;;;;;;OAAA;;;;;;GACA;EAbD;;;;;;;;;;;;;;;;;;;;;;;;;;;IAIA;;;;;;;;;yEAA+B;;;;;;;GAS9B;EAPD,AAAA,YAEC;UADC,KAAO;IAAP;;;;;;;;;;6FAAA,KAAO;;;;wEAAA;;GACR;EAED,AAAA,YAEC;UADC,KAAO;IAAP;;;;;;;;;;6FAAA,KAAO;;;;wEAAA;;GACR;;;;;;;;;;;;;;;;IARD;qCAAA;;;;;;;;;;;0GAA+B;KAAA;;;;;;;;;;"
 }

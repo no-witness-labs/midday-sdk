@@ -9,16 +9,16 @@
  */
 
 import { Effect } from 'effect';
-import * as ledger from '@midnight-ntwrk/ledger-v6';
+import * as ledger from '@midnight-ntwrk/ledger-v7';
 import { setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
-import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
 import type {
   WalletProvider,
   MidnightProvider,
-  BalancedProvingRecipe,
   ZKConfigProvider,
   PrivateStateProvider,
+  ProofProvider,
+  UnboundTransaction,
 } from '@midnight-ntwrk/midnight-js-types';
 
 import type { NetworkConfig } from './Config.js';
@@ -35,8 +35,8 @@ export interface StorageConfig {
 }
 
 /**
- * Base providers without zkConfig (shared at client level).
- * zkConfig is per-contract, so it's added when loading a contract.
+ * Base providers without zkConfig and proofProvider (shared at client level).
+ * zkConfig and proofProvider are per-contract, so they're added when loading a contract.
  *
  * @since 0.5.0
  * @category model
@@ -46,17 +46,19 @@ export interface BaseProviders {
   midnightProvider: MidnightProvider;
   publicDataProvider: ReturnType<typeof indexerPublicDataProvider>;
   privateStateProvider: PrivateStateProvider;
-  proofProvider: ReturnType<typeof httpClientProofProvider>;
+  /** Network configuration for creating per-contract proof providers */
+  networkConfig: NetworkConfig;
 }
 
 /**
- * Full contract providers including zkConfig (per-contract).
+ * Full contract providers including zkConfig and proofProvider (per-contract).
  *
  * @since 0.1.0
  * @category model
  */
-export interface ContractProviders extends BaseProviders {
+export interface ContractProviders extends Omit<BaseProviders, 'networkConfig'> {
   zkConfigProvider: ZKConfigProvider<string>;
+  proofProvider: ProofProvider;
 }
 
 /**
@@ -98,19 +100,19 @@ function createBaseEffect(
         getCoinPublicKey: () => walletContext.shieldedSecretKeys.coinPublicKey as unknown as ledger.CoinPublicKey,
         getEncryptionPublicKey: () =>
           walletContext.shieldedSecretKeys.encryptionPublicKey as unknown as ledger.EncPublicKey,
-        balanceTx: async (
-          tx: ledger.UnprovenTransaction,
-          newCoins?: unknown[],
-          ttl?: Date,
-        ): Promise<BalancedProvingRecipe> => {
+        balanceTx: async (tx: UnboundTransaction, ttl?: Date): Promise<ledger.FinalizedTransaction> => {
           const txTtl = ttl ?? new Date(Date.now() + 30 * 60 * 1000);
-          const provingRecipe = await walletContext.wallet.balanceTransaction(
-            walletContext.shieldedSecretKeys,
-            walletContext.dustSecretKey,
-            tx as unknown as ledger.Transaction<ledger.SignatureEnabled, ledger.Proofish, ledger.Bindingish>,
-            txTtl,
+          const recipe = await walletContext.wallet.balanceUnboundTransaction(
+            tx,
+            {
+              shieldedSecretKeys: walletContext.shieldedSecretKeys,
+              dustSecretKey: walletContext.dustSecretKey,
+            },
+            { ttl: txTtl },
           );
-          return provingRecipe as unknown as BalancedProvingRecipe;
+          // Finalize the recipe to get the FinalizedTransaction
+          const finalizedTx = await walletContext.wallet.finalizeRecipe(recipe);
+          return finalizedTx;
         },
       };
 
@@ -122,15 +124,12 @@ function createBaseEffect(
       // Public data provider - reads from indexer
       const publicDataProvider = indexerPublicDataProvider(networkConfig.indexer, networkConfig.indexerWS);
 
-      // Proof provider - generates ZK proofs
-      const proofProvider = httpClientProofProvider(networkConfig.proofServer);
-
       return {
         walletProvider,
         midnightProvider,
         publicDataProvider,
         privateStateProvider,
-        proofProvider,
+        networkConfig,
       };
     },
     catch: (cause) =>
@@ -160,15 +159,12 @@ function createBaseFromWalletProvidersEffect(
       // Public data provider - reads from indexer
       const publicDataProvider = indexerPublicDataProvider(networkConfig.indexer, networkConfig.indexerWS);
 
-      // Proof provider - generates ZK proofs
-      const proofProvider = httpClientProofProvider(networkConfig.proofServer);
-
       return {
         walletProvider,
         midnightProvider,
         publicDataProvider,
         privateStateProvider,
-        proofProvider,
+        networkConfig,
       };
     },
     catch: (cause) =>
