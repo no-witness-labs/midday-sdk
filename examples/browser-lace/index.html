@@ -88,6 +88,13 @@
         display: none;
         margin-top: 1rem;
       }
+      #counter-value {
+        display: none;
+        font-size: 1.5rem;
+        font-weight: bold;
+        margin-top: 1rem;
+        color: #6366f1;
+      }
       .note {
         font-size: 0.875rem;
         color: #6b7280;
@@ -100,17 +107,21 @@
     <p class="subtitle">Lace Wallet Integration Example</p>
 
     <div class="card">
+      <select id="network-select" style="padding: 0.5rem; margin-right: 0.5rem; border-radius: 6px; border: 1px solid #d1d5db;">
+        <option value="undeployed">Local Devnet</option>
+        <option value="preview">Preview (Testnet)</option>
+      </select>
       <button id="connect-btn">Connect Wallet</button>
       <div id="address"></div>
       <div id="actions">
         <button class="action-btn" onclick="deployContract()">Deploy Contract</button>
-        <button class="action-btn" onclick="callAction()">Call Action</button>
+        <button class="action-btn" onclick="callAction()">Increment</button>
         <button class="action-btn" onclick="readState()">Read State</button>
       </div>
+      <div id="counter-value"></div>
       <div id="status"></div>
       <p class="note">
-        Requires Lace wallet browser extension. Actions are demonstration only - uncomment
-        contract code in main.ts to use with a real contract.
+        Requires Lace wallet browser extension.
       </p>
     </div>
 

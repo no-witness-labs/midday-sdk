@@ -2,27 +2,39 @@
  * Browser Lace Wallet Example
  *
  * Demonstrates how to connect to the Lace wallet in a browser environment
- * and use it with the Midday SDK.
+ * and deploy/interact with contracts.
  *
  * Prerequisites:
  * - Lace wallet browser extension installed
- * - Testnet account with funds
+ * - Local devnet running OR Preview network access
  */
 import * as Midday from '@no-witness-labs/midday-sdk';
+import * as CounterContract from '../../../contracts/counter/contract/index.js';
 
 // UI Elements
+const networkSelect = document.getElementById('network-select') as HTMLSelectElement;
 const connectBtn = document.getElementById('connect-btn') as HTMLButtonElement;
 const statusDiv = document.getElementById('status') as HTMLDivElement;
 const addressDiv = document.getElementById('address') as HTMLDivElement;
 const actionsDiv = document.getElementById('actions') as HTMLDivElement;
+const counterDiv = document.getElementById('counter-value') as HTMLDivElement;
 
 // State
 let client: Midday.Client.MiddayClient | null = null;
+let contract: Midday.Client.Contract | null = null;
 
 // Update status display
 function updateStatus(message: string, isError = false) {
   statusDiv.textContent = message;
   statusDiv.className = isError ? 'error' : 'success';
+}
+
+// Update counter display
+function updateCounter(value: number | string) {
+  if (counterDiv) {
+    counterDiv.textContent = `Counter: ${value}`;
+    counterDiv.style.display = 'block';
+  }
 }
 
 // Connect to Lace wallet
@@ -32,12 +44,12 @@ async function connectWallet() {
     connectBtn.disabled = true;
 
     // Connect to wallet - this will prompt user to approve
-    const connection = await Midday.BrowserWallet.connectWallet('testnet');
+    const network = networkSelect?.value || 'undeployed';
+    const connection = await Midday.BrowserWallet.connectWallet(network as 'preview' | 'undeployed');
 
     updateStatus('Creating SDK client...');
 
     // Create client from wallet connection
-    // Note: zkConfigProvider is per-contract, not at client level
     client = await Midday.Client.fromWallet(connection, {
       privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
         privateStateStoreName: 'lace-example',
@@ -60,7 +72,7 @@ async function connectWallet() {
   }
 }
 
-// Deploy a contract (example structure)
+// Deploy a contract
 async function deployContract() {
   if (!client) {
     updateStatus('Not connected', true);
@@ -70,56 +82,61 @@ async function deployContract() {
   try {
     updateStatus('Loading contract...');
 
-    // Load your contract module with zkConfig
-    // const zkConfig = new Midday.ZkConfig.HttpZkConfigProvider('https://cdn.example.com/zk');
-    // const contract = await client.loadContract({
-    //   module: YourContractModule,
-    //   zkConfigProvider: zkConfig,
-    // });
+    // ZkConfig URL - served by Vite dev server middleware
+    // For production, host contract artifacts on a CDN
+    const zkConfigUrl = '/zk-config';
 
-    // updateStatus('Deploying contract...');
-    // await contract.deploy();
-    // updateStatus(`Contract deployed at: ${contract.address}`);
+    // Load contract with module + zkConfig
+    // Use HttpZkConfigProvider which expects: /{circuitId}/zkir, /{circuitId}/prover-key, /{circuitId}/verifier-key
+    contract = await client.loadContract({
+      module: CounterContract,
+      zkConfig: new Midday.ZkConfig.HttpZkConfigProvider(zkConfigUrl),
+      privateStateId: 'browser-lace-counter',
+    });
 
-    updateStatus('Contract deployment demonstrated (uncomment code to run)');
+    updateStatus('Deploying contract...');
+    await contract.deploy();
+
+    updateStatus(`Contract deployed at: ${contract.address}`);
+    updateCounter('0');
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     updateStatus(`Deploy failed: ${message}`, true);
   }
 }
 
-// Call a contract action (example structure)
+// Call increment action
 async function callAction() {
-  if (!client) {
-    updateStatus('Not connected', true);
+  if (!client || !contract) {
+    updateStatus('No contract deployed', true);
     return;
   }
 
   try {
-    // Assuming you have a loaded contract
-    // const result = await contract.call('increment');
-    // updateStatus(`Action called! TX: ${result.txHash}`);
+    updateStatus('Calling increment...');
+    const result = await contract.call('increment');
+    updateStatus(`TX submitted: ${result.txHash.slice(0, 16)}...`);
 
-    updateStatus('Contract call demonstrated (uncomment code to run)');
+    // Read updated state
+    await readState();
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     updateStatus(`Call failed: ${message}`, true);
   }
 }
 
-// Read contract state (example structure)
+// Read contract state
 async function readState() {
-  if (!client) {
-    updateStatus('Not connected', true);
+  if (!client || !contract) {
+    updateStatus('No contract deployed', true);
     return;
   }
 
   try {
-    // Assuming you have a loaded contract
-    // const state = await contract.ledgerState();
-    // updateStatus(`State: ${JSON.stringify(state)}`);
-
-    updateStatus('State read demonstrated (uncomment code to run)');
+    updateStatus('Reading state...');
+    const state = (await contract.ledgerState()) as { counter: bigint };
+    updateCounter(state.counter.toString());
+    updateStatus('State read successfully');
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     updateStatus(`Read failed: ${message}`, true);
@@ -129,10 +146,10 @@ async function readState() {
 // Set up event listeners
 connectBtn.addEventListener('click', connectWallet);
 
-// Export for global access (useful for debugging)
+// Export for global access (used by onclick in HTML)
 (window as unknown as { deployContract: typeof deployContract }).deployContract = deployContract;
 (window as unknown as { callAction: typeof callAction }).callAction = callAction;
 (window as unknown as { readState: typeof readState }).readState = readState;
 
 // Initial status
-updateStatus('Click "Connect Wallet" to begin');
+updateStatus('Select network and click "Connect Wallet" to begin');
