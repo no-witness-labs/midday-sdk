@@ -1,5 +1,23 @@
 # @no-witness-labs/midday-sdk
 
+## 0.2.5
+
+### Patch Changes
+
+- 24bfb2d: Restructure SDK to namespace-only exports for cleaner API surface.
+
+  All exports are now accessed via namespaces:
+
+  ```typescript
+  import * as Midday from '@no-witness-labs/midday-sdk';
+
+  Midday.Client.create({ ... });
+  Midday.PrivateState.inMemoryPrivateStateProvider();
+  Midday.Hash.bytes32(value);
+  ```
+
+  New modules: `Hash`, `ZkConfig`, `PrivateState`, `Runtime`, `Utils`, `BrowserWallet`
+
 ## 0.2.4
 
 ### Patch Changes
