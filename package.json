@@ -79,6 +79,9 @@
   "engines": {
     "node": ">=18.0.0"
   },
+  "peerDependencies": {
+    "@midnight-ntwrk/compact-runtime": "0.14.0"
+  },
   "packageManager": "pnpm@9.0.0",
   "keywords": [
     "midnight",
