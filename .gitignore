@@ -14,4 +14,4 @@ website/src/content/docs/api/
 .claude
 openspec
 .github/instructions/
-contracts/secret-counter/SECURITY.md
+.tmp/
