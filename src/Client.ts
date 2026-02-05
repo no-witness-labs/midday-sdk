@@ -34,7 +34,7 @@
  * @module
  */
 
-import { Context, Data, Effect, Layer } from 'effect';
+import { Context, Data, Effect, Layer, Scope } from 'effect';
 import { deployContract, findDeployedContract } from '@midnight-ntwrk/midnight-js-contracts';
 import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
 import { CompiledContract } from '@midnight-ntwrk/compact-js';
@@ -336,6 +336,33 @@ export interface MiddayClient {
    */
   waitForTx(txHash: string): Promise<FinalizedTxData>;
 
+  /**
+   * Close the client and release all resources (wallet connections, WebSocket subscriptions).
+   *
+   * Call this before shutting down to avoid leaked connections and noisy errors.
+   *
+   * @example
+   * ```typescript
+   * const client = await Midday.Client.create(config);
+   * try {
+   *   // ... use client ...
+   * } finally {
+   *   await client.close();
+   * }
+   * ```
+   *
+   * @since 0.2.9
+   */
+  close(): Promise<void>;
+
+  /**
+   * Supports `await using client = await Midday.Client.create(config);`
+   * Requires TypeScript 5.2+ and ES2022+ target.
+   *
+   * @since 0.2.9
+   */
+  [Symbol.asyncDispose](): Promise<void>;
+
   // Effect API - for composition
   /** Effect versions of client methods */
   readonly effect: {
@@ -343,6 +370,7 @@ export interface MiddayClient {
       options: LoadContractOptions<M>
     ): Effect.Effect<Contract<InferLedger<M>, InferCircuits<M>>, ClientError>;
     waitForTx(txHash: string): Effect.Effect<FinalizedTxData, ClientError>;
+    close(): Effect.Effect<void, ClientError>;
   };
 }
 
@@ -998,6 +1026,22 @@ function createContractHandle(initialData: ContractData): Contract {
  * Create a MiddayClient handle from internal data.
  * @internal
  */
+function closeClientEffect(data: ClientData): Effect.Effect<void, ClientError> {
+  return Effect.gen(function* () {
+    if (data.wallet) {
+      yield* Wallet.effect.close(data.wallet).pipe(
+        Effect.mapError(
+          (e) =>
+            new ClientError({
+              cause: e,
+              message: `Failed to close wallet: ${e.message}`,
+            }),
+        ),
+      );
+    }
+  });
+}
+
 function createClientHandle(data: ClientData): MiddayClient {
   return {
     // Data accessors
@@ -1015,6 +1059,11 @@ function createClientHandle(data: ClientData): MiddayClient {
     },
     waitForTx: (txHash) =>
       runEffectWithLogging(waitForTxEffect(data, txHash), data.logging),
+    close: () =>
+      runEffectWithLogging(closeClientEffect(data), data.logging),
+
+    [Symbol.asyncDispose]: () =>
+      runEffectWithLogging(closeClientEffect(data), data.logging),
 
     // Effect API
     effect: {
@@ -1023,6 +1072,7 @@ function createClientHandle(data: ClientData): MiddayClient {
           Effect.map((contractData) => createContractHandle(contractData) as Contract<InferLedger<M>, InferCircuits<M>>)
         ),
       waitForTx: (txHash) => waitForTxEffect(data, txHash),
+      close: () => closeClientEffect(data),
     },
   };
 }
@@ -1054,6 +1104,37 @@ export async function create(config: ClientConfig): Promise<MiddayClient> {
   const logging = config.logging ?? true;
   const data = await runEffectWithLogging(createClientDataEffect(config), logging);
   return createClientHandle(data);
+}
+
+/**
+ * Run a function with a client that is automatically closed when done.
+ *
+ * Guarantees cleanup even if the body throws — the wallet and all WebSocket
+ * connections are stopped before the promise settles.
+ *
+ * @example
+ * ```typescript
+ * await Midday.Client.withClient(config, async (client) => {
+ *   const contract = await client.loadContract({ path: './contracts/counter' });
+ *   await contract.deploy();
+ *   await contract.call('increment');
+ * });
+ * // client.close() called automatically
+ * ```
+ *
+ * @since 0.2.9
+ * @category constructors
+ */
+export async function withClient<A>(
+  config: ClientConfig,
+  body: (client: MiddayClient) => Promise<A>,
+): Promise<A> {
+  const client = await create(config);
+  try {
+    return await body(client);
+  } finally {
+    await client.close();
+  }
 }
 
 /**
@@ -1096,6 +1177,56 @@ export const effect = {
    */
   create: (config: ClientConfig): Effect.Effect<MiddayClient, ClientError> =>
     createClientDataEffect(config).pipe(Effect.map(createClientHandle)),
+
+  /**
+   * Create a scoped client that is automatically closed when the scope exits.
+   *
+   * @example
+   * ```typescript
+   * const program = Effect.scoped(
+   *   Effect.gen(function* () {
+   *     const client = yield* Midday.Client.effect.createScoped(config);
+   *     const contract = yield* client.effect.loadContract({ module });
+   *     yield* contract.effect.deploy();
+   *   })
+   * );
+   * // wallet stopped automatically when scope closes
+   * ```
+   *
+   * @since 0.2.9
+   */
+  createScoped: (config: ClientConfig): Effect.Effect<MiddayClient, ClientError, Scope.Scope> =>
+    Effect.acquireRelease(
+      createClientDataEffect(config).pipe(Effect.map(createClientHandle)),
+      (client) => client.effect.close().pipe(
+        Effect.catchAll(() => Effect.void),
+      ),
+    ),
+
+  /**
+   * Run an Effect with a client that is automatically closed when done.
+   *
+   * @example
+   * ```typescript
+   * const result = yield* Midday.Client.effect.withClient(config, (client) =>
+   *   Effect.gen(function* () {
+   *     const contract = yield* client.effect.loadContract({ module });
+   *     yield* contract.effect.deploy();
+   *   })
+   * );
+   * ```
+   *
+   * @since 0.2.9
+   */
+  withClient: <A, E>(config: ClientConfig, body: (client: MiddayClient) => Effect.Effect<A, E>): Effect.Effect<A, E | ClientError> =>
+    Effect.scoped(
+      Effect.acquireRelease(
+        createClientDataEffect(config).pipe(Effect.map(createClientHandle)),
+        (client) => client.effect.close().pipe(
+          Effect.catchAll(() => Effect.void),
+        ),
+      ).pipe(Effect.flatMap(body)),
+    ),
 
   /**
    * Create a client from wallet (Effect version).

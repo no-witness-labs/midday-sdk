@@ -53,6 +53,37 @@ export interface WalletContext {
 }
 
 // =============================================================================
+// Wallet Cleanup
+// =============================================================================
+
+/**
+ * Stop wallet sync and release WebSocket connections.
+ *
+ * @since 0.2.9
+ * @category operations
+ */
+function closeEffect(walletContext: WalletContext): Effect.Effect<void, WalletError> {
+  return Effect.tryPromise({
+    try: () => walletContext.wallet.stop(),
+    catch: (cause) =>
+      new WalletError({
+        cause,
+        message: `Failed to stop wallet: ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
+}
+
+/**
+ * Stop wallet sync and release WebSocket connections.
+ *
+ * @since 0.2.9
+ * @category operations
+ */
+export async function close(walletContext: WalletContext): Promise<void> {
+  return runEffectPromise(closeEffect(walletContext));
+}
+
+// =============================================================================
 // Internal Effect Implementations
 // =============================================================================
 
@@ -201,6 +232,7 @@ export const effect = {
   init: initEffect,
   waitForSync: waitForSyncEffect,
   deriveAddress: deriveAddressEffect,
+  close: closeEffect,
 };
 
 // =============================================================================
@@ -216,6 +248,7 @@ export const effect = {
 export interface WalletServiceImpl {
   readonly init: (seed: string, networkConfig: NetworkConfig) => Effect.Effect<WalletContext, WalletError>;
   readonly waitForSync: (walletContext: WalletContext) => Effect.Effect<void, WalletError>;
+  readonly close: (walletContext: WalletContext) => Effect.Effect<void, WalletError>;
   readonly deriveAddress: (seed: string, networkId: string) => Effect.Effect<string, WalletError>;
 }
 
@@ -252,5 +285,6 @@ export class WalletService extends Context.Tag('WalletService')<WalletService, W
 export const WalletLive: Layer.Layer<WalletService> = Layer.succeed(WalletService, {
   init: initEffect,
   waitForSync: waitForSyncEffect,
+  close: closeEffect,
   deriveAddress: deriveAddressEffect,
 });
