@@ -7,16 +7,16 @@
  * @example Promise API (default)
  * ```typescript
  * import { Cluster } from '@no-witness-labs/midday-sdk/devnet';
- * import { create } from '@no-witness-labs/midday-sdk';
+ * import * as Midday from '@no-witness-labs/midday-sdk';
  *
  * // Create and start a local devnet
  * const cluster = await Cluster.make();
  * await cluster.start();
  *
  * // Use with midday-sdk
- * const client = await create({
+ * const client = await Midday.Client.create({
  *   networkConfig: cluster.networkConfig,
- *   privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+ *   privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
  * });
  *
  * // Load contract (zkConfig loaded per-contract)

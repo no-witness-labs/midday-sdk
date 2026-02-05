@@ -14,7 +14,7 @@
  *
  * ```typescript
  * // Promise user - simple flow
- * const client = await Midday.create(config);
+ * const client = await Midday.Client.create(config);
  * const contract = await client.loadContract({ path: './contracts/counter' });
  * await contract.deploy();
  * await contract.call('increment');
@@ -22,7 +22,7 @@
  *
  * // Effect user - compositional
  * const program = Effect.gen(function* () {
- *   const client = yield* Midday.effect.create(config);
+ *   const client = yield* Midday.Client.effect.create(config);
  *   const contract = yield* client.effect.loadContract({ path: './contracts/counter' });
  *   yield* contract.effect.deploy();
  *   yield* contract.effect.call('increment');
@@ -367,14 +367,14 @@ export interface Contract {
    *
    * @throws {ContractError} If not deployed
    */
-  state_(): Promise<unknown>;
+  getState(): Promise<unknown>;
 
   /**
    * Get raw contract state at a specific block height.
    *
    * @throws {ContractError} If not deployed
    */
-  stateAt(blockHeight: number): Promise<unknown>;
+  getStateAt(blockHeight: number): Promise<unknown>;
 
   /**
    * Get parsed ledger state.
@@ -400,8 +400,8 @@ export interface Contract {
     deploy(options?: DeployOptions): Effect.Effect<void, ContractError>;
     join(address: string, options?: JoinOptions): Effect.Effect<void, ContractError>;
     call(action: string, ...args: unknown[]): Effect.Effect<CallResult, ContractError>;
-    state(): Effect.Effect<unknown, ContractError>;
-    stateAt(blockHeight: number): Effect.Effect<unknown, ContractError>;
+    getState(): Effect.Effect<unknown, ContractError>;
+    getStateAt(blockHeight: number): Effect.Effect<unknown, ContractError>;
     ledgerState(): Effect.Effect<unknown, ContractError>;
     ledgerStateAt(blockHeight: number): Effect.Effect<unknown, ContractError>;
   };
@@ -896,9 +896,9 @@ function createContractHandle(initialData: ContractData): Contract {
     // Contract methods
     call: (action, ...args) =>
       runEffectWithLogging(callContractEffect(data, action, ...args), data.logging),
-    state_: () =>
+    getState: () =>
       runEffectWithLogging(contractStateEffect(data), data.logging),
-    stateAt: (blockHeight) =>
+    getStateAt: (blockHeight) =>
       runEffectWithLogging(contractStateAtEffect(data, blockHeight), data.logging),
     ledgerState: () =>
       runEffectWithLogging(ledgerStateEffect(data), data.logging),
@@ -916,8 +916,8 @@ function createContractHandle(initialData: ContractData): Contract {
           Effect.tap((newData) => Effect.sync(() => { data = newData; }))
         ),
       call: (action, ...args) => callContractEffect(data, action, ...args),
-      state: () => contractStateEffect(data),
-      stateAt: (blockHeight) => contractStateAtEffect(data, blockHeight),
+      getState: () => contractStateEffect(data),
+      getStateAt: (blockHeight) => contractStateAtEffect(data, blockHeight),
       ledgerState: () => ledgerStateEffect(data),
       ledgerStateAt: (blockHeight) => ledgerStateAtEffect(data, blockHeight),
     },
@@ -966,7 +966,7 @@ function createClientHandle(data: ClientData): MiddayClient {
  *
  * @example
  * ```typescript
- * const client = await Midday.create({
+ * const client = await Midday.Client.create({
  *   seed: 'your-64-char-hex-seed',
  *   networkConfig: Midday.Config.NETWORKS.local,
  *   privateStateProvider,
@@ -1010,7 +1010,7 @@ export async function fromWallet(
  * @example
  * ```typescript
  * const program = Effect.gen(function* () {
- *   const client = yield* Midday.effect.create(config);
+ *   const client = yield* Midday.Client.effect.create(config);
  *   const contract = yield* client.effect.loadContract({ module });
  *   yield* contract.effect.deploy();
  *   yield* contract.effect.call('increment');

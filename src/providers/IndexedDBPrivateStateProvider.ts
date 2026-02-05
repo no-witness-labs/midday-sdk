@@ -503,13 +503,13 @@ export const effect = {
  *
  * @example
  * ```typescript
- * const provider = indexedDBPrivateStateProvider({
+ * const provider = Midday.PrivateState.indexedDBPrivateStateProvider({
  *   privateStateStoreName: 'my-dapp-state',
  *   password: 'user-password',
  * });
  *
- * // Use with Midday.create()
- * const client = await Midday.create({
+ * // Use with Midday.Client.create()
+ * const client = await Midday.Client.create({
  *   networkConfig: Midday.Config.NETWORKS.testnet,
  *   privateStateProvider: provider,
  * });
@@ -560,10 +560,10 @@ export function indexedDBPrivateStateProvider(
  *
  * @example
  * ```typescript
- * const provider = inMemoryPrivateStateProvider();
+ * const provider = Midday.PrivateState.inMemoryPrivateStateProvider();
  *
- * // Use with Midday.create()
- * const client = await Midday.create({
+ * // Use with Midday.Client.create()
+ * const client = await Midday.Client.create({
  *   networkConfig: Midday.Config.NETWORKS.local,
  *   privateStateProvider: provider,
  * });

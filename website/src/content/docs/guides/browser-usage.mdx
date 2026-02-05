@@ -21,7 +21,7 @@ Midday SDK supports browser environments with integration for the [Lace wallet](
    ```typescript
    import * as Midday from '@no-witness-labs/midday-sdk';
 
-   const connection = await Midday.connectWallet('testnet');
+   const connection = await Midday.BrowserWallet.connectWallet('testnet');
    ```
 
    This will prompt the user to approve the connection in their Lace wallet.
@@ -29,8 +29,8 @@ Midday SDK supports browser environments with integration for the [Lace wallet](
 2. **Create a client from the connection**
 
    ```typescript
-   const client = await Midday.fromWallet(connection, {
-     privateStateProvider: Midday.indexedDBPrivateStateProvider({
+   const client = await Midday.Client.fromWallet(connection, {
+     privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
        privateStateStoreName: 'my-app'
      }),
    });
@@ -56,11 +56,11 @@ import * as Midday from '@no-witness-labs/midday-sdk';
 
 async function main() {
   // Connect to Lace wallet
-  const connection = await Midday.connectWallet('testnet');
+  const connection = await Midday.BrowserWallet.connectWallet('testnet');
 
   // Create client from wallet connection (no zkConfig at client level)
-  const client = await Midday.fromWallet(connection, {
-    privateStateProvider: Midday.indexedDBPrivateStateProvider({
+  const client = await Midday.Client.fromWallet(connection, {
+    privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
       privateStateStoreName: 'my-app'
     }),
   });
@@ -88,7 +88,7 @@ async function main() {
 In browsers, use IndexedDB for persistent private state:
 
 ```typescript
-const privateStateProvider = Midday.indexedDBPrivateStateProvider({
+const privateStateProvider = Midday.PrivateState.indexedDBPrivateStateProvider({
   privateStateStoreName: 'my-app-private-state',
 });
 ```
@@ -118,10 +118,10 @@ Match the network to the wallet's current network:
 
 ```typescript
 // Connect to testnet
-const connection = await Midday.connectWallet('testnet');
+const connection = await Midday.BrowserWallet.connectWallet('testnet');
 
 // Or connect to mainnet (when available)
-const connection = await Midday.connectWallet('mainnet');
+const connection = await Midday.BrowserWallet.connectWallet('mainnet');
 ```
 
 ## Handling Wallet Events
@@ -129,7 +129,7 @@ const connection = await Midday.connectWallet('mainnet');
 The wallet connection provides events for state changes:
 
 ```typescript
-const connection = await Midday.connectWallet('testnet');
+const connection = await Midday.BrowserWallet.connectWallet('testnet');
 
 // The connection includes the wallet state
 console.log('Connected address:', connection.address);

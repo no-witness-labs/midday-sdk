@@ -27,9 +27,9 @@ const contract = await client.loadContract({
 Create a client (zkConfig is per-contract, not per-client):
 
 ```typescript
-const client = await Midday.create({
+const client = await Midday.Client.create({
   networkConfig: Midday.Config.NETWORKS.local,
-  privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+  privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
 });
 ```
 
@@ -186,9 +186,9 @@ const historicalState = await contract.ledgerStateAt(blockHeight);
     import { join } from 'path';
 
     // Create client (no zkConfig needed at client level)
-    const client = await Midday.create({
+    const client = await Midday.Client.create({
       networkConfig: Midday.Config.NETWORKS.local,
-      privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+      privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
     });
 
     // Load contract from path (zkConfig loaded automatically)
@@ -211,9 +211,9 @@ const historicalState = await contract.ledgerStateAt(blockHeight);
 
     const program = Effect.gen(function* () {
       // Create client
-      const client = yield* Midday.effect.create({
+      const client = yield* Midday.Client.effect.create({
         networkConfig: Midday.Config.NETWORKS.local,
-        privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+        privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
       });
 
       // Load contract from path (zkConfig loaded automatically)
@@ -229,7 +229,7 @@ const historicalState = await contract.ledgerStateAt(blockHeight);
       return state;
     });
 
-    const result = await Midday.runEffectPromise(program);
+    const result = await Midday.Runtime.runEffectPromise(program);
     console.log(`Counter: ${result.counter}`);
     ```
   </TabItem>

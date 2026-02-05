@@ -16,10 +16,10 @@ pnpm add @no-witness-labs/midday-sdk
 import * as Midday from '@no-witness-labs/midday-sdk';
 
 // Create client
-const client = await Midday.createClient({
+const client = await Midday.Client.create({
   networkConfig: Midday.Config.NETWORKS.local,
   zkConfigProvider: zkConfig,
-  privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+  privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
 });
 
 // Load and deploy a contract
@@ -42,10 +42,10 @@ import * as Midday from '@no-witness-labs/midday-sdk';
 import { Effect } from 'effect';
 
 const program = Effect.gen(function* () {
-  const client = yield* Midday.effect.createClient({
+  const client = yield* Midday.Client.effect.create({
     networkConfig: Midday.Config.NETWORKS.local,
     zkConfigProvider: zkConfig,
-    privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+    privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
   });
 
   const contract = yield* client.effect.loadContract({ module });
@@ -56,7 +56,7 @@ const program = Effect.gen(function* () {
   return state;
 });
 
-const result = await Midday.runEffectPromise(program);
+const result = await Midday.Runtime.runEffectPromise(program);
 ```
 
 ### Effect DI (Dependency Injection)
@@ -68,7 +68,7 @@ import { Effect, Layer } from 'effect';
 const ClientLayer = Midday.Client.layer({
   networkConfig: Midday.Config.NETWORKS.local,
   zkConfigProvider: zkConfig,
-  privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+  privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
 });
 
 const program = Effect.gen(function* () {
@@ -88,12 +88,12 @@ const result = await Effect.runPromise(program.pipe(Effect.provide(ClientLayer))
 import * as Midday from '@no-witness-labs/midday-sdk';
 
 // Connect to Lace wallet
-const connection = await Midday.connectWallet('testnet');
+const connection = await Midday.BrowserWallet.connectWallet('testnet');
 
 // Create client from wallet connection
-const client = await Midday.fromWallet(connection, {
-  zkConfigProvider: new Midday.HttpZkConfigProvider('https://cdn.example.com/zk'),
-  privateStateProvider: Midday.indexedDBPrivateStateProvider({ privateStateStoreName: 'my-app' }),
+const client = await Midday.Client.fromWallet(connection, {
+  zkConfigProvider: new Midday.Providers.HttpZkConfigProvider('https://cdn.example.com/zk'),
+  privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({ privateStateStoreName: 'my-app' }),
 });
 
 // Load and deploy contract
@@ -108,20 +108,20 @@ await contract.call('increment');
 
 ```typescript
 // Local network
-const client = await Midday.createClient({
+const client = await Midday.Client.create({
   networkConfig: Midday.Config.NETWORKS.local,
   // ...
 });
 
 // Testnet
-const client = await Midday.createClient({
+const client = await Midday.Client.create({
   networkConfig: Midday.Config.NETWORKS.testnet,
   seed: 'your-64-char-hex-seed',
   // ...
 });
 
 // Custom network
-const client = await Midday.createClient({
+const client = await Midday.Client.create({
   networkConfig: {
     networkId: 'testnet',
     indexer: 'https://indexer.testnet.midnight.network/graphql',
@@ -183,18 +183,19 @@ const historicalState = await contract.ledgerStateAt(blockHeight);
 
 ## API Reference
 
-### Top-level Exports
+### Namespaces
 
-- `Midday.createClient(config)` - Create a new client (Promise)
-- `Midday.effect.createClient(config)` - Create a new client (Effect)
-- `Midday.fromWallet(connection, config)` - Create client from wallet (browser)
-
-### Modules
-
-- `Midday.Client` - Client creation, contract loading, static functions
+- `Midday.Client` - Client creation and contract loading
+  - `Midday.Client.create(config)` - Create a new client (Promise)
+  - `Midday.Client.effect.create(config)` - Create a new client (Effect)
+  - `Midday.Client.fromWallet(connection, config)` - Create client from wallet (browser)
 - `Midday.Config` - Network configuration utilities
 - `Midday.Wallet` - Wallet initialization and management
+- `Midday.BrowserWallet` - Browser wallet connection (Lace)
 - `Midday.Providers` - Low-level provider setup
+- `Midday.PrivateState` - Private state providers
+- `Midday.Hash` - Cryptographic hash utilities
+- `Midday.Runtime` - Effect runtime utilities
 
 ### Services (Effect DI)
 

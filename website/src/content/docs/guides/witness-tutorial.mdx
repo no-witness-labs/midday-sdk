@@ -133,9 +133,9 @@ No external Midnight imports needed - everything comes from the SDK.
 1. **Initialize the client**
 
    ```typescript
-   const client = await Midday.create({
+   const client = await Midday.Client.create({
      networkConfig: cluster.networkConfig, // from devnet cluster
-     privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+     privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
    });
    ```
 

@@ -23,7 +23,7 @@ Effect provides:
   <TabItem label="Promise API">
     Simplest approach, ideal for quick prototypes. Uses method chaining:
     ```typescript
-    const client = await Midday.create(config);
+    const client = await Midday.Client.create(config);
     const contract = await client.loadContract({ path: './contracts/counter' });
     await contract.deploy();
     await contract.call('increment');
@@ -34,7 +34,7 @@ Effect provides:
     Functional style with Effect composition. Access via `.effect` namespace:
     ```typescript
     const program = Effect.gen(function* () {
-      const client = yield* Midday.effect.create(config);
+      const client = yield* Midday.Client.effect.create(config);
       const contract = yield* client.effect.loadContract({ path: './contracts/counter' });
       yield* contract.effect.deploy();
       yield* contract.effect.call('increment');
@@ -102,7 +102,7 @@ interface Contract {
 The simplest way to run an Effect:
 
 ```typescript
-const result = await Midday.runEffectPromise(program);
+const result = await Midday.Runtime.runEffectPromise(program);
 ```
 
 ### With Effect.runPromise
@@ -141,7 +141,7 @@ import { Effect } from 'effect';
 // Create client layer with configuration
 const ClientLayer = Midday.Client.layer({
   networkConfig: Midday.Config.NETWORKS.local,
-  privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+  privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
 });
 
 const program = Effect.gen(function* () {
@@ -184,7 +184,7 @@ Effect makes errors explicit in the type system:
 
 ```typescript
 const program = Effect.gen(function* () {
-  const client = yield* Midday.effect.create(config);
+  const client = yield* Midday.Client.effect.create(config);
   const contract = yield* client.effect.loadContract({ path: './contracts/counter' });
   yield* contract.effect.deploy();
   const result = yield* contract.effect.call('increment');
@@ -252,7 +252,7 @@ Effect handles cleanup automatically:
 ```typescript
 const program = Effect.gen(function* () {
   // Scoped resources are automatically cleaned up
-  const client = yield* Midday.effect.create(config);
+  const client = yield* Midday.Client.effect.create(config);
   const contract = yield* client.effect.loadContract({ path: './contracts/counter' });
   yield* contract.effect.deploy();
   

@@ -22,9 +22,9 @@ The simplest way to get started. The SDK uses a **Client-centric hub pattern** -
 2. **Create a client**
 
    ```typescript
-   const client = await Midday.create({
+   const client = await Midday.Client.create({
      networkConfig: Midday.Config.NETWORKS.local,
-     privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+     privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
    });
    ```
 
@@ -68,9 +68,9 @@ import { Effect } from 'effect';
 
 const program = Effect.gen(function* () {
   // Create client (Effect version)
-  const client = yield* Midday.effect.create({
+  const client = yield* Midday.Client.effect.create({
     networkConfig: Midday.Config.NETWORKS.local,
-    privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+    privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
   });
 
   // Load contract via client (Effect version) - zkConfig loaded from path
@@ -90,7 +90,7 @@ const program = Effect.gen(function* () {
   return state;
 });
 
-const result = await Midday.runEffectPromise(program);
+const result = await Midday.Runtime.runEffectPromise(program);
 ```
 
 ## Effect with Dependency Injection
@@ -104,7 +104,7 @@ import { Effect, Layer } from 'effect';
 // Create a client layer with your configuration
 const ClientLayer = Midday.Client.layer({
   networkConfig: Midday.Config.NETWORKS.local,
-  privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+  privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
 });
 
 const program = Effect.gen(function* () {
@@ -142,13 +142,13 @@ The SDK follows these principles:
 
 ```typescript
 // Promise user - simple flow
-const client = await Midday.create(config);
+const client = await Midday.Client.create(config);
 const contract = await client.loadContract({ path: './contracts/counter' });
 await contract.deploy();
 await contract.call('increment');
 
 // Effect user - compositional
-const client = yield* Midday.effect.create(config);
+const client = yield* Midday.Client.effect.create(config);
 const contract = yield* client.effect.loadContract({ path: './contracts/counter' });
 yield* contract.effect.deploy();
 yield* contract.effect.call('increment');

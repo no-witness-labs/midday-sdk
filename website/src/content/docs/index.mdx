@@ -44,10 +44,10 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 import * as Midday from '@no-witness-labs/midday-sdk';
 
 // Create client (no zkConfig at client level)
-const client = await Midday.create({
+const client = await Midday.Client.create({
   networkConfig: Midday.Config.NETWORKS.testnet,
   seed: 'your-64-char-hex-seed',
-  privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+  privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
 });
 
 // Load contract (zkConfig loaded per-contract)

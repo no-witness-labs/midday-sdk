@@ -14,9 +14,9 @@ Midday SDK comes with pre-configured network settings for common environments.
 <Tabs>
   <TabItem label="Local">
     ```typescript
-    const client = await Midday.create({
+    const client = await Midday.Client.create({
       networkConfig: Midday.Config.NETWORKS.local,
-      privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+      privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
     });
 
     // Load contract (zkConfig loaded per-contract)
@@ -25,10 +25,10 @@ Midday SDK comes with pre-configured network settings for common environments.
   </TabItem>
   <TabItem label="Testnet">
     ```typescript
-    const client = await Midday.create({
+    const client = await Midday.Client.create({
       networkConfig: Midday.Config.NETWORKS.testnet,
       seed: 'your-64-char-hex-seed',
-      privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+      privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
     });
 
     // Load contract from URL (browser)
@@ -45,7 +45,7 @@ Midday SDK comes with pre-configured network settings for common environments.
 For custom deployments, provide the full network configuration:
 
 ```typescript
-const client = await Midday.create({
+const client = await Midday.Client.create({
   networkConfig: {
     networkId: 'testnet',
     indexer: 'https://indexer.testnet.midnight.network/graphql',
@@ -54,7 +54,7 @@ const client = await Midday.create({
     proofServer: 'https://proof.testnet.midnight.network',
   },
   seed: 'your-64-char-hex-seed',
-  privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+  privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
 });
 ```
 
@@ -95,13 +95,13 @@ Private state stores contract-specific secrets that should never leave the clien
 ### In-Memory (Development)
 
 ```typescript
-const privateStateProvider = Midday.inMemoryPrivateStateProvider();
+const privateStateProvider = Midday.PrivateState.inMemoryPrivateStateProvider();
 ```
 
 ### IndexedDB (Browser)
 
 ```typescript
-const privateStateProvider = Midday.indexedDBPrivateStateProvider({
+const privateStateProvider = Midday.PrivateState.indexedDBPrivateStateProvider({
   privateStateStoreName: 'my-app-private-state',
 });
 ```
@@ -113,10 +113,10 @@ const privateStateProvider = Midday.indexedDBPrivateStateProvider({
 For server-side applications, provide a 64-character hex seed:
 
 ```typescript
-const client = await Midday.create({
+const client = await Midday.Client.create({
   networkConfig: Midday.Config.NETWORKS.testnet,
   seed: 'your-64-char-hex-seed', // 32 bytes as hex
-  privateStateProvider: Midday.inMemoryPrivateStateProvider(),
+  privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
 });
 ```
 
@@ -129,9 +129,9 @@ Never commit seeds to version control. Use environment variables or secure secre
 For browser applications, connect to the Lace wallet extension:
 
 ```typescript
-const connection = await Midday.connectWallet('testnet');
-const client = await Midday.fromWallet(connection, {
-  privateStateProvider: Midday.indexedDBPrivateStateProvider({
+const connection = await Midday.BrowserWallet.connectWallet('testnet');
+const client = await Midday.Client.fromWallet(connection, {
+  privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
     privateStateStoreName: 'my-app'
   }),
 });

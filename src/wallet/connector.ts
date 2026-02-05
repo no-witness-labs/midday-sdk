@@ -259,7 +259,7 @@ export function isWalletAvailable(): boolean {
  * const connection = yield* Midday.WalletConnector.effect.connect('testnet');
  *
  * // Promise-based usage
- * const connection = await Midday.connectWallet('testnet');
+ * const connection = await Midday.BrowserWallet.connectWallet('testnet');
  * ```
  */
 export async function connectWallet(networkId: string = 'testnet'): Promise<WalletConnection> {

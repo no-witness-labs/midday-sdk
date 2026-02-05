@@ -48,7 +48,7 @@ const program = Effect.gen(function* () {
   return yield* Midday.Contract.effect.call(contract, 'increment');
 });
 
-await Midday.runEffectPromise(program);
+await Midday.Runtime.runEffectPromise(program);
 ```
 
 ### 3. Effect DI (Production Applications)
