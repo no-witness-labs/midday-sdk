@@ -14,20 +14,20 @@
     {
       devShells = forEachSupportedSystem ({ pkgs, system }:
         let
-          compactVersion = "v0.27.0-rc.1";
+          compactVersion = "v0.28.0";
 
           compactMeta = {
             "x86_64-linux" = {
               arch = "x86_64-unknown-linux-musl";
-              hash = "sha256-X+EEBq0RxZT1U1Fp8NmJSqrJwg7uqLrtnWUQoAPXdiQ=";
+              hash = "";
             };
             "x86_64-darwin" = {
               arch = "x86_64-darwin";
-              hash = "sha256-oTHjsJCwiSIvotnrogX6RZvux6ZpkPJ9EIU5XTWvmaA=";
+              hash = "";
             };
             "aarch64-darwin" = {
               arch = "aarch64-darwin";
-              hash = "sha256-srHuUNUqrVRzk/PwgL4DpmfNrR++4z7NEVxGjuC4CJ8=";
+              hash = "sha256-NZxNh1fJwUby9bL3rQpXki+VDSRelAyYw7KgBAMo/mU=";
             };
           }.${system};
 
@@ -36,7 +36,7 @@
             version = compactVersion;
 
             src = pkgs.fetchzip {
-              url = "https://github.com/midnightntwrk/compact/raw/main/prerelease/compactc-0.27/compactc_${compactVersion}_${compactMeta.arch}.zip";
+              url = "https://github.com/midnightntwrk/compact/releases/download/compactc-${compactVersion}/compactc_${compactVersion}_${compactMeta.arch}.zip";
               hash = compactMeta.hash;
               stripRoot = false;
             };
