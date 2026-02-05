@@ -36,6 +36,8 @@
 
 import { Context, Data, Effect, Layer } from 'effect';
 import { deployContract, findDeployedContract } from '@midnight-ntwrk/midnight-js-contracts';
+import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
+import { CompiledContract } from '@midnight-ntwrk/compact-js';
 import type { ZKConfigProvider, PrivateStateProvider } from '@midnight-ntwrk/midnight-js-types';
 
 import * as Config from './Config.js';
@@ -232,6 +234,8 @@ export interface LoadedContractModule<
   ledger: (state: any) => TLedger;
   privateStateId: string;
   witnesses: Record<string, unknown>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  compiledContract: CompiledContract.CompiledContract<any, any, any>;
 }
 
 /**
@@ -621,17 +625,34 @@ function loadContractEffect(
         );
       }
 
+      // Create the v7 CompiledContract wrapper
+      const witnesses = options.witnesses ?? {};
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const compiledContract: any = CompiledContract.make('contract', module.Contract as any);
+      // IMPORTANT: Always call withWitnesses - even with empty {} - because the 
+      // contract constructor expects a witnesses object (context.witnesses must be defined)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const compiledContractWithWitnesses = (CompiledContract.withWitnesses as any)(compiledContract, witnesses);
+
       const loadedModule: LoadedContractModule = {
         Contract: module.Contract,
         ledger: module.ledger,
         privateStateId: options.privateStateId ?? 'contract',
-        witnesses: options.witnesses ?? {},
+        witnesses,
+        compiledContract: compiledContractWithWitnesses,
       };
 
-      // Create full providers with zkConfig for this contract
+      // Create proofProvider with zkConfigProvider for this contract
+      const proofProvider = httpClientProofProvider(
+        clientData.providers.networkConfig.proofServer,
+        zkConfig,
+      );
+
+      // Create full providers with zkConfig and proofProvider for this contract
       const providers: ContractProviders = {
         ...clientData.providers,
         zkConfigProvider: zkConfig,
+        proofProvider,
       };
 
       return {
@@ -691,14 +712,11 @@ function deployContractEffect(
 
     yield* Effect.logDebug('Deploying contract...');
 
-    const ContractClass = module.Contract as new (witnesses: unknown) => unknown;
-    const contract = new ContractClass(module.witnesses);
-
     const deployed = yield* Effect.tryPromise({
       try: () =>
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         deployContract(providers as any, {
-          contract,
+          compiledContract: module.compiledContract,
           privateStateId: module.privateStateId,
           initialPrivateState,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -746,15 +764,12 @@ function joinContractEffect(
 
     yield* Effect.logDebug(`Joining contract at ${address}...`);
 
-    const ContractClass = module.Contract as new (witnesses: unknown) => unknown;
-    const contract = new ContractClass(module.witnesses);
-
     const deployed = yield* Effect.tryPromise({
       try: () =>
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         findDeployedContract(providers as any, {
           contractAddress: address,
-          contract,
+          compiledContract: module.compiledContract,
           privateStateId: module.privateStateId,
           initialPrivateState,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any

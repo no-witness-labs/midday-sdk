@@ -9,9 +9,8 @@
  */
 
 import { Context, Effect, Layer } from 'effect';
-import type { WalletProvider, MidnightProvider, BalancedProvingRecipe } from '@midnight-ntwrk/midnight-js-types';
-import { NOTHING_TO_PROVE } from '@midnight-ntwrk/midnight-js-types';
-import { Transaction, type FinalizedTransaction, type TransactionId, type UnprovenTransaction } from '@midnight-ntwrk/ledger-v6';
+import type { WalletProvider, MidnightProvider, UnboundTransaction } from '@midnight-ntwrk/midnight-js-types';
+import { Transaction, type FinalizedTransaction, type TransactionId } from '@midnight-ntwrk/ledger-v7';
 import { getNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 
 import type { ConnectedAPI, ShieldedAddresses } from './connector.js';
@@ -43,7 +42,7 @@ export interface WalletProviders {
  * Effect-based interface for wallet provider operations.
  */
 export interface WalletProviderEffect {
-  readonly balanceTx: (wallet: ConnectedAPI, tx: UnprovenTransaction) => Effect.Effect<BalancedProvingRecipe, ProviderError>;
+  readonly balanceTx: (wallet: ConnectedAPI, tx: UnboundTransaction) => Effect.Effect<FinalizedTransaction, ProviderError>;
   readonly submitTx: (wallet: ConnectedAPI, tx: FinalizedTransaction) => Effect.Effect<TransactionId, ProviderError>;
 }
 
@@ -51,7 +50,7 @@ export interface WalletProviderEffect {
 // Effect API
 // =============================================================================
 
-function balanceTxEffect(wallet: ConnectedAPI, tx: UnprovenTransaction): Effect.Effect<BalancedProvingRecipe, ProviderError> {
+function balanceTxEffect(wallet: ConnectedAPI, tx: UnboundTransaction): Effect.Effect<FinalizedTransaction, ProviderError> {
   return Effect.tryPromise({
     try: async () => {
       // Serialize the transaction to hex string
@@ -73,11 +72,7 @@ function balanceTxEffect(wallet: ConnectedAPI, tx: UnprovenTransaction): Effect.
         networkId,
       ) as FinalizedTransaction;
 
-      // Return as NothingToProve since the wallet handles proving
-      return {
-        type: NOTHING_TO_PROVE,
-        transaction,
-      } as BalancedProvingRecipe;
+      return transaction;
     },
     catch: (cause) =>
       new ProviderError({
@@ -144,7 +139,7 @@ export function createWalletProviders(wallet: ConnectedAPI, addresses: ShieldedA
     getEncryptionPublicKey: () =>
       addresses.shieldedEncryptionPublicKey as unknown as ReturnType<WalletProvider['getEncryptionPublicKey']>,
 
-    async balanceTx(tx: UnprovenTransaction, _newCoins?: unknown[], _ttl?: Date): Promise<BalancedProvingRecipe> {
+    async balanceTx(tx: UnboundTransaction, _ttl?: Date): Promise<FinalizedTransaction> {
       return runEffectPromise(balanceTxEffect(wallet, tx));
     },
   };
@@ -185,8 +180,8 @@ export const effect = {
 export interface WalletProviderServiceImpl {
   readonly balanceTx: (
     wallet: ConnectedAPI,
-    tx: UnprovenTransaction,
-  ) => Effect.Effect<BalancedProvingRecipe, ProviderError>;
+    tx: UnboundTransaction,
+  ) => Effect.Effect<FinalizedTransaction, ProviderError>;
   readonly submitTx: (wallet: ConnectedAPI, tx: FinalizedTransaction) => Effect.Effect<TransactionId, ProviderError>;
 }
 

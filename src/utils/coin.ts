@@ -7,7 +7,7 @@
  * @module
  */
 
-import { encodeRawTokenType, nativeToken } from '@midnight-ntwrk/ledger-v6';
+import { encodeRawTokenType, nativeToken } from '@midnight-ntwrk/ledger-v7';
 
 /**
  * Coin information containing nonce, color, and value.
