@@ -1198,7 +1198,7 @@ export const effect = {
   createScoped: (config: ClientConfig): Effect.Effect<MiddayClient, ClientError, Scope.Scope> =>
     Effect.acquireRelease(
       createClientDataEffect(config).pipe(Effect.map(createClientHandle)),
-      (client) => closeClientEffect({ wallet: client.wallet, networkConfig: client.networkConfig, providers: client.providers, logging: false }).pipe(
+      (client) => client.effect.close().pipe(
         Effect.catchAll(() => Effect.void),
       ),
     ),
@@ -1222,7 +1222,7 @@ export const effect = {
     Effect.scoped(
       Effect.acquireRelease(
         createClientDataEffect(config).pipe(Effect.map(createClientHandle)),
-        (client) => closeClientEffect({ wallet: client.wallet, networkConfig: client.networkConfig, providers: client.providers, logging: false }).pipe(
+        (client) => client.effect.close().pipe(
           Effect.catchAll(() => Effect.void),
         ),
       ).pipe(Effect.flatMap(body)),
