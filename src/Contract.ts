@@ -99,6 +99,45 @@ export type InferCircuits<M> = M extends {
 } ? keyof IC & string : string;
 
 /**
+ * Infer typed action methods from a contract module.
+ *
+ * Strips the runtime `context` first parameter from each circuit function
+ * and maps the return type to `Promise<CallResult>`.
+ *
+ * @example
+ * ```typescript
+ * // Given a contract with: increment(ctx, amount: bigint), decrement(ctx)
+ * // InferActions<M> = { increment(amount: bigint): Promise<CallResult>; decrement(): Promise<CallResult> }
+ * ```
+ *
+ * @since 0.8.0
+ * @category type
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type InferActions<M> = M extends {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  Contract: new (...args: any[]) => { impureCircuits: infer IC };
+} ? {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [K in keyof IC]: IC[K] extends (context: any, ...args: infer A) => any
+    ? (...args: A) => Promise<CallResult>
+    : (...args: unknown[]) => Promise<CallResult>;
+} : Record<string, (...args: unknown[]) => Promise<CallResult>>;
+
+/**
+ * Convert Promise-based actions to Effect-based actions.
+ *
+ * @since 0.8.0
+ * @category type
+ */
+export type ToEffectActions<T> = {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [K in keyof T]: T[K] extends (...args: infer A) => Promise<any>
+    ? (...args: A) => Effect.Effect<CallResult, ContractError>
+    : T[K];
+};
+
+/**
  * A loaded contract module with configuration.
  *
  * @typeParam TLedger - The ledger state type
@@ -210,6 +249,7 @@ export interface CallResult {
 /**
  * Contract state: either "loaded" (pre-deploy) or "deployed" (connected to network).
  *
+ * @deprecated Use `LoadedContract` and `DeployedContract` types instead.
  * @since 0.6.0
  * @category model
  */
@@ -224,37 +264,34 @@ export type ContractState = 'loaded' | 'deployed';
 export interface ContractProviders {
   walletProvider: WalletProvider;
   midnightProvider: MidnightProvider;
-  publicDataProvider: ReturnType<typeof indexerPublicDataProvider>;
+  publicDataProvider: PublicDataProvider;
   privateStateProvider: PrivateStateProvider;
   zkConfigProvider: ZKConfigProvider<string>;
   proofProvider: ProofProvider;
 }
 
 // =============================================================================
-// Contract Handle Interface
+// Contract Handle Interfaces
 // =============================================================================
 
 /**
- * A contract handle that manages the full lifecycle: load → deploy/join → call.
+ * A loaded contract — ready for deployment or joining.
  *
- * The contract has two states:
- * - **loaded**: Contract module loaded, ready for deploy() or join()
- * - **deployed**: Connected to network, ready for call() and ledgerState()
+ * Created via `client.loadContract()` or `Contract.load()`. Call `deploy()` or
+ * `join()` to transition to a `DeployedContract`.
  *
  * @typeParam TLedger - The ledger state type (inferred from module)
  * @typeParam TCircuits - Union of circuit names (inferred from module)
  *
- * @since 0.2.6
+ * @since 0.7.0
  * @category model
  */
-export interface Contract<
+export interface LoadedContract<
   TLedger = unknown,
   TCircuits extends string = string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  TActions extends Record<string, (...args: any[]) => Promise<CallResult>> = Record<string, (...args: unknown[]) => Promise<CallResult>>,
 > {
-  /** Current state of the contract */
-  readonly state: ContractState;
-  /** The deployed contract address (undefined until deployed/joined) */
-  readonly address: string | undefined;
   /** The loaded contract module */
   readonly module: LoadedContractModule<TLedger, TCircuits>;
   /** Contract providers (for advanced use) */
@@ -262,59 +299,88 @@ export interface Contract<
 
   /**
    * Deploy a new contract instance.
-   * Transitions state from "loaded" to "deployed".
    *
-   * @throws {ContractError} If already deployed
+   * @returns A deployed contract handle ready for calls.
+   * @throws {ContractError} When deployment fails
    */
-  deploy(options?: DeployOptions): Promise<void>;
+  deploy(options?: DeployOptions): Promise<DeployedContract<TLedger, TCircuits, TActions>>;
 
   /**
    * Join an existing contract at an address.
-   * Transitions state from "loaded" to "deployed".
    *
-   * @throws {ContractError} If already deployed
+   * @returns A deployed contract handle ready for calls.
+   * @throws {ContractError} When joining fails
    */
-  join(address: string, options?: JoinOptions): Promise<void>;
+  join(address: string, options?: JoinOptions): Promise<DeployedContract<TLedger, TCircuits, TActions>>;
+
+  /** Effect versions of loaded contract methods */
+  readonly effect: {
+    deploy(options?: DeployOptions): Effect.Effect<DeployedContract<TLedger, TCircuits, TActions>, ContractError>;
+    join(address: string, options?: JoinOptions): Effect.Effect<DeployedContract<TLedger, TCircuits, TActions>, ContractError>;
+  };
+}
+
+/**
+ * A deployed contract — connected to the network, ready for calls.
+ *
+ * Created from `LoadedContract.deploy()` or `LoadedContract.join()`. Has a
+ * known address and all operational methods.
+ *
+ * @typeParam TLedger - The ledger state type (inferred from module)
+ * @typeParam TCircuits - Union of circuit names (inferred from module)
+ *
+ * @since 0.7.0
+ * @category model
+ */
+export interface DeployedContract<
+  TLedger = unknown,
+  TCircuits extends string = string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  TActions extends Record<string, (...args: any[]) => Promise<CallResult>> = Record<string, (...args: unknown[]) => Promise<CallResult>>,
+> {
+  /** The deployed contract address (always known). */
+  readonly address: string;
+  /** The loaded contract module */
+  readonly module: LoadedContractModule<TLedger, TCircuits>;
+  /** Contract providers (for advanced use) */
+  readonly providers: ContractProviders;
 
   /**
-   * Call a contract action.
+   * Type-safe action methods — each circuit is a direct method with inferred parameter types.
    *
-   * @throws {ContractError} If not deployed
+   * @example
+   * ```typescript
+   * // Instead of: await contract.call('increment', 5n)
+   * await contract.actions.increment(5n);
+   * ```
+   *
+   * @since 0.8.0
+   */
+  readonly actions: TActions;
+
+  /**
+   * Call a contract action by name (untyped fallback).
+   *
+   * Prefer `contract.actions.actionName(...)` for type-safe calls.
    */
   call(action: TCircuits, ...args: unknown[]): Promise<CallResult>;
 
-  /**
-   * Get raw contract state.
-   *
-   * @throws {ContractError} If not deployed
-   */
+  /** Get raw contract state. */
   getState(): Promise<unknown>;
 
-  /**
-   * Get raw contract state at a specific block height.
-   *
-   * @throws {ContractError} If not deployed
-   */
+  /** Get raw contract state at a specific block height. */
   getStateAt(blockHeight: number): Promise<unknown>;
 
-  /**
-   * Get parsed ledger state.
-   *
-   * @throws {ContractError} If not deployed
-   */
+  /** Get parsed ledger state. */
   ledgerState(): Promise<TLedger>;
 
-  /**
-   * Get parsed ledger state at a specific block height.
-   *
-   * @throws {ContractError} If not deployed
-   */
+  /** Get parsed ledger state at a specific block height. */
   ledgerStateAt(blockHeight: number): Promise<TLedger>;
 
-  /** Effect versions of contract methods */
+  /** Effect versions of deployed contract methods */
   readonly effect: {
-    deploy(options?: DeployOptions): Effect.Effect<void, ContractError>;
-    join(address: string, options?: JoinOptions): Effect.Effect<void, ContractError>;
+    /** Type-safe Effect action methods. */
+    readonly actions: ToEffectActions<TActions>;
     call(action: TCircuits, ...args: unknown[]): Effect.Effect<CallResult, ContractError>;
     getState(): Effect.Effect<unknown, ContractError>;
     getStateAt(blockHeight: number): Effect.Effect<unknown, ContractError>;
@@ -323,21 +389,88 @@ export interface Contract<
   };
 }
 
+/**
+ * A read-only contract handle — can query state without a wallet or proof server.
+ *
+ * Created via `Client.createReadonly().loadContract()`. Only exposes state
+ * reading methods. Ideal for dashboards, explorers, and monitoring.
+ *
+ * @typeParam TLedger - The ledger state type (inferred from module)
+ *
+ * @since 0.8.0
+ * @category model
+ */
+export interface ReadonlyContract<TLedger = unknown> {
+  /** The ledger parser function (from the contract module). */
+  readonly ledgerParser: LedgerParser<TLedger>;
+
+  /** Read parsed ledger state at an address. */
+  readState(address: string): Promise<TLedger>;
+
+  /** Read parsed ledger state at an address and specific block height. */
+  readStateAt(address: string, blockHeight: number): Promise<TLedger>;
+
+  /** Read raw (unparsed) contract state at an address. */
+  readRawState(address: string): Promise<unknown>;
+
+  /** Read raw contract state at an address and specific block height. */
+  readRawStateAt(address: string, blockHeight: number): Promise<unknown>;
+
+  /** Effect versions of read-only methods. */
+  readonly effect: {
+    readState(address: string): Effect.Effect<TLedger, ContractError>;
+    readStateAt(address: string, blockHeight: number): Effect.Effect<TLedger, ContractError>;
+    readRawState(address: string): Effect.Effect<unknown, ContractError>;
+    readRawStateAt(address: string, blockHeight: number): Effect.Effect<unknown, ContractError>;
+  };
+}
+
+/**
+ * Legacy unified contract type.
+ *
+ * @deprecated Use `LoadedContract` and `DeployedContract` separately.
+ * @since 0.2.6
+ * @category model
+ */
+export type Contract<
+  TLedger = unknown,
+  TCircuits extends string = string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  TActions extends Record<string, (...args: any[]) => Promise<CallResult>> = Record<string, (...args: unknown[]) => Promise<CallResult>>,
+> = LoadedContract<TLedger, TCircuits, TActions> | DeployedContract<TLedger, TCircuits, TActions>;
+
 // =============================================================================
 // Internal Data
 // =============================================================================
 
 /**
- * Internal contract data (plain object).
+ * Internal loaded contract data (plain object).
  * @internal
  */
-export interface ContractData {
+export interface LoadedContractData {
   readonly module: LoadedContractModule;
   readonly providers: ContractProviders;
   readonly logging: boolean;
+}
+
+/**
+ * Internal deployed contract data (plain object).
+ * @internal
+ */
+export interface DeployedContractData extends LoadedContractData {
+  readonly address: string;
+  readonly instance: DeployedContractInstance;
+}
+
+/**
+ * Legacy alias.
+ * @deprecated Use `LoadedContractData` or `DeployedContractData`.
+ * @internal
+ */
+export type ContractData = LoadedContractData & {
   readonly address: string | undefined;
   readonly instance: unknown | undefined;
-}
+};
 
 /**
  * Internal interface for deployed contract instance with callable transaction methods.
@@ -367,7 +500,7 @@ export function loadContractModuleEffect(
     networkConfig: { proofServer: string };
   },
   logging: boolean,
-): Effect.Effect<ContractData, ContractError> {
+): Effect.Effect<LoadedContractData, ContractError> {
   return Effect.tryPromise({
     try: async () => {
       let module: ContractModule;
@@ -430,8 +563,6 @@ export function loadContractModuleEffect(
         module: loadedModule,
         providers,
         logging,
-        address: undefined,
-        instance: undefined,
       };
     },
     catch: (cause) =>
@@ -447,19 +578,10 @@ export function loadContractModuleEffect(
 // =============================================================================
 
 function deployContractEffect(
-  contractData: ContractData,
+  contractData: LoadedContractData,
   options?: DeployOptions,
-): Effect.Effect<ContractData, ContractError> {
+): Effect.Effect<DeployedContractData, ContractError> {
   return Effect.gen(function* () {
-    if (contractData.address !== undefined) {
-      return yield* Effect.fail(
-        new ContractError({
-          cause: new Error('Already deployed'),
-          message: `Contract already deployed at ${contractData.address}. Cannot deploy again.`,
-        }),
-      );
-    }
-
     const { initialPrivateState = {} } = options ?? {};
     const { module, providers, logging } = contractData;
 
@@ -488,7 +610,7 @@ function deployContractEffect(
 
     return {
       address,
-      instance: deployed,
+      instance: deployed as DeployedContractInstance,
       module,
       providers,
       logging,
@@ -497,20 +619,11 @@ function deployContractEffect(
 }
 
 function joinContractEffect(
-  contractData: ContractData,
+  contractData: LoadedContractData,
   address: string,
   options?: JoinOptions,
-): Effect.Effect<ContractData, ContractError> {
+): Effect.Effect<DeployedContractData, ContractError> {
   return Effect.gen(function* () {
-    if (contractData.address !== undefined) {
-      return yield* Effect.fail(
-        new ContractError({
-          cause: new Error('Already deployed'),
-          message: `Contract already connected at ${contractData.address}. Cannot join another.`,
-        }),
-      );
-    }
-
     const { initialPrivateState = {} } = options ?? {};
     const { module, providers, logging } = contractData;
 
@@ -537,7 +650,7 @@ function joinContractEffect(
 
     return {
       address,
-      instance: deployed,
+      instance: deployed as DeployedContractInstance,
       module,
       providers,
       logging,
@@ -546,25 +659,14 @@ function joinContractEffect(
 }
 
 function callContractEffect(
-  contractData: ContractData,
+  contractData: DeployedContractData,
   action: string,
   ...args: unknown[]
 ): Effect.Effect<CallResult, ContractError> {
   return Effect.gen(function* () {
-    if (contractData.instance === undefined) {
-      return yield* Effect.fail(
-        new ContractError({
-          cause: new Error('Not deployed'),
-          message: 'Contract not deployed. Call deploy() or join() first.',
-        }),
-      );
-    }
-
-    const { instance } = contractData;
     yield* Effect.logDebug(`Calling ${action}()...`);
 
-    const deployed = instance as DeployedContractInstance;
-    const callTx = deployed.callTx;
+    const callTx = contractData.instance.callTx;
     if (!callTx || typeof callTx[action] !== 'function') {
       return yield* Effect.fail(
         new ContractError({
@@ -595,16 +697,7 @@ function callContractEffect(
   });
 }
 
-function contractStateEffect(contractData: ContractData): Effect.Effect<unknown, ContractError> {
-  if (contractData.address === undefined) {
-    return Effect.fail(
-      new ContractError({
-        cause: new Error('Not deployed'),
-        message: 'Contract not deployed. Call deploy() or join() first.',
-      }),
-    );
-  }
-
+function contractStateEffect(contractData: DeployedContractData): Effect.Effect<unknown, ContractError> {
   const address = contractData.address;
   return Effect.tryPromise({
     try: async () => {
@@ -623,18 +716,9 @@ function contractStateEffect(contractData: ContractData): Effect.Effect<unknown,
 }
 
 function contractStateAtEffect(
-  contractData: ContractData,
+  contractData: DeployedContractData,
   blockHeight: number,
 ): Effect.Effect<unknown, ContractError> {
-  if (contractData.address === undefined) {
-    return Effect.fail(
-      new ContractError({
-        cause: new Error('Not deployed'),
-        message: 'Contract not deployed. Call deploy() or join() first.',
-      }),
-    );
-  }
-
   const address = contractData.address;
   return Effect.tryPromise({
     try: async () => {
@@ -655,14 +739,14 @@ function contractStateAtEffect(
   });
 }
 
-function ledgerStateEffect(contractData: ContractData): Effect.Effect<unknown, ContractError> {
+function ledgerStateEffect(contractData: DeployedContractData): Effect.Effect<unknown, ContractError> {
   return contractStateEffect(contractData).pipe(
     Effect.map((data) => contractData.module.ledger(data)),
   );
 }
 
 function ledgerStateAtEffect(
-  contractData: ContractData,
+  contractData: DeployedContractData,
   blockHeight: number,
 ): Effect.Effect<unknown, ContractError> {
   return contractStateAtEffect(contractData, blockHeight).pipe(
@@ -670,44 +754,341 @@ function ledgerStateAtEffect(
   );
 }
 
+/**
+ * Type alias for the public data provider used to query contract state.
+ *
+ * Avoids requiring users to import the Midnight indexer package directly.
+ * Create one via `Config.publicDataProvider(networkConfig)`.
+ *
+ * @since 0.8.0
+ * @category model
+ */
+export type PublicDataProvider = ReturnType<typeof indexerPublicDataProvider>;
+
+/**
+ * Ledger parser function — converts raw contract state to typed ledger.
+ *
+ * Every compiled Compact contract exports a `ledger()` function matching this signature.
+ *
+ * @since 0.8.0
+ * @category model
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type LedgerParser<TLedger> = (state: any) => TLedger;
+
 // =============================================================================
-// Contract Handle Factory
+// Read-Only State Queries
 // =============================================================================
 
 /**
- * Create a stateful Contract handle from internal data.
+ * Read raw contract state without a wallet or deployment.
+ *
+ * @internal Effect source of truth
+ */
+function readRawStateEffect(
+  address: string,
+  provider: PublicDataProvider,
+  atBlock?: number,
+): Effect.Effect<unknown, ContractError> {
+  return Effect.tryPromise({
+    try: async () => {
+      const opts = atBlock !== undefined
+        ? { type: 'blockHeight' as const, blockHeight: atBlock }
+        : undefined;
+      const contractState = await provider.queryContractState(address, opts);
+      if (!contractState) {
+        throw new Error(
+          atBlock !== undefined
+            ? `Contract state not found at ${address} at block ${atBlock}`
+            : `Contract state not found at ${address}`,
+        );
+      }
+      return contractState.data;
+    },
+    catch: (cause) =>
+      new ContractError({
+        cause,
+        message: `Failed to query contract state: ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
+}
+
+/**
+ * Read parsed ledger state without a wallet or deployment.
+ *
+ * @internal Effect source of truth
+ */
+function readStateEffect<TLedger>(
+  address: string,
+  provider: PublicDataProvider,
+  ledgerParser: LedgerParser<TLedger>,
+  atBlock?: number,
+): Effect.Effect<TLedger, ContractError> {
+  return readRawStateEffect(address, provider, atBlock).pipe(
+    Effect.map((data) => ledgerParser(data)),
+  );
+}
+
+/**
+ * Read a contract's parsed ledger state without a wallet, deployment, or proof server.
+ *
+ * Ideal for dashboards, explorers, and read-only views that only need to
+ * observe on-chain state.
+ *
+ * @param address - The deployed contract address
+ * @param provider - Public data provider (from `Config.publicDataProvider(networkConfig)`)
+ * @param ledgerParser - The contract module's `ledger` function
+ * @returns Parsed ledger state
+ *
+ * @example
+ * ```typescript
+ * import * as Contract from '@no-witness-labs/midday-sdk/Contract';
+ * import * as Config from '@no-witness-labs/midday-sdk/Config';
+ * import { ledger } from './contracts/counter/contract/index.js';
+ *
+ * const pdp = Config.publicDataProvider(networkConfig);
+ * const state = await Contract.readState(contractAddress, pdp, ledger);
+ * console.log(state.counter); // 42n
+ * ```
+ *
+ * @since 0.8.0
+ * @category queries
+ */
+export async function readState<TLedger>(
+  address: string,
+  provider: PublicDataProvider,
+  ledgerParser: LedgerParser<TLedger>,
+): Promise<TLedger> {
+  return runEffectWithLogging(readStateEffect(address, provider, ledgerParser), false);
+}
+
+/**
+ * Read a contract's parsed ledger state at a specific block height.
+ *
+ * @param address - The deployed contract address
+ * @param provider - Public data provider
+ * @param ledgerParser - The contract module's `ledger` function
+ * @param blockHeight - Block height to query at
+ * @returns Parsed ledger state at the given block
+ *
+ * @since 0.8.0
+ * @category queries
+ */
+export async function readStateAt<TLedger>(
+  address: string,
+  provider: PublicDataProvider,
+  ledgerParser: LedgerParser<TLedger>,
+  blockHeight: number,
+): Promise<TLedger> {
+  return runEffectWithLogging(readStateEffect(address, provider, ledgerParser, blockHeight), false);
+}
+
+/**
+ * Read raw (unparsed) contract state without a wallet or deployment.
+ *
+ * @param address - The deployed contract address
+ * @param provider - Public data provider
+ * @returns Raw contract state data
+ *
+ * @since 0.8.0
+ * @category queries
+ */
+export async function readRawState(
+  address: string,
+  provider: PublicDataProvider,
+): Promise<unknown> {
+  return runEffectWithLogging(readRawStateEffect(address, provider), false);
+}
+
+/**
+ * Read raw contract state at a specific block height.
+ *
+ * @param address - The deployed contract address
+ * @param provider - Public data provider
+ * @param blockHeight - Block height to query at
+ * @returns Raw contract state data at the given block
+ *
+ * @since 0.8.0
+ * @category queries
+ */
+export async function readRawStateAt(
+  address: string,
+  provider: PublicDataProvider,
+  blockHeight: number,
+): Promise<unknown> {
+  return runEffectWithLogging(readRawStateEffect(address, provider, blockHeight), false);
+}
+
+// =============================================================================
+// Standalone Contract Factory
+// =============================================================================
+
+/**
+ * Options for creating a standalone contract (without Client).
+ *
+ * Accepts individual providers instead of requiring Client to assemble them.
+ * Use the same module-loading options as `LoadContractOptions`.
+ *
+ * @typeParam M - The contract module type (for type inference)
+ *
+ * @since 0.6.0
+ * @category model
+ */
+export interface CreateContractOptions<M extends ContractModule = ContractModule> extends LoadContractOptions<M> {
+  /** Wallet provider for signing/balancing transactions */
+  walletProvider: WalletProvider;
+  /** Midnight provider for submitting transactions */
+  midnightProvider: MidnightProvider;
+  /** Public data provider for querying state */
+  publicDataProvider: PublicDataProvider;
+  /** Private state provider */
+  privateStateProvider: PrivateStateProvider;
+  /** Proof server URL */
+  proofServerUrl: string;
+  /** Enable logging (default: true) */
+  logging?: boolean;
+}
+
+/**
+ * Create a contract handle from individual providers (standalone, no Client needed).
+ *
+ * This is the Effect source of truth for standalone contract creation.
+ *
+ * @internal Effect source of truth
+ */
+function createContractEffect<M extends ContractModule>(
+  options: CreateContractOptions<M>,
+): Effect.Effect<LoadedContract<InferLedger<M>, InferCircuits<M>, InferActions<M>>, ContractError> {
+  const {
+    walletProvider,
+    midnightProvider,
+    publicDataProvider,
+    privateStateProvider,
+    proofServerUrl,
+    logging = true,
+    ...loadOptions
+  } = options;
+
+  const baseProviders = {
+    walletProvider,
+    midnightProvider,
+    publicDataProvider,
+    privateStateProvider,
+    networkConfig: { proofServer: proofServerUrl },
+  };
+
+  return loadContractModuleEffect(
+    loadOptions as LoadContractOptions,
+    { proofServer: proofServerUrl },
+    baseProviders,
+    logging,
+  ).pipe(Effect.map((data) => createLoadedContractHandle(data) as LoadedContract<InferLedger<M>, InferCircuits<M>, InferActions<M>>));
+}
+
+/**
+ * Create a contract from individual providers without needing a Client.
+ *
+ * This enables the "Delete-Client Test" — building a complete dApp by wiring
+ * module factories directly:
+ *
+ * @example
+ * ```typescript
+ * import * as Wallet from '@no-witness-labs/midday-sdk/Wallet';
+ * import * as Config from '@no-witness-labs/midday-sdk/Config';
+ * import * as Contract from '@no-witness-labs/midday-sdk/Contract';
+ * import * as PrivateState from '@no-witness-labs/midday-sdk/PrivateState';
+ *
+ * const ctx = await Wallet.init(seed, networkConfig);
+ * await Wallet.waitForSync(ctx);
+ * const { walletProvider, midnightProvider } = Wallet.providers(ctx);
+ * const publicDataProvider = Config.publicDataProvider(networkConfig);
+ * const privateStateProvider = PrivateState.inMemoryProvider();
+ *
+ * const contract = await Contract.create({
+ *   path: './contracts/counter',
+ *   walletProvider,
+ *   midnightProvider,
+ *   publicDataProvider,
+ *   privateStateProvider,
+ *   proofServerUrl: networkConfig.proofServer,
+ * });
+ *
+ * await contract.deploy();
+ * await contract.call('increment');
+ * ```
+ *
+ * @since 0.6.0
+ * @category constructors
+ */
+export async function create<M extends ContractModule>(
+  options: CreateContractOptions<M>,
+): Promise<LoadedContract<InferLedger<M>, InferCircuits<M>, InferActions<M>>> {
+  const logging = options.logging ?? true;
+  return runEffectWithLogging(createContractEffect(options), logging);
+}
+
+// =============================================================================
+// Contract Handle Factories
+// =============================================================================
+
+/**
+ * Create a LoadedContract handle from loaded data.
  *
  * @internal Used by Client to create contract handles
  */
-export function createContractHandle(initialData: ContractData): Contract {
-  let data: ContractData = initialData;
+export function createLoadedContractHandle(data: LoadedContractData): LoadedContract {
+  return {
+    module: data.module,
+    providers: data.providers,
 
-  const handle: Contract = {
-    get state(): ContractState {
-      return data.address !== undefined ? 'deployed' : 'loaded';
-    },
-
-    get address() {
-      return data.address;
-    },
-    get module() {
-      return data.module;
-    },
-    get providers() {
-      return data.providers;
-    },
-
-    // Lifecycle methods
     deploy: async (options) => {
-      const newData = await runEffectWithLogging(deployContractEffect(data, options), data.logging);
-      data = newData;
+      const deployed = await runEffectWithLogging(deployContractEffect(data, options), data.logging);
+      return createDeployedContractHandle(deployed);
     },
     join: async (address, options) => {
-      const newData = await runEffectWithLogging(joinContractEffect(data, address, options), data.logging);
-      data = newData;
+      const deployed = await runEffectWithLogging(joinContractEffect(data, address, options), data.logging);
+      return createDeployedContractHandle(deployed);
     },
 
-    // Contract methods
+    effect: {
+      deploy: (options) =>
+        deployContractEffect(data, options).pipe(
+          Effect.map(createDeployedContractHandle),
+        ),
+      join: (address, options) =>
+        joinContractEffect(data, address, options).pipe(
+          Effect.map(createDeployedContractHandle),
+        ),
+    },
+  };
+}
+
+/**
+ * Create a DeployedContract handle from deployed data.
+ *
+ * Builds the typed `actions` proxy from the deployed contract instance's `callTx` map.
+ *
+ * @internal
+ */
+export function createDeployedContractHandle(data: DeployedContractData): DeployedContract {
+  // Build actions proxy — each key in callTx becomes a direct method
+  const actions: Record<string, (...args: unknown[]) => Promise<CallResult>> = {};
+  const effectActions: Record<string, (...args: unknown[]) => Effect.Effect<CallResult, ContractError>> = {};
+
+  for (const key of Object.keys(data.instance.callTx)) {
+    actions[key] = (...args) =>
+      runEffectWithLogging(callContractEffect(data, key, ...args), data.logging);
+    effectActions[key] = (...args) =>
+      callContractEffect(data, key, ...args);
+  }
+
+  return {
+    address: data.address,
+    module: data.module,
+    providers: data.providers,
+
+    actions,
+
     call: (action, ...args) =>
       runEffectWithLogging(callContractEffect(data, action, ...args), data.logging),
     getState: () =>
@@ -719,16 +1100,8 @@ export function createContractHandle(initialData: ContractData): Contract {
     ledgerStateAt: (blockHeight) =>
       runEffectWithLogging(ledgerStateAtEffect(data, blockHeight), data.logging),
 
-    // Effect API
     effect: {
-      deploy: (options) =>
-        deployContractEffect(data, options).pipe(
-          Effect.tap((newData) => Effect.sync(() => { data = newData; })),
-        ),
-      join: (address, options) =>
-        joinContractEffect(data, address, options).pipe(
-          Effect.tap((newData) => Effect.sync(() => { data = newData; })),
-        ),
+      actions: effectActions,
       call: (action, ...args) => callContractEffect(data, action, ...args),
       getState: () => contractStateEffect(data),
       getStateAt: (blockHeight) => contractStateAtEffect(data, blockHeight),
@@ -736,8 +1109,42 @@ export function createContractHandle(initialData: ContractData): Contract {
       ledgerStateAt: (blockHeight) => ledgerStateAtEffect(data, blockHeight),
     },
   };
+}
 
-  return handle;
+/**
+ * @deprecated Use `createLoadedContractHandle` instead.
+ * @internal
+ */
+export const createContractHandle = createLoadedContractHandle;
+
+/**
+ * Create a ReadonlyContract handle from a ledger parser and provider.
+ *
+ * @internal Used by Client.createReadonly().loadContract()
+ */
+export function createReadonlyContractHandle<TLedger>(
+  ledgerParser: LedgerParser<TLedger>,
+  provider: PublicDataProvider,
+): ReadonlyContract<TLedger> {
+  return {
+    ledgerParser,
+
+    readState: (address) =>
+      runEffectWithLogging(readStateEffect(address, provider, ledgerParser), false),
+    readStateAt: (address, blockHeight) =>
+      runEffectWithLogging(readStateEffect(address, provider, ledgerParser, blockHeight), false),
+    readRawState: (address) =>
+      runEffectWithLogging(readRawStateEffect(address, provider), false),
+    readRawStateAt: (address, blockHeight) =>
+      runEffectWithLogging(readRawStateEffect(address, provider, blockHeight), false),
+
+    effect: {
+      readState: (address) => readStateEffect(address, provider, ledgerParser),
+      readStateAt: (address, blockHeight) => readStateEffect(address, provider, ledgerParser, blockHeight),
+      readRawState: (address) => readRawStateEffect(address, provider),
+      readRawStateAt: (address, blockHeight) => readRawStateEffect(address, provider, blockHeight),
+    },
+  };
 }
 
 // =============================================================================
@@ -828,3 +1235,19 @@ export async function loadContractModuleFromUrl<T = ContractModule>(
 
   return { module, zkConfig };
 }
+
+// =============================================================================
+// Effect Namespace
+// =============================================================================
+
+/**
+ * Raw Effect APIs for advanced users who want to compose Effects.
+ *
+ * @since 0.6.0
+ * @category effect
+ */
+export const effect = {
+  create: createContractEffect,
+  readState: readStateEffect,
+  readRawState: readRawStateEffect,
+};

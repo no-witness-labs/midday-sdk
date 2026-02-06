@@ -58,7 +58,7 @@ describe('Contract E2E Tests', () => {
 
   describe('Counter Contract Lifecycle', () => {
     let client: Midday.Client.MiddayClient;
-    let contract: Midday.Contract.Contract;
+    let contract: Midday.Contract.DeployedContract;
     let contractAddress: string;
     let setupFailed = false;
 
@@ -73,15 +73,15 @@ describe('Contract E2E Tests', () => {
         });
 
         // Load and deploy contract with retry — proof server can be flaky
-        contract = await client.loadContract({
+        const loaded = await client.loadContract({
           module: CounterContract,
           zkConfig: Midday.ZkConfig.fromPath(COUNTER_CONTRACT_DIR),
           privateStateId: 'counter-e2e-test',
         });
 
-        await contract.deploy();
+        contract = await loaded.deploy();
 
-        contractAddress = contract.address!;
+        contractAddress = contract.address;
       } catch (err) {
         setupFailed = true;
         throw err;
@@ -95,14 +95,14 @@ describe('Contract E2E Tests', () => {
     }, 30_000);
 
     it('should have deployed the counter contract', () => {
-      expect(contract.state).toBe('deployed');
       expect(contractAddress).toMatch(/^[0-9a-f]+$/i);
     });
 
-    it('should call increment() and verify state', { timeout: 120_000 }, async () => {
+    it('should call increment() via typed actions and verify state', { timeout: 120_000 }, async () => {
       if (setupFailed) return; // skip gracefully if deploy failed
 
-      const result = await contract.call('increment');
+      // Type-safe: contract.actions.increment() has no args, inferred from module
+      const result = await contract.actions.increment();
 
       expect(result).toBeDefined();
       expect(result.txHash).toBeDefined();
@@ -116,6 +116,7 @@ describe('Contract E2E Tests', () => {
     it('should call increment() again and verify state increased', { timeout: 120_000 }, async () => {
       if (setupFailed) return;
 
+      // Untyped fallback still works
       const result = await contract.call('increment');
 
       expect(result).toBeDefined();
@@ -136,20 +137,15 @@ describe('Contract E2E Tests', () => {
         privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
         logging: true,
       }, async (client2) => {
-        const joinedContract = await client2.loadContract({
+        const loaded = await client2.loadContract({
           module: CounterContract,
           zkConfig: Midday.ZkConfig.fromPath(COUNTER_CONTRACT_DIR),
           privateStateId: 'counter-e2e-test-client2',
         });
 
-        // Verify it's in loaded state
-        expect(joinedContract.state).toBe('loaded');
+        // Join the deployed contract — returns a DeployedContract
+        const joinedContract = await loaded.join(contractAddress);
 
-        // Join the deployed contract (transitions to "deployed" state)
-        await joinedContract.join(contractAddress);
-
-        // Verify it's now deployed
-        expect(joinedContract.state).toBe('deployed');
         expect(joinedContract.address).toBe(contractAddress);
 
         // Read state via joined contract handle
@@ -158,10 +154,10 @@ describe('Contract E2E Tests', () => {
       });
     });
 
-    it('should call decrement() and verify state', { timeout: 120_000 }, async () => {
+    it('should call decrement() via typed actions and verify state', { timeout: 120_000 }, async () => {
       if (setupFailed) return;
 
-      const result = await contract.call('decrement');
+      const result = await contract.actions.decrement();
 
       expect(result).toBeDefined();
       expect(result.txHash).toBeDefined();

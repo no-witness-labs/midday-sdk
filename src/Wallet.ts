@@ -211,8 +211,163 @@ export interface WalletProviders {
 }
 
 // =============================================================================
+// Types — Unified Wallet
+// =============================================================================
+
+/**
+ * Wallet balance across all account types.
+ *
+ * @since 0.7.0
+ * @category model
+ */
+export interface WalletBalance {
+  /** Shielded (private) balances by token type */
+  readonly shielded: Record<string, bigint>;
+  /** Unshielded (public) balances by token type */
+  readonly unshielded: Record<string, bigint>;
+  /** Dust balance */
+  readonly dust: bigint;
+}
+
+/**
+ * A connected wallet that can sign, balance, and submit transactions.
+ *
+ * Created via `Wallet.fromSeed()` (server/CLI) or `Wallet.fromBrowser()` (Lace extension).
+ * Both sources produce the same interface — the source is just how you got the wallet.
+ *
+ * @example
+ * ```typescript
+ * // From seed (server/CLI)
+ * const wallet = await Midday.Wallet.fromSeed(seed, networkConfig);
+ *
+ * // From browser extension
+ * const wallet = await Midday.Wallet.fromBrowser('testnet');
+ *
+ * // Same interface regardless of source
+ * const balance = await wallet.getBalance();
+ * const { walletProvider, midnightProvider } = wallet.providers();
+ * await wallet.close();
+ * ```
+ *
+ * @since 0.7.0
+ * @category model
+ */
+export interface ConnectedWallet {
+  /** Discriminator for `MidnightWallet` union */
+  readonly type: 'connected';
+  /** How this wallet was created */
+  readonly source: 'seed' | 'browser';
+  /** Primary wallet address */
+  readonly address: string;
+
+  /** Get current wallet balance across all account types. */
+  getBalance(): Promise<WalletBalance>;
+  /** Get WalletProvider and MidnightProvider for contract operations. */
+  providers(): WalletProviders;
+  /** Close wallet and release resources. */
+  close(): Promise<void>;
+  /** Support `await using wallet = await Wallet.fromSeed(...)` */
+  [Symbol.asyncDispose](): Promise<void>;
+
+  /** Effect versions of wallet operations. */
+  readonly effect: {
+    getBalance(): Effect.Effect<WalletBalance, WalletError>;
+    providers(): Effect.Effect<WalletProviders, WalletError>;
+    close(): Effect.Effect<void, WalletError>;
+  };
+}
+
+/**
+ * A read-only wallet — address only, no signing capability.
+ *
+ * Created via `Wallet.fromAddress()`. Useful for querying contract state
+ * or deriving addresses without needing private keys.
+ *
+ * @since 0.7.0
+ * @category model
+ */
+export interface ReadonlyWallet {
+  /** Discriminator for `MidnightWallet` union */
+  readonly type: 'readonly';
+  /** How this wallet was created */
+  readonly source: 'address';
+  /** Wallet address */
+  readonly address: string;
+}
+
+/**
+ * Union type for any wallet (connected or read-only).
+ *
+ * Use `wallet.type` to discriminate:
+ * ```typescript
+ * if (wallet.type === 'connected') {
+ *   const balance = await wallet.getBalance();
+ * }
+ * ```
+ *
+ * @since 0.7.0
+ * @category model
+ */
+export type MidnightWallet = ConnectedWallet | ReadonlyWallet;
+
+/**
+ * Options for creating a wallet from seed.
+ *
+ * @since 0.7.0
+ * @category model
+ */
+export interface FromSeedOptions {
+  /** Whether to wait for wallet sync before returning (default: true) */
+  sync?: boolean;
+}
+
+// =============================================================================
 // Internal Effects — Seed Wallet
 // =============================================================================
+
+/**
+ * Create WalletProvider and MidnightProvider from a seed wallet context.
+ *
+ * This is the seed-wallet counterpart to `createWalletProviders` (browser wallet).
+ * Enables standalone usage without Client.
+ *
+ * @internal Effect source of truth
+ */
+function providersEffect(walletContext: WalletContext): Effect.Effect<WalletProviders, WalletError> {
+  return Effect.try({
+    try: () => {
+      const walletProvider: WalletProvider = {
+        getCoinPublicKey: () =>
+          walletContext.shieldedSecretKeys.coinPublicKey as unknown as ledger.CoinPublicKey,
+        getEncryptionPublicKey: () =>
+          walletContext.shieldedSecretKeys.encryptionPublicKey as unknown as ledger.EncPublicKey,
+        balanceTx: async (tx: UnboundTransaction, ttl?: Date): Promise<ledger.FinalizedTransaction> => {
+          const txTtl = ttl ?? new Date(Date.now() + 30 * 60 * 1000);
+          const recipe = await walletContext.wallet.balanceUnboundTransaction(
+            tx,
+            {
+              shieldedSecretKeys: walletContext.shieldedSecretKeys,
+              dustSecretKey: walletContext.dustSecretKey,
+            },
+            { ttl: txTtl },
+          );
+          return walletContext.wallet.finalizeRecipe(recipe);
+        },
+      };
+
+      const midnightProvider: MidnightProvider = {
+        submitTx: async (tx: ledger.FinalizedTransaction) => walletContext.wallet.submitTransaction(tx),
+      };
+
+      return { walletProvider, midnightProvider };
+    },
+    catch: (cause) =>
+      new WalletError({
+        cause,
+        message: `Failed to create wallet providers: ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
+}
 
 function closeEffect(walletContext: WalletContext): Effect.Effect<void, WalletError> {
   return Effect.tryPromise({
@@ -490,18 +645,218 @@ function submitTxEffect(
 }
 
 // =============================================================================
+// Internal — Unified Wallet
+// =============================================================================
+
+/** @internal */
+type WalletBackend =
+  | { readonly type: 'seed'; readonly context: WalletContext }
+  | { readonly type: 'browser'; readonly connection: WalletConnection };
+
+function getBalanceFromSeedEffect(walletContext: WalletContext): Effect.Effect<WalletBalance, WalletError> {
+  return Effect.tryPromise({
+    try: async () => {
+      const state = await Rx.firstValueFrom(walletContext.wallet.state());
+      return {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        shielded: ((state as any).shielded?.balances as Record<string, bigint>) ?? {},
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        unshielded: ((state as any).unshielded?.balances as Record<string, bigint>) ?? {},
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        dust: ((state as any).dust?.walletBalance?.(new Date()) as bigint) ?? 0n,
+      };
+    },
+    catch: (cause) =>
+      new WalletError({
+        cause,
+        message: `Failed to get balance: ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
+}
+
+function getBalanceFromBrowserEffect(connection: WalletConnection): Effect.Effect<WalletBalance, WalletError> {
+  return Effect.tryPromise({
+    try: async () => {
+      const [shielded, unshielded, dustInfo] = await Promise.all([
+        connection.wallet.getShieldedBalances(),
+        connection.wallet.getUnshieldedBalances(),
+        connection.wallet.getDustBalance(),
+      ]);
+      return {
+        shielded,
+        unshielded,
+        dust: dustInfo.balance,
+      };
+    },
+    catch: (cause) =>
+      new WalletError({
+        cause,
+        message: `Failed to get balance: ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
+}
+
+function fromSeedEffect(
+  seed: string,
+  networkConfig: NetworkConfig,
+  options?: FromSeedOptions,
+): Effect.Effect<ConnectedWallet, WalletError> {
+  return Effect.gen(function* () {
+    const walletContext = yield* initEffect(seed, networkConfig);
+
+    if (options?.sync !== false) {
+      yield* waitForSyncEffect(walletContext);
+    }
+
+    const address = walletContext.unshieldedKeystore.getBech32Address().asString();
+    const backend: WalletBackend = { type: 'seed', context: walletContext };
+
+    return createConnectedWalletHandle(backend, address);
+  });
+}
+
+function fromBrowserEffect(networkId: string = 'testnet'): Effect.Effect<ConnectedWallet, WalletError> {
+  return Effect.gen(function* () {
+    const connection = yield* connectEffect(networkId);
+    const address = connection.addresses.shieldedAddress;
+    const backend: WalletBackend = { type: 'browser', connection };
+
+    return createConnectedWalletHandle(backend, address);
+  });
+}
+
+function createConnectedWalletHandle(backend: WalletBackend, address: string): ConnectedWallet {
+  const getBalanceEff = (): Effect.Effect<WalletBalance, WalletError> =>
+    backend.type === 'seed'
+      ? getBalanceFromSeedEffect(backend.context)
+      : getBalanceFromBrowserEffect(backend.connection);
+
+  const providersEff = (): Effect.Effect<WalletProviders, WalletError> =>
+    backend.type === 'seed'
+      ? providersEffect(backend.context)
+      : Effect.try({
+          try: () => createWalletProviders(backend.connection.wallet, backend.connection.addresses),
+          catch: (cause) =>
+            new WalletError({
+              cause,
+              message: `Failed to create wallet providers: ${cause instanceof Error ? cause.message : String(cause)}`,
+            }),
+        });
+
+  const closeEff = (): Effect.Effect<void, WalletError> =>
+    backend.type === 'seed' ? closeEffect(backend.context) : Effect.void;
+
+  return {
+    type: 'connected',
+    source: backend.type === 'seed' ? 'seed' : 'browser',
+    address,
+
+    getBalance: () => runEffectPromise(getBalanceEff()),
+    providers: () => runEffect(providersEff()),
+    close: () => runEffectPromise(closeEff()),
+    [Symbol.asyncDispose]: () => runEffectPromise(closeEff()),
+
+    effect: {
+      getBalance: getBalanceEff,
+      providers: providersEff,
+      close: closeEff,
+    },
+  };
+}
+
+// =============================================================================
+// Promise API — Unified Wallet
+// =============================================================================
+
+/**
+ * Create a connected wallet from an HD seed.
+ *
+ * Initializes the wallet, optionally syncs with the network (default: true),
+ * and returns a `ConnectedWallet` handle.
+ *
+ * @param seed - 64-character hex seed
+ * @param networkConfig - Network configuration
+ * @param options - Options (sync: whether to wait for sync, default true)
+ * @returns Connected wallet handle
+ * @throws {WalletError} When initialization or sync fails
+ *
+ * @example
+ * ```typescript
+ * const wallet = await Midday.Wallet.fromSeed(seed, networkConfig);
+ * const balance = await wallet.getBalance();
+ * const { walletProvider, midnightProvider } = wallet.providers();
+ * await wallet.close();
+ * ```
+ *
+ * @since 0.7.0
+ * @category constructors
+ */
+export async function fromSeed(
+  seed: string,
+  networkConfig: NetworkConfig,
+  options?: FromSeedOptions,
+): Promise<ConnectedWallet> {
+  return runEffectPromise(fromSeedEffect(seed, networkConfig, options));
+}
+
+/**
+ * Create a connected wallet from the Lace browser extension.
+ *
+ * Connects to the Lace wallet and returns a `ConnectedWallet` handle
+ * with the same interface as `fromSeed`.
+ *
+ * @param networkId - Network to connect to (default: 'testnet')
+ * @returns Connected wallet handle
+ * @throws {WalletError} When connection fails or wallet not found
+ *
+ * @example
+ * ```typescript
+ * const wallet = await Midday.Wallet.fromBrowser('testnet');
+ * const balance = await wallet.getBalance();
+ * const { walletProvider, midnightProvider } = wallet.providers();
+ * ```
+ *
+ * @since 0.7.0
+ * @category constructors
+ */
+export async function fromBrowser(networkId: string = 'testnet'): Promise<ConnectedWallet> {
+  return runEffectPromise(fromBrowserEffect(networkId));
+}
+
+/**
+ * Create a read-only wallet from an address string.
+ *
+ * Useful for querying contract state or passing an address without needing keys.
+ *
+ * @param address - Wallet address
+ * @returns Read-only wallet handle
+ *
+ * @example
+ * ```typescript
+ * const wallet = Midday.Wallet.fromAddress('midnight1...');
+ * console.log(wallet.address);
+ * ```
+ *
+ * @since 0.7.0
+ * @category constructors
+ */
+export function fromAddress(address: string): ReadonlyWallet {
+  return {
+    type: 'readonly',
+    source: 'address',
+    address,
+  };
+}
+
+// =============================================================================
 // Promise API — Seed Wallet
 // =============================================================================
 
 /**
  * Initialize wallet from HD seed.
  *
+ * @deprecated Use `Wallet.fromSeed(seed, networkConfig)` instead.
  * @throws {WalletError} When initialization fails
- *
- * @example
- * ```typescript
- * const walletContext = await Midday.Wallet.init(seed, networkConfig);
- * ```
  *
  * @since 0.2.0
  * @category constructors
@@ -513,6 +868,7 @@ export async function init(seed: string, networkConfig: NetworkConfig): Promise<
 /**
  * Wait for wallet to sync with the network.
  *
+ * @deprecated Use `Wallet.fromSeed(seed, networkConfig)` which syncs automatically.
  * @throws {WalletError} When sync fails
  *
  * @since 0.2.0
@@ -537,6 +893,7 @@ export function deriveAddress(seed: string, networkId: string): string {
 /**
  * Stop wallet sync and release WebSocket connections.
  *
+ * @deprecated Use `wallet.close()` on the `ConnectedWallet` handle instead.
  * @throws {WalletError} When close fails
  *
  * @since 0.2.9
@@ -544,6 +901,18 @@ export function deriveAddress(seed: string, networkId: string): string {
  */
 export async function close(walletContext: WalletContext): Promise<void> {
   return runEffectPromise(closeEffect(walletContext));
+}
+
+/**
+ * Create WalletProvider and MidnightProvider from a seed wallet context.
+ *
+ * @deprecated Use `wallet.providers()` on the `ConnectedWallet` handle instead.
+ *
+ * @since 0.6.0
+ * @category constructors
+ */
+export function providers(walletContext: WalletContext): WalletProviders {
+  return runEffect(providersEffect(walletContext));
 }
 
 // =============================================================================
@@ -563,14 +932,8 @@ export function isWalletAvailable(): boolean {
 /**
  * Connect to the Lace wallet in browser.
  *
- * @param networkId - Network to connect to (default: 'testnet')
- * @returns WalletConnection with wallet API and keys
+ * @deprecated Use `Wallet.fromBrowser(networkId)` instead.
  * @throws {WalletError} When connection fails
- *
- * @example
- * ```typescript
- * const connection = await Midday.Wallet.connectWallet('testnet');
- * ```
  *
  * @since 0.2.0
  * @category browser
@@ -597,6 +960,8 @@ export async function getWalletProvingProvider(
 /**
  * Disconnect from the wallet (if supported).
  *
+ * @deprecated Use `wallet.close()` on the `ConnectedWallet` handle instead.
+ *
  * @since 0.2.0
  * @category browser
  */
@@ -607,20 +972,7 @@ export async function disconnectWallet(): Promise<void> {
 /**
  * Create providers from a connected wallet (v4 API).
  *
- * These providers use the wallet extension to balance and submit transactions.
- *
- * @param wallet - Connected wallet API from DAppConnector v4
- * @param addresses - Shielded addresses from wallet
- * @returns WalletProvider and MidnightProvider
- *
- * @example
- * ```typescript
- * const connection = await Midday.Wallet.connectWallet('testnet');
- * const { walletProvider, midnightProvider } = Midday.Wallet.createWalletProviders(
- *   connection.wallet,
- *   connection.addresses,
- * );
- * ```
+ * @deprecated Use `wallet.providers()` on the `ConnectedWallet` handle instead.
  *
  * @since 0.2.0
  * @category browser
@@ -656,12 +1008,16 @@ export function createWalletProviders(wallet: ConnectedAPI, addresses: ShieldedA
  * @category effect
  */
 export const effect = {
-  // Seed wallet
+  // Unified wallet factories
+  fromSeed: fromSeedEffect,
+  fromBrowser: fromBrowserEffect,
+  // Seed wallet (legacy — prefer fromSeed)
   init: initEffect,
   waitForSync: waitForSyncEffect,
   deriveAddress: deriveAddressEffect,
   close: closeEffect,
-  // Browser wallet connector
+  providers: providersEffect,
+  // Browser wallet connector (legacy — prefer fromBrowser)
   connect: connectEffect,
   isAvailable: isAvailableEffect,
   disconnect: disconnectEffect,
@@ -686,6 +1042,7 @@ export interface WalletServiceImpl {
   readonly waitForSync: (walletContext: WalletContext) => Effect.Effect<void, WalletError>;
   readonly close: (walletContext: WalletContext) => Effect.Effect<void, WalletError>;
   readonly deriveAddress: (seed: string, networkId: string) => Effect.Effect<string, WalletError>;
+  readonly providers: (walletContext: WalletContext) => Effect.Effect<WalletProviders, WalletError>;
 }
 
 /**
@@ -707,6 +1064,7 @@ export const WalletLive: Layer.Layer<WalletService> = Layer.succeed(WalletServic
   waitForSync: waitForSyncEffect,
   close: closeEffect,
   deriveAddress: deriveAddressEffect,
+  providers: providersEffect,
 });
 
 // =============================================================================

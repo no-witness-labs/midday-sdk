@@ -27,7 +27,6 @@
  */
 
 import { Context, Data, Effect, Layer, Scope } from 'effect';
-import * as ledger from '@midnight-ntwrk/ledger-v7';
 import { setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
 import type {
@@ -35,24 +34,27 @@ import type {
   MidnightProvider,
   ZKConfigProvider,
   PrivateStateProvider,
-  UnboundTransaction,
 } from '@midnight-ntwrk/midnight-js-types';
 
 import * as Config from './Config.js';
 import * as Wallet from './Wallet.js';
 import type { NetworkConfig } from './Config.js';
 import type { WalletContext } from './Wallet.js';
-import type { WalletConnection, WalletProviders } from './Wallet.js';
+import type { WalletConnection, WalletProviders, ConnectedWallet } from './Wallet.js';
 import type {
-  Contract,
+  LoadedContract,
   ContractModule,
   InferLedger,
   InferCircuits,
+  InferActions,
   LoadContractOptions,
-  ContractData,
+  LoadedContractData,
   FinalizedTxData,
+  PublicDataProvider,
+  LedgerParser,
+  ReadonlyContract,
 } from './Contract.js';
-import { loadContractModuleEffect, createContractHandle } from './Contract.js';
+import { loadContractModuleEffect, createLoadedContractHandle, createReadonlyContractHandle } from './Contract.js';
 import { runEffectWithLogging } from './Runtime.js';
 
 // =============================================================================
@@ -131,13 +133,32 @@ export interface ClientConfig {
   network?: string;
   /** Custom network configuration (overrides network preset) */
   networkConfig?: NetworkConfig;
-  /** Wallet seed (required for non-local networks) */
+  /** Pre-created wallet (from Wallet.fromSeed or Wallet.fromBrowser) */
+  wallet?: ConnectedWallet;
+  /** Wallet seed (required for non-local networks). Ignored if `wallet` is provided. */
   seed?: string;
   /** Private state provider (required) */
   privateStateProvider: PrivateStateProvider;
   /** Storage configuration */
   storage?: StorageConfig;
   /** Enable logging (default: true) */
+  logging?: boolean;
+}
+
+/**
+ * Configuration for creating a read-only client.
+ *
+ * Only requires network configuration — no wallet, seed, or private state needed.
+ *
+ * @since 0.8.0
+ * @category model
+ */
+export interface ReadonlyClientConfig {
+  /** Network to connect to (default: 'local') */
+  network?: string;
+  /** Custom network configuration (overrides network preset) */
+  networkConfig?: NetworkConfig;
+  /** Enable logging (default: false) */
   logging?: boolean;
 }
 
@@ -151,6 +172,7 @@ export interface ClientConfig {
  */
 interface ClientData {
   readonly wallet: WalletContext | null;
+  readonly connectedWallet: ConnectedWallet | null;
   readonly networkConfig: NetworkConfig;
   readonly providers: BaseProviders;
   readonly logging: boolean;
@@ -159,6 +181,44 @@ interface ClientData {
 // =============================================================================
 // Public Handle Interfaces
 // =============================================================================
+
+/**
+ * A read-only Midnight client for querying contract state.
+ *
+ * No wallet, proof server, or private state required. Created via
+ * `Client.createReadonly()`. Ideal for dashboards, explorers, and
+ * monitoring tools.
+ *
+ * @since 0.8.0
+ * @category model
+ */
+export interface ReadonlyClient {
+  /** Network configuration */
+  readonly networkConfig: NetworkConfig;
+  /** Public data provider (for advanced use) */
+  readonly provider: PublicDataProvider;
+
+  /**
+   * Load a contract module for read-only state queries.
+   *
+   * Only requires the contract module (for its `ledger` parser). No wallet,
+   * proof server, or private state needed.
+   *
+   * @typeParam M - Contract module type (inferred from options.module)
+   * @returns A `ReadonlyContract` handle with `readState()` and related methods.
+   *
+   * @example
+   * ```typescript
+   * const reader = Client.createReadonly({ networkConfig });
+   * const counter = reader.loadContract({ module: CounterContract });
+   * const state = await counter.readState(address);
+   * console.log(state.counter); // 42n
+   * ```
+   */
+  loadContract<M extends ContractModule>(
+    options: { module: M },
+  ): ReadonlyContract<InferLedger<M>>;
+}
 
 /**
  * A Midnight client handle with convenience methods.
@@ -175,14 +235,14 @@ export interface MiddayClient {
   readonly wallet: WalletContext | null;
 
   /**
-   * Load a contract module. Returns a Contract in "loaded" state.
-   * Call `deploy()` or `join()` on it to connect to the network.
+   * Load a contract module. Returns a `LoadedContract` —
+   * call `deploy()` or `join()` on it to get a `DeployedContract`.
    *
    * @typeParam M - Contract module type (inferred from options.module)
    */
   loadContract<M extends ContractModule>(
     options: LoadContractOptions<M>,
-  ): Promise<Contract<InferLedger<M>, InferCircuits<M>>>;
+  ): Promise<LoadedContract<InferLedger<M>, InferCircuits<M>, InferActions<M>>>;
 
   /** Wait for a transaction to be finalized. */
   waitForTx(txHash: string): Promise<FinalizedTxData>;
@@ -205,7 +265,7 @@ export interface MiddayClient {
   readonly effect: {
     loadContract<M extends ContractModule>(
       options: LoadContractOptions<M>,
-    ): Effect.Effect<Contract<InferLedger<M>, InferCircuits<M>>, ClientError>;
+    ): Effect.Effect<LoadedContract<InferLedger<M>, InferCircuits<M>, InferActions<M>>, ClientError>;
     waitForTx(txHash: string): Effect.Effect<FinalizedTxData, ClientError>;
     close(): Effect.Effect<void, ClientError>;
   };
@@ -215,39 +275,21 @@ export interface MiddayClient {
 // Provider Factory Functions (absorbed from Providers module)
 // =============================================================================
 
+// =============================================================================
+// Provider Factory Functions — delegated to module factories
+// =============================================================================
+
 function createBaseProvidersEffect(
   walletContext: WalletContext,
   options: CreateBaseProvidersOptions,
 ): Effect.Effect<BaseProviders, ClientError> {
-  return Effect.try({
-    try: () => {
+  return Wallet.effect.providers(walletContext).pipe(
+    Effect.map(({ walletProvider, midnightProvider }) => {
       const { networkConfig, privateStateProvider } = options;
 
       setNetworkId(networkConfig.networkId as 'undeployed');
 
-      const walletProvider: WalletProvider = {
-        getCoinPublicKey: () => walletContext.shieldedSecretKeys.coinPublicKey as unknown as ledger.CoinPublicKey,
-        getEncryptionPublicKey: () =>
-          walletContext.shieldedSecretKeys.encryptionPublicKey as unknown as ledger.EncPublicKey,
-        balanceTx: async (tx: UnboundTransaction, ttl?: Date): Promise<ledger.FinalizedTransaction> => {
-          const txTtl = ttl ?? new Date(Date.now() + 30 * 60 * 1000);
-          const recipe = await walletContext.wallet.balanceUnboundTransaction(
-            tx,
-            {
-              shieldedSecretKeys: walletContext.shieldedSecretKeys,
-              dustSecretKey: walletContext.dustSecretKey,
-            },
-            { ttl: txTtl },
-          );
-          return walletContext.wallet.finalizeRecipe(recipe);
-        },
-      };
-
-      const midnightProvider: MidnightProvider = {
-        submitTx: async (tx: ledger.FinalizedTransaction) => walletContext.wallet.submitTransaction(tx),
-      };
-
-      const publicDataProvider = indexerPublicDataProvider(networkConfig.indexer, networkConfig.indexerWS);
+      const publicDataProvider = Config.publicDataProvider(networkConfig);
 
       return {
         walletProvider,
@@ -255,43 +297,16 @@ function createBaseProvidersEffect(
         publicDataProvider,
         privateStateProvider,
         networkConfig,
-      };
-    },
-    catch: (cause) =>
-      new ClientError({
-        cause,
-        message: `Failed to create base providers: ${cause instanceof Error ? cause.message : String(cause)}`,
-      }),
-  });
-}
-
-function createBaseFromWalletProvidersEffect(
-  walletProvider: WalletProvider,
-  midnightProvider: MidnightProvider,
-  options: CreateBaseProvidersOptions,
-): Effect.Effect<BaseProviders, ClientError> {
-  return Effect.try({
-    try: () => {
-      const { networkConfig, privateStateProvider } = options;
-
-      setNetworkId(networkConfig.networkId as 'undeployed');
-
-      const publicDataProvider = indexerPublicDataProvider(networkConfig.indexer, networkConfig.indexerWS);
-
-      return {
-        walletProvider,
-        midnightProvider,
-        publicDataProvider,
-        privateStateProvider,
-        networkConfig,
-      };
-    },
-    catch: (cause) =>
-      new ClientError({
-        cause,
-        message: `Failed to create base providers from wallet: ${cause instanceof Error ? cause.message : String(cause)}`,
-      }),
-  });
+      } satisfies BaseProviders;
+    }),
+    Effect.mapError(
+      (cause) =>
+        new ClientError({
+          cause,
+          message: `Failed to create base providers: ${cause instanceof Error ? cause.message : String(cause)}`,
+        }),
+    ),
+  );
 }
 
 // =============================================================================
@@ -303,6 +318,7 @@ function createClientDataEffect(config: ClientConfig): Effect.Effect<ClientData,
     const {
       network = 'local',
       networkConfig: customNetworkConfig,
+      wallet: connectedWallet,
       seed,
       privateStateProvider,
       storage,
@@ -311,12 +327,47 @@ function createClientDataEffect(config: ClientConfig): Effect.Effect<ClientData,
 
     const networkConfig = customNetworkConfig ?? Config.getNetworkConfig(network);
 
+    // Path 1: Pre-created ConnectedWallet
+    if (connectedWallet) {
+      yield* Effect.logDebug('Using pre-created wallet...');
+
+      const { walletProvider, midnightProvider } = yield* connectedWallet.effect.providers().pipe(
+        Effect.mapError(
+          (e) =>
+            new ClientError({
+              cause: e,
+              message: `Failed to get wallet providers: ${e.message}`,
+            }),
+        ),
+      );
+
+      setNetworkId(networkConfig.networkId as 'undeployed');
+      const publicDataProvider = Config.publicDataProvider(networkConfig);
+
+      const providers: BaseProviders = {
+        walletProvider,
+        midnightProvider,
+        publicDataProvider,
+        privateStateProvider,
+        networkConfig,
+      };
+
+      return {
+        wallet: null,
+        connectedWallet,
+        networkConfig,
+        providers,
+        logging,
+      };
+    }
+
+    // Path 2: Legacy seed-based initialization
     const walletSeed = seed ?? (network === 'local' ? Config.DEV_WALLET_SEED : undefined);
     if (!walletSeed) {
       return yield* Effect.fail(
         new ClientError({
           cause: new Error('Missing seed'),
-          message: 'Wallet seed is required for non-local networks. Provide via config.seed.',
+          message: 'Wallet seed is required for non-local networks. Provide via config.seed or config.wallet.',
         }),
       );
     }
@@ -353,6 +404,7 @@ function createClientDataEffect(config: ClientConfig): Effect.Effect<ClientData,
 
     return {
       wallet: walletContext,
+      connectedWallet: null,
       networkConfig,
       providers,
       logging,
@@ -383,21 +435,23 @@ function fromWalletDataEffect(
       connection.addresses,
     );
 
-    const providerOptions: CreateBaseProvidersOptions = {
-      networkConfig,
-      privateStateProvider,
-    };
+    setNetworkId(networkConfig.networkId as 'undeployed');
 
-    const providers = yield* createBaseFromWalletProvidersEffect(
+    const publicDataProvider = Config.publicDataProvider(networkConfig);
+
+    const providers: BaseProviders = {
       walletProvider,
       midnightProvider,
-      providerOptions,
-    );
+      publicDataProvider,
+      privateStateProvider,
+      networkConfig,
+    };
 
     yield* Effect.logDebug('Connected to wallet');
 
     return {
       wallet: null,
+      connectedWallet: null,
       networkConfig,
       providers,
       logging,
@@ -417,7 +471,7 @@ function fromWalletDataEffect(
 function loadContractEffect(
   clientData: ClientData,
   options: LoadContractOptions,
-): Effect.Effect<ContractData, ClientError> {
+): Effect.Effect<LoadedContractData, ClientError> {
   return loadContractModuleEffect(
     options,
     clientData.providers.networkConfig,
@@ -468,6 +522,17 @@ function closeClientEffect(data: ClientData): Effect.Effect<void, ClientError> {
         ),
       );
     }
+    if (data.connectedWallet) {
+      yield* data.connectedWallet.effect.close().pipe(
+        Effect.mapError(
+          (e) =>
+            new ClientError({
+              cause: e,
+              message: `Failed to close wallet: ${e.message}`,
+            }),
+        ),
+      );
+    }
   });
 }
 
@@ -486,7 +551,7 @@ function createClientHandle(data: ClientData): MiddayClient {
         loadContractEffect(data, options),
         data.logging,
       );
-      return createContractHandle(contractData) as Contract<InferLedger<M>, InferCircuits<M>>;
+      return createLoadedContractHandle(contractData) as LoadedContract<InferLedger<M>, InferCircuits<M>, InferActions<M>>;
     },
     waitForTx: (txHash) =>
       runEffectWithLogging(waitForTxEffect(data, txHash), data.logging),
@@ -499,11 +564,24 @@ function createClientHandle(data: ClientData): MiddayClient {
     effect: {
       loadContract: <M extends ContractModule>(options: LoadContractOptions<M>) =>
         loadContractEffect(data, options).pipe(
-          Effect.map((contractData) => createContractHandle(contractData) as Contract<InferLedger<M>, InferCircuits<M>>),
+          Effect.map((contractData) => createLoadedContractHandle(contractData) as LoadedContract<InferLedger<M>, InferCircuits<M>, InferActions<M>>),
         ),
       waitForTx: (txHash) => waitForTxEffect(data, txHash),
       close: () => closeClientEffect(data),
     },
+  };
+}
+
+function createReadonlyClientHandle(
+  networkConfig: NetworkConfig,
+  provider: PublicDataProvider,
+): ReadonlyClient {
+  return {
+    networkConfig,
+    provider,
+
+    loadContract: <M extends ContractModule>(options: { module: M }) =>
+      createReadonlyContractHandle(options.module.ledger, provider) as ReadonlyContract<InferLedger<M>>,
   };
 }
 
@@ -534,6 +612,32 @@ export async function create(config: ClientConfig): Promise<MiddayClient> {
   const logging = config.logging ?? true;
   const data = await runEffectWithLogging(createClientDataEffect(config), logging);
   return createClientHandle(data);
+}
+
+/**
+ * Create a read-only client for querying contract state.
+ *
+ * No wallet, seed, proof server, or private state required — only needs
+ * network configuration (indexer URL). Ideal for dashboards, explorers,
+ * and monitoring tools.
+ *
+ * @example
+ * ```typescript
+ * const reader = await Midday.Client.createReadonly({
+ *   networkConfig: Midday.Config.NETWORKS.local,
+ * });
+ *
+ * const state = await reader.readState(address, CounterContract.ledger);
+ * console.log(state.counter); // 42n
+ * ```
+ *
+ * @since 0.8.0
+ * @category constructors
+ */
+export function createReadonly(config: ReadonlyClientConfig = {}): ReadonlyClient {
+  const networkConfig = config.networkConfig ?? Config.getNetworkConfig(config.network ?? 'local');
+  const provider = Config.publicDataProvider(networkConfig);
+  return createReadonlyClientHandle(networkConfig, provider);
 }
 
 /**
@@ -607,6 +711,9 @@ export const effect = {
     },
   ): Effect.Effect<MiddayClient, ClientError> =>
     fromWalletDataEffect(connection, config).pipe(Effect.map(createClientHandle)),
+
+  createReadonly: (config: ReadonlyClientConfig = {}): ReadonlyClient =>
+    createReadonly(config),
 };
 
 // =============================================================================
