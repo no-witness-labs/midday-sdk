@@ -90,25 +90,20 @@ describe('Witness Contract E2E Tests', () => {
         privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
         logging: true,
       }, async (client) => {
-        const contract = await client.loadContract({
+        const loaded = await client.loadContract({
           module: SecretCounterContract,
           zkConfig: Midday.ZkConfig.fromPath(SECRET_COUNTER_DIR),
           privateStateId: 'secret-counter-init-test',
           witnesses: createWitnesses(SECRET_PASSWORD),
         });
 
-        // Verify it's in loaded state
-        expect(contract.state).toBe('loaded');
+        // Deploy — returns a DeployedContract
+        const contract = await loaded.deploy();
 
-        // Deploy (transitions to "deployed" state)
-        await contract.deploy();
-
-        // Verify deployed
-        expect(contract.state).toBe('deployed');
         expect(contract.address).toMatch(/^[0-9a-f]+$/i);
 
-        // Initialize via contract
-        const initResult = await contract.call('init', PASSWORD_HASH);
+        // Initialize via typed actions
+        const initResult = await contract.actions.init(PASSWORD_HASH);
         expect(initResult.txHash).toBeDefined();
 
         const state = await contract.ledgerState();
@@ -123,20 +118,20 @@ describe('Witness Contract E2E Tests', () => {
         privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
         logging: true,
       }, async (client) => {
-        const contract = await client.loadContract({
+        const loaded = await client.loadContract({
           module: SecretCounterContract,
           zkConfig: Midday.ZkConfig.fromPath(SECRET_COUNTER_DIR),
           privateStateId: 'secret-counter-incr-test',
           witnesses: createWitnesses(SECRET_PASSWORD),
         });
 
-        await contract.deploy();
+        const contract = await loaded.deploy();
 
         // Initialize
-        await contract.call('init', PASSWORD_HASH);
+        await contract.actions.init(PASSWORD_HASH);
 
-        // Increment
-        const incrResult = await contract.call('increment', 5n);
+        // Increment via typed actions
+        const incrResult = await contract.actions.increment(5n);
         expect(incrResult.txHash).toBeDefined();
 
         const state = await contract.ledgerState();
@@ -151,23 +146,23 @@ describe('Witness Contract E2E Tests', () => {
         privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
         logging: true,
       }, async (client) => {
-        const contract = await client.loadContract({
+        const loaded = await client.loadContract({
           module: SecretCounterContract,
           zkConfig: Midday.ZkConfig.fromPath(SECRET_COUNTER_DIR),
           privateStateId: 'secret-counter-decr-test',
           witnesses: createWitnesses(SECRET_PASSWORD),
         });
 
-        await contract.deploy();
+        const contract = await loaded.deploy()
 
         // Initialize
-        await contract.call('init', PASSWORD_HASH);
+        await contract.actions.init(PASSWORD_HASH);
 
         // Increment first to have value > 0
-        await contract.call('increment', 10n);
+        await contract.actions.increment(10n);
 
-        // Decrement
-        const decrResult = await contract.call('decrement', 3n);
+        // Decrement via typed actions
+        const decrResult = await contract.actions.decrement(3n);
         expect(decrResult.txHash).toBeDefined();
 
         const state = await contract.ledgerState();
@@ -191,20 +186,20 @@ describe('Witness Contract E2E Tests', () => {
       });
 
       try {
-        const contract = await correctClient.loadContract({
+        const loaded = await correctClient.loadContract({
           module: SecretCounterContract,
           zkConfig: Midday.ZkConfig.fromPath(SECRET_COUNTER_DIR),
           privateStateId: 'secret-counter-wrong-pw-test',
           witnesses: createWitnesses(SECRET_PASSWORD),
         });
 
-        await contract.deploy();
+        const contract = await loaded.deploy();
         expect(contract.address).toBeDefined();
 
         // Initialize
         await contract.call('init', PASSWORD_HASH);
 
-        const joinedContract = await wrongClient.loadContract({
+        const attackerLoaded = await wrongClient.loadContract({
           module: SecretCounterContract,
           zkConfig: Midday.ZkConfig.fromPath(SECRET_COUNTER_DIR),
           privateStateId: 'secret-counter-wrong-pw-attacker',
@@ -212,7 +207,7 @@ describe('Witness Contract E2E Tests', () => {
         });
 
         // Join the existing contract with wrong password client
-        await joinedContract.join(contract.address!);
+        const joinedContract = await attackerLoaded.join(contract.address);
 
         // Should fail because password doesn't match
         await expect(

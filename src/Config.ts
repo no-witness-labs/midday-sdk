@@ -6,6 +6,7 @@
  */
 
 import { Context } from 'effect';
+import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
 
 // =============================================================================
 // Types
@@ -58,6 +59,30 @@ export function getNetworkConfig(network: string = 'local'): NetworkConfig {
  * Genesis wallet seed for local development (DO NOT use in production)
  */
 export const DEV_WALLET_SEED = '0000000000000000000000000000000000000000000000000000000000000001';
+
+// =============================================================================
+// Provider Factories
+// =============================================================================
+
+/**
+ * Create a PublicDataProvider from network configuration.
+ *
+ * Enables standalone usage without Client — just provide a `NetworkConfig`
+ * and get a provider for querying contract state, watching transactions, etc.
+ *
+ * @example
+ * ```typescript
+ * const config = Midday.Config.getNetworkConfig('local');
+ * const pdp = Midday.Config.publicDataProvider(config);
+ * const state = await pdp.queryContractState(address);
+ * ```
+ *
+ * @since 0.6.0
+ * @category constructors
+ */
+export function publicDataProvider(config: NetworkConfig): ReturnType<typeof indexerPublicDataProvider> {
+  return indexerPublicDataProvider(config.indexer, config.indexerWS);
+}
 
 // =============================================================================
 // Effect DI - Service Definitions
