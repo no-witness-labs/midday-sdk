@@ -1,21 +1,29 @@
 /**
  * Wallet initialization and management for Midnight Network.
  *
- * Handles the three-layer wallet system: shielded, dust, and unshielded wallets.
+ * Combines seed-based wallet (server/CLI) and browser wallet (Lace extension)
+ * into a single module. Both share WalletError and the same domain.
  *
- * ## API Design
+ * **Seed Wallet** (server-side):
+ * - `Wallet.init(seed, config)` — initialize from HD seed
+ * - `Wallet.waitForSync(ctx)` — wait for wallet to sync
+ * - `Wallet.deriveAddress(seed, networkId)` — derive address without connecting
+ * - `Wallet.close(ctx)` — release resources
  *
- * - **Promise API**: `await Wallet.init(seed, config)`
- * - **Effect API**: `yield* Wallet.effect.init(seed, config)`
- * - **Effect DI**: `yield* WalletService` with `WalletLive` layer
+ * **Browser Wallet** (Lace extension):
+ * - `Wallet.connectWallet(networkId)` — connect to Lace browser extension
+ * - `Wallet.isWalletAvailable()` — check if extension is installed
+ * - `Wallet.disconnectWallet()` — disconnect from wallet
+ * - `Wallet.createWalletProviders(wallet, addresses)` — create tx providers
  *
- * @since 0.1.0
+ * @since 0.3.0
  * @module
  */
 
-import { Context, Effect, Layer } from 'effect';
+import { Context, Data, Effect, Layer } from 'effect';
 import * as Rx from 'rxjs';
 import * as ledger from '@midnight-ntwrk/ledger-v7';
+import { Transaction, type FinalizedTransaction, type TransactionId } from '@midnight-ntwrk/ledger-v7';
 import { WalletFacade } from '@midnight-ntwrk/wallet-sdk-facade';
 import { HDWallet, Roles } from '@midnight-ntwrk/wallet-sdk-hd';
 import { ShieldedWallet } from '@midnight-ntwrk/wallet-sdk-shielded';
@@ -26,17 +34,30 @@ import {
   UnshieldedWallet,
   InMemoryTransactionHistoryStorage,
 } from '@midnight-ntwrk/wallet-sdk-unshielded-wallet';
+import type { WalletProvider, MidnightProvider, UnboundTransaction } from '@midnight-ntwrk/midnight-js-types';
+import { getNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 
 import type { NetworkConfig } from './Config.js';
-import { WalletError } from './wallet/errors.js';
-import { hexToBytes } from './utils/hex.js';
-import { runEffect, runEffectPromise } from './utils/effect-runtime.js';
-
-// Re-export WalletError so it's available from Wallet namespace
-export { WalletError } from './wallet/errors.js';
+import { hexToBytes, bytesToHex } from './Utils.js';
+import { runEffect, runEffectPromise } from './Runtime.js';
 
 // =============================================================================
-// Types
+// Errors
+// =============================================================================
+
+/**
+ * Error during wallet operations (initialization, sync, connection, transactions).
+ *
+ * @since 0.3.0
+ * @category errors
+ */
+export class WalletError extends Data.TaggedError('WalletError')<{
+  readonly cause: unknown;
+  readonly message: string;
+}> {}
+
+// =============================================================================
+// Types — Seed Wallet
 // =============================================================================
 
 /**
@@ -53,15 +74,146 @@ export interface WalletContext {
 }
 
 // =============================================================================
-// Wallet Cleanup
+// Types — Browser Wallet (Lace Connector)
 // =============================================================================
 
 /**
- * Stop wallet sync and release WebSocket connections.
+ * Key material provider for proving.
  *
- * @since 0.2.9
- * @category operations
+ * @since 0.2.0
+ * @category model
  */
+export interface KeyMaterialProvider {
+  getZKIR(circuitKeyLocation: string): Promise<Uint8Array>;
+  getProverKey(circuitKeyLocation: string): Promise<Uint8Array>;
+  getVerifierKey(circuitKeyLocation: string): Promise<Uint8Array>;
+}
+
+/**
+ * Proving provider from wallet.
+ *
+ * @since 0.2.0
+ * @category model
+ */
+export interface ProvingProvider {
+  check(serializedPreimage: Uint8Array, keyLocation: string): Promise<(bigint | undefined)[]>;
+  prove(serializedPreimage: Uint8Array, keyLocation: string, overwriteBindingInput?: bigint): Promise<Uint8Array>;
+}
+
+/**
+ * Network configuration from wallet.
+ *
+ * @since 0.2.0
+ * @category model
+ */
+export interface Configuration {
+  indexerUri: string;
+  indexerWsUri: string;
+  proverServerUri?: string;
+  substrateNodeUri: string;
+  networkId: string;
+}
+
+/**
+ * Initial API for wallet connection.
+ *
+ * @since 0.2.0
+ * @category model
+ */
+export interface InitialAPI {
+  rdns: string;
+  name: string;
+  icon: string;
+  apiVersion: string;
+  connect: (networkId: string) => Promise<ConnectedAPI>;
+}
+
+/**
+ * Connected wallet API.
+ *
+ * @since 0.2.0
+ * @category model
+ */
+export interface ConnectedAPI {
+  getShieldedBalances(): Promise<Record<string, bigint>>;
+  getUnshieldedBalances(): Promise<Record<string, bigint>>;
+  getDustBalance(): Promise<{ cap: bigint; balance: bigint }>;
+  getShieldedAddresses(): Promise<{
+    shieldedAddress: string;
+    shieldedCoinPublicKey: string;
+    shieldedEncryptionPublicKey: string;
+  }>;
+  getUnshieldedAddress(): Promise<{ unshieldedAddress: string }>;
+  getDustAddress(): Promise<{ dustAddress: string }>;
+  balanceUnsealedTransaction(tx: string): Promise<{ tx: string }>;
+  balanceSealedTransaction(tx: string): Promise<{ tx: string }>;
+  submitTransaction(tx: string): Promise<string>;
+  getProvingProvider(keyMaterialProvider: KeyMaterialProvider): Promise<ProvingProvider>;
+  getConfiguration(): Promise<Configuration>;
+  hintUsage(methodNames: string[]): Promise<void>;
+}
+
+declare global {
+  interface Window {
+    midnight?: {
+      mnLace?: InitialAPI;
+      [key: string]: InitialAPI | undefined;
+    };
+  }
+}
+
+/**
+ * Shielded addresses returned by wallet.
+ *
+ * @since 0.2.0
+ * @category model
+ */
+export interface ShieldedAddresses {
+  shieldedAddress: string;
+  shieldedCoinPublicKey: string;
+  shieldedEncryptionPublicKey: string;
+}
+
+/**
+ * Result of connecting to a browser wallet.
+ *
+ * @since 0.2.0
+ * @category model
+ */
+export interface WalletConnection {
+  wallet: ConnectedAPI;
+  config: Configuration;
+  addresses: ShieldedAddresses;
+  coinPublicKey: string;
+  encryptionPublicKey: string;
+}
+
+/**
+ * Wallet keys needed for provider creation.
+ *
+ * @since 0.2.0
+ * @category model
+ */
+export interface WalletKeys {
+  coinPublicKey: string;
+  encryptionPublicKey: string;
+}
+
+/**
+ * Providers created from wallet connection.
+ *
+ * @since 0.2.0
+ * @category model
+ */
+export interface WalletProviders {
+  walletProvider: WalletProvider;
+  midnightProvider: MidnightProvider;
+}
+
+// =============================================================================
+// Internal Effects — Seed Wallet
+// =============================================================================
+
 function closeEffect(walletContext: WalletContext): Effect.Effect<void, WalletError> {
   return Effect.tryPromise({
     try: () => walletContext.wallet.stop(),
@@ -72,20 +224,6 @@ function closeEffect(walletContext: WalletContext): Effect.Effect<void, WalletEr
       }),
   });
 }
-
-/**
- * Stop wallet sync and release WebSocket connections.
- *
- * @since 0.2.9
- * @category operations
- */
-export async function close(walletContext: WalletContext): Promise<void> {
-  return runEffectPromise(closeEffect(walletContext));
-}
-
-// =============================================================================
-// Internal Effect Implementations
-// =============================================================================
 
 function initEffect(seed: string, networkConfig: NetworkConfig): Effect.Effect<WalletContext, WalletError> {
   return Effect.tryPromise({
@@ -184,15 +322,185 @@ function deriveAddressEffect(seed: string, networkId: string): Effect.Effect<str
 }
 
 // =============================================================================
-// Promise API
+// Internal Effects — Browser Wallet Connector
+// =============================================================================
+
+function isAvailableEffect(): Effect.Effect<boolean, never> {
+  return Effect.sync(() => typeof window !== 'undefined' && !!window.midnight?.mnLace);
+}
+
+function waitForWalletEffect(timeout: number = 5000): Effect.Effect<InitialAPI, WalletError> {
+  return Effect.tryPromise({
+    try: async () => {
+      const start = Date.now();
+
+      while (Date.now() - start < timeout) {
+        if (window.midnight?.mnLace) {
+          return window.midnight.mnLace;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+
+      throw new Error('Lace wallet not found. Please install the Lace browser extension.');
+    },
+    catch: (cause) =>
+      new WalletError({
+        cause,
+        message: `Wallet not available: ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
+}
+
+function isVersionCompatible(version: string, required: string): boolean {
+  const [major] = version.split('.').map(Number);
+  const [requiredMajor] = required.split('.').map(Number);
+  return major >= requiredMajor;
+}
+
+function connectEffect(networkId: string = 'testnet'): Effect.Effect<WalletConnection, WalletError> {
+  return Effect.gen(function* () {
+    if (typeof window === 'undefined') {
+      return yield* Effect.fail(
+        new WalletError({
+          cause: new Error('Browser environment required'),
+          message: 'connectWallet() can only be used in browser environment',
+        }),
+      );
+    }
+
+    const connector = yield* waitForWalletEffect();
+
+    if (!isVersionCompatible(connector.apiVersion, '4.0')) {
+      return yield* Effect.fail(
+        new WalletError({
+          cause: new Error('Incompatible API version'),
+          message: `Incompatible wallet API version: ${connector.apiVersion}. Requires 4.x or higher. Please update Lace.`,
+        }),
+      );
+    }
+
+    const wallet = yield* Effect.tryPromise({
+      try: () => connector.connect(networkId),
+      catch: (cause) =>
+        new WalletError({
+          cause,
+          message: `Failed to connect to wallet: ${cause instanceof Error ? cause.message : String(cause)}`,
+        }),
+    });
+
+    const config = yield* Effect.tryPromise({
+      try: () => wallet.getConfiguration(),
+      catch: (cause) =>
+        new WalletError({
+          cause,
+          message: `Failed to get wallet configuration: ${cause instanceof Error ? cause.message : String(cause)}`,
+        }),
+    });
+
+    const addresses = yield* Effect.tryPromise({
+      try: () => wallet.getShieldedAddresses(),
+      catch: (cause) =>
+        new WalletError({
+          cause,
+          message: `Failed to get wallet addresses: ${cause instanceof Error ? cause.message : String(cause)}`,
+        }),
+    });
+
+    return {
+      wallet,
+      config,
+      addresses,
+      coinPublicKey: addresses.shieldedCoinPublicKey,
+      encryptionPublicKey: addresses.shieldedEncryptionPublicKey,
+    };
+  });
+}
+
+function disconnectEffect(): Effect.Effect<void, never> {
+  return Effect.void;
+}
+
+function getProvingProviderEffect(
+  wallet: ConnectedAPI,
+  zkConfigProvider: KeyMaterialProvider,
+): Effect.Effect<ProvingProvider, WalletError> {
+  return Effect.tryPromise({
+    try: () => wallet.getProvingProvider(zkConfigProvider),
+    catch: (cause) =>
+      new WalletError({
+        cause,
+        message: `Failed to get proving provider: ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
+}
+
+// =============================================================================
+// Internal Effects — Browser Wallet Transaction Providers
+// =============================================================================
+
+function balanceTxEffect(
+  wallet: ConnectedAPI,
+  tx: UnboundTransaction,
+): Effect.Effect<FinalizedTransaction, WalletError> {
+  return Effect.tryPromise({
+    try: async () => {
+      const txBytes = tx.serialize();
+      const serializedTx = bytesToHex(txBytes);
+
+      const result = await wallet.balanceUnsealedTransaction(serializedTx);
+
+      const resultBytes = hexToBytes(result.tx);
+      const networkId = getNetworkId();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const transaction = (Transaction as any).deserialize(
+        { SignatureEnabled: true },
+        { Proof: true },
+        { Binding: true },
+        resultBytes,
+        networkId,
+      ) as FinalizedTransaction;
+
+      return transaction;
+    },
+    catch: (cause) =>
+      new WalletError({
+        cause,
+        message: `Failed to balance transaction: ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
+}
+
+function submitTxEffect(
+  wallet: ConnectedAPI,
+  tx: FinalizedTransaction,
+): Effect.Effect<TransactionId, WalletError> {
+  return Effect.tryPromise({
+    try: async () => {
+      const txBytes = tx.serialize();
+      const serializedTx = bytesToHex(txBytes);
+      await wallet.submitTransaction(serializedTx);
+      return serializedTx as TransactionId;
+    },
+    catch: (cause) =>
+      new WalletError({
+        cause,
+        message: `Failed to submit transaction: ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
+}
+
+// =============================================================================
+// Promise API — Seed Wallet
 // =============================================================================
 
 /**
- * Initialize wallet from seed.
+ * Initialize wallet from HD seed.
+ *
+ * @throws {WalletError} When initialization fails
  *
  * @example
  * ```typescript
- * const walletContext = await Wallet.init(seed, networkConfig);
+ * const walletContext = await Midday.Wallet.init(seed, networkConfig);
  * ```
  *
  * @since 0.2.0
@@ -205,6 +513,8 @@ export async function init(seed: string, networkConfig: NetworkConfig): Promise<
 /**
  * Wait for wallet to sync with the network.
  *
+ * @throws {WalletError} When sync fails
+ *
  * @since 0.2.0
  * @category operations
  */
@@ -215,6 +525,8 @@ export async function waitForSync(walletContext: WalletContext): Promise<void> {
 /**
  * Derive wallet address from seed without starting wallet connection.
  *
+ * @throws {WalletError} When derivation fails
+ *
  * @since 0.2.0
  * @category utilities
  */
@@ -223,24 +535,148 @@ export function deriveAddress(seed: string, networkId: string): string {
 }
 
 /**
+ * Stop wallet sync and release WebSocket connections.
+ *
+ * @throws {WalletError} When close fails
+ *
+ * @since 0.2.9
+ * @category operations
+ */
+export async function close(walletContext: WalletContext): Promise<void> {
+  return runEffectPromise(closeEffect(walletContext));
+}
+
+// =============================================================================
+// Promise API — Browser Wallet
+// =============================================================================
+
+/**
+ * Check if running in browser with Lace wallet available.
+ *
+ * @since 0.2.0
+ * @category browser
+ */
+export function isWalletAvailable(): boolean {
+  return runEffect(isAvailableEffect());
+}
+
+/**
+ * Connect to the Lace wallet in browser.
+ *
+ * @param networkId - Network to connect to (default: 'testnet')
+ * @returns WalletConnection with wallet API and keys
+ * @throws {WalletError} When connection fails
+ *
+ * @example
+ * ```typescript
+ * const connection = await Midday.Wallet.connectWallet('testnet');
+ * ```
+ *
+ * @since 0.2.0
+ * @category browser
+ */
+export async function connectWallet(networkId: string = 'testnet'): Promise<WalletConnection> {
+  return runEffectPromise(connectEffect(networkId));
+}
+
+/**
+ * Get a proving provider from the connected wallet.
+ *
+ * @throws {WalletError} When getting proving provider fails
+ *
+ * @since 0.2.0
+ * @category browser
+ */
+export async function getWalletProvingProvider(
+  wallet: ConnectedAPI,
+  zkConfigProvider: KeyMaterialProvider,
+): Promise<ProvingProvider> {
+  return runEffectPromise(getProvingProviderEffect(wallet, zkConfigProvider));
+}
+
+/**
+ * Disconnect from the wallet (if supported).
+ *
+ * @since 0.2.0
+ * @category browser
+ */
+export async function disconnectWallet(): Promise<void> {
+  return runEffectPromise(disconnectEffect());
+}
+
+/**
+ * Create providers from a connected wallet (v4 API).
+ *
+ * These providers use the wallet extension to balance and submit transactions.
+ *
+ * @param wallet - Connected wallet API from DAppConnector v4
+ * @param addresses - Shielded addresses from wallet
+ * @returns WalletProvider and MidnightProvider
+ *
+ * @example
+ * ```typescript
+ * const connection = await Midday.Wallet.connectWallet('testnet');
+ * const { walletProvider, midnightProvider } = Midday.Wallet.createWalletProviders(
+ *   connection.wallet,
+ *   connection.addresses,
+ * );
+ * ```
+ *
+ * @since 0.2.0
+ * @category browser
+ */
+export function createWalletProviders(wallet: ConnectedAPI, addresses: ShieldedAddresses): WalletProviders {
+  const walletProvider: WalletProvider = {
+    getCoinPublicKey: () => addresses.shieldedCoinPublicKey as unknown as ReturnType<WalletProvider['getCoinPublicKey']>,
+    getEncryptionPublicKey: () =>
+      addresses.shieldedEncryptionPublicKey as unknown as ReturnType<WalletProvider['getEncryptionPublicKey']>,
+
+    async balanceTx(tx: UnboundTransaction, _ttl?: Date): Promise<FinalizedTransaction> {
+      return runEffectPromise(balanceTxEffect(wallet, tx));
+    },
+  };
+
+  const midnightProvider: MidnightProvider = {
+    async submitTx(tx: FinalizedTransaction): Promise<TransactionId> {
+      return runEffectPromise(submitTxEffect(wallet, tx));
+    },
+  };
+
+  return { walletProvider, midnightProvider };
+}
+
+// =============================================================================
+// Effect Namespace
+// =============================================================================
+
+/**
  * Raw Effect APIs for advanced users.
  *
  * @since 0.2.0
  * @category effect
  */
 export const effect = {
+  // Seed wallet
   init: initEffect,
   waitForSync: waitForSyncEffect,
   deriveAddress: deriveAddressEffect,
   close: closeEffect,
+  // Browser wallet connector
+  connect: connectEffect,
+  isAvailable: isAvailableEffect,
+  disconnect: disconnectEffect,
+  getProvingProvider: getProvingProviderEffect,
+  // Browser wallet transactions
+  balanceTx: balanceTxEffect,
+  submitTx: submitTxEffect,
 };
 
 // =============================================================================
-// Effect DI - Service Definitions
+// Effect DI — Seed Wallet Service
 // =============================================================================
 
 /**
- * Service interface for Wallet operations.
+ * Service interface for seed-based Wallet operations.
  *
  * @since 0.2.0
  * @category service
@@ -255,26 +691,10 @@ export interface WalletServiceImpl {
 /**
  * Context.Tag for WalletService dependency injection.
  *
- * @example
- * ```typescript
- * const program = Effect.gen(function* () {
- *   const walletService = yield* WalletService;
- *   const wallet = yield* walletService.init(seed, config);
- *   yield* walletService.waitForSync(wallet);
- *   return wallet;
- * });
- *
- * Effect.runPromise(program.pipe(Effect.provide(WalletLive)));
- * ```
- *
  * @since 0.2.0
  * @category service
  */
 export class WalletService extends Context.Tag('WalletService')<WalletService, WalletServiceImpl>() {}
-
-// =============================================================================
-// Effect DI - Live Layer
-// =============================================================================
 
 /**
  * Live Layer for WalletService.
@@ -287,4 +707,88 @@ export const WalletLive: Layer.Layer<WalletService> = Layer.succeed(WalletServic
   waitForSync: waitForSyncEffect,
   close: closeEffect,
   deriveAddress: deriveAddressEffect,
+});
+
+// =============================================================================
+// Effect DI — Browser Wallet Connector Service
+// =============================================================================
+
+/**
+ * Service interface for WalletConnector operations.
+ *
+ * @since 0.2.0
+ * @category service
+ */
+export interface WalletConnectorServiceImpl {
+  readonly connect: (networkId?: string) => Effect.Effect<WalletConnection, WalletError>;
+  readonly isAvailable: () => Effect.Effect<boolean, never>;
+  readonly disconnect: () => Effect.Effect<void, never>;
+  readonly getProvingProvider: (
+    wallet: ConnectedAPI,
+    zkConfigProvider: KeyMaterialProvider,
+  ) => Effect.Effect<ProvingProvider, WalletError>;
+}
+
+/**
+ * Context.Tag for WalletConnectorService dependency injection.
+ *
+ * @since 0.2.0
+ * @category service
+ */
+export class WalletConnectorService extends Context.Tag('WalletConnectorService')<
+  WalletConnectorService,
+  WalletConnectorServiceImpl
+>() {}
+
+/**
+ * Live Layer for WalletConnectorService.
+ *
+ * @since 0.2.0
+ * @category layer
+ */
+export const WalletConnectorLive: Layer.Layer<WalletConnectorService> = Layer.succeed(WalletConnectorService, {
+  connect: connectEffect,
+  isAvailable: isAvailableEffect,
+  disconnect: disconnectEffect,
+  getProvingProvider: getProvingProviderEffect,
+});
+
+// =============================================================================
+// Effect DI — Browser Wallet Provider Service
+// =============================================================================
+
+/**
+ * Service interface for WalletProvider operations.
+ *
+ * @since 0.2.0
+ * @category service
+ */
+export interface WalletProviderServiceImpl {
+  readonly balanceTx: (
+    wallet: ConnectedAPI,
+    tx: UnboundTransaction,
+  ) => Effect.Effect<FinalizedTransaction, WalletError>;
+  readonly submitTx: (wallet: ConnectedAPI, tx: FinalizedTransaction) => Effect.Effect<TransactionId, WalletError>;
+}
+
+/**
+ * Context.Tag for WalletProviderService dependency injection.
+ *
+ * @since 0.2.0
+ * @category service
+ */
+export class WalletProviderService extends Context.Tag('WalletProviderService')<
+  WalletProviderService,
+  WalletProviderServiceImpl
+>() {}
+
+/**
+ * Live Layer for WalletProviderService.
+ *
+ * @since 0.2.0
+ * @category layer
+ */
+export const WalletProviderLive: Layer.Layer<WalletProviderService> = Layer.succeed(WalletProviderService, {
+  balanceTx: balanceTxEffect,
+  submitTx: submitTxEffect,
 });

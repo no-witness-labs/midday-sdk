@@ -55,18 +55,15 @@
  */
 
 // =============================================================================
-// Module Namespaces
+// Module Namespaces (9 flat modules)
 // =============================================================================
 
-// Core modules
 export * as Client from './Client.js';
+export * as Contract from './Contract.js';
 export * as Config from './Config.js';
 export * as Wallet from './Wallet.js';
-export * as BrowserWallet from './wallet/index.js';
-export * as Providers from './Providers.js';
 export * as PrivateState from './PrivateState.js';
 export * as ZkConfig from './ZkConfig.js';
 export * as Hash from './Hash.js';
-export * as Logger from './Logger.js';
 export * as Runtime from './Runtime.js';
-export * as Utils from './utils/index.js';
+export * as Utils from './Utils.js';

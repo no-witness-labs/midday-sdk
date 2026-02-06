@@ -1,32 +1,24 @@
 /**
  * High-level client for interacting with Midnight Network contracts.
  *
+ * The Client is the central hub for all SDK operations. It initializes
+ * the wallet, creates providers, and manages the contract lifecycle.
+ *
  * ## API Design
  *
- * This module uses a **Client-centric hub pattern** following the Effect hybrid pattern:
- *
- * - **Effect is source of truth**: All logic in Effect functions
- * - **Client is the hub**: All operations flow from the client
- * - **Two interfaces**: `.effect.method()` for Effect users, `.method()` for Promise users
- * - **Effects call Effects, Promises call Promises**: Never mix execution models
- *
- * ### Usage Patterns
- *
  * ```typescript
- * // Promise user - simple flow
+ * // Promise user — simple flow
  * const client = await Midday.Client.create(config);
  * const contract = await client.loadContract({ path: './contracts/counter' });
  * await contract.deploy();
  * await contract.call('increment');
- * const state = await contract.ledgerState();
  *
- * // Effect user - compositional
+ * // Effect user — compositional
  * const program = Effect.gen(function* () {
  *   const client = yield* Midday.Client.effect.create(config);
  *   const contract = yield* client.effect.loadContract({ path: './contracts/counter' });
  *   yield* contract.effect.deploy();
  *   yield* contract.effect.call('increment');
- *   const state = yield* contract.effect.ledgerState();
  * });
  * ```
  *
@@ -35,20 +27,33 @@
  */
 
 import { Context, Data, Effect, Layer, Scope } from 'effect';
-import { deployContract, findDeployedContract } from '@midnight-ntwrk/midnight-js-contracts';
-import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
-import { CompiledContract } from '@midnight-ntwrk/compact-js';
-import type { ZKConfigProvider, PrivateStateProvider } from '@midnight-ntwrk/midnight-js-types';
+import * as ledger from '@midnight-ntwrk/ledger-v7';
+import { setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
+import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
+import type {
+  WalletProvider,
+  MidnightProvider,
+  ZKConfigProvider,
+  PrivateStateProvider,
+  UnboundTransaction,
+} from '@midnight-ntwrk/midnight-js-types';
 
 import * as Config from './Config.js';
 import * as Wallet from './Wallet.js';
-import * as Providers from './Providers.js';
 import type { NetworkConfig } from './Config.js';
-import type { BaseProviders, ContractProviders, StorageConfig, CreateBaseProvidersOptions } from './Providers.js';
 import type { WalletContext } from './Wallet.js';
-import type { WalletConnection } from './wallet/connector.js';
-import { createWalletProviders } from './wallet/provider.js';
-import { runEffectWithLogging } from './utils/effect-runtime.js';
+import type { WalletConnection, WalletProviders } from './Wallet.js';
+import type {
+  Contract,
+  ContractModule,
+  InferLedger,
+  InferCircuits,
+  LoadContractOptions,
+  ContractData,
+  FinalizedTxData,
+} from './Contract.js';
+import { loadContractModuleEffect, createContractHandle } from './Contract.js';
+import { runEffectWithLogging } from './Runtime.js';
 
 // =============================================================================
 // Errors
@@ -65,16 +70,51 @@ export class ClientError extends Data.TaggedError('ClientError')<{
   readonly message: string;
 }> {}
 
+// =============================================================================
+// Provider Types (absorbed from Providers module)
+// =============================================================================
+
 /**
- * Error during contract deployment or calls.
+ * Storage configuration.
  *
- * @since 0.3.0
- * @category errors
+ * @since 0.2.0
+ * @category model
  */
-export class ContractError extends Data.TaggedError('ContractError')<{
-  readonly cause: unknown;
-  readonly message: string;
-}> {}
+export interface StorageConfig {
+  /** Storage password */
+  password?: string;
+}
+
+/**
+ * Base providers without zkConfig and proofProvider (shared at client level).
+ * zkConfig and proofProvider are per-contract, added when loading a contract.
+ *
+ * @since 0.5.0
+ * @category model
+ */
+export interface BaseProviders {
+  walletProvider: WalletProvider;
+  midnightProvider: MidnightProvider;
+  publicDataProvider: ReturnType<typeof indexerPublicDataProvider>;
+  privateStateProvider: PrivateStateProvider;
+  /** Network configuration for creating per-contract proof providers */
+  networkConfig: NetworkConfig;
+}
+
+/**
+ * Options for creating base providers (without zkConfig).
+ *
+ * @since 0.5.0
+ * @category model
+ */
+export interface CreateBaseProvidersOptions {
+  /** Network configuration */
+  networkConfig: NetworkConfig;
+  /** Private state provider */
+  privateStateProvider: PrivateStateProvider;
+  /** Storage configuration */
+  storageConfig?: StorageConfig;
+}
 
 // =============================================================================
 // Configuration Types
@@ -101,162 +141,12 @@ export interface ClientConfig {
   logging?: boolean;
 }
 
-/**
- * Options for loading a contract.
- *
- * Exactly one of these must be provided:
- * - `module` + `zkConfig`: Direct module and zkConfig (works everywhere)
- * - `path`: Load from filesystem path (Node.js only)
- * - `moduleUrl` + `zkConfigBaseUrl`: Load from URLs (browser)
- *
- * @typeParam M - The contract module type (for type inference)
- *
- * @since 0.2.0
- * @category model
- */
-export interface LoadContractOptions<M extends ContractModule = ContractModule> {
-  // --- Direct loading (works everywhere) ---
-  /** Contract module */
-  module?: M;
-  /** ZK configuration provider for this contract */
-  zkConfig?: ZKConfigProvider<string>;
-
-  // --- Path-based loading (Node.js only) ---
-  /** Filesystem path to contract directory (auto-loads module + zkConfig) */
-  path?: string;
-
-  // --- URL-based loading (browser) ---
-  /** URL to contract module JS file */
-  moduleUrl?: string;
-  /** Base URL for ZK artifacts */
-  zkConfigBaseUrl?: string;
-
-  // --- Common options ---
-  /** Witnesses for the contract */
-  witnesses?: Record<string, unknown>;
-  /** Override privateStateId (defaults to contract name) */
-  privateStateId?: string;
-}
-
-/**
- * Options for deploying a contract.
- *
- * @since 0.2.0
- * @category model
- */
-export interface DeployOptions {
-  /** Initial private state (defaults to {}) */
-  initialPrivateState?: unknown;
-}
-
-/**
- * Options for joining a contract.
- *
- * @since 0.2.0
- * @category model
- */
-export interface JoinOptions {
-  /** Initial private state (defaults to {}) */
-  initialPrivateState?: unknown;
-}
-
-/**
- * Data about a finalized transaction.
- *
- * @since 0.2.0
- * @category model
- */
-export interface FinalizedTxData {
-  txHash: string;
-  blockHeight: number;
-  blockHash: string;
-}
-
-/**
- * A contract module definition.
- *
- * @typeParam TLedger - The ledger state type returned by the ledger function
- * @typeParam TCircuits - Union of circuit names (e.g., 'increment' | 'decrement')
- *
- * @since 0.2.0
- * @category model
- */
-export interface ContractModule<
-  TLedger = unknown,
-  TCircuits extends string = string,
-> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  Contract: new (witnesses: any) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    impureCircuits: Record<TCircuits, (...args: any[]) => any>;
-  };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ledger: (state: any) => TLedger;
-}
-
-/**
- * Infer the Ledger type from a contract module.
- *
- * @since 0.2.6
- * @category type
- */
-export type InferLedger<M> = M extends ContractModule<infer L, string> ? L : unknown;
-
-/**
- * Infer the circuit names from a contract module.
- *
- * @since 0.2.6
- * @category type
- */
-export type InferCircuits<M> = M extends {
-  Contract: new (...args: any[]) => { impureCircuits: infer IC }
-} ? keyof IC & string : string;
-
-/**
- * A loaded contract module with configuration.
- *
- * @typeParam TLedger - The ledger state type
- * @typeParam TCircuits - Union of circuit names
- *
- * @since 0.2.0
- * @category model
- */
-export interface LoadedContractModule<
-  TLedger = unknown,
-  TCircuits extends string = string,
-> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  Contract: new (witnesses: any) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    impureCircuits: Record<TCircuits, (...args: any[]) => any>;
-  };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ledger: (state: any) => TLedger;
-  privateStateId: string;
-  witnesses: Record<string, unknown>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  compiledContract: CompiledContract.CompiledContract<any, any, any>;
-}
-
-/**
- * Result of a contract call.
- *
- * @since 0.2.0
- * @category model
- */
-export interface CallResult {
-  txHash: string;
-  blockHeight: number;
-  status: string;
-}
-
 // =============================================================================
-// Internal Data Types (Plain Data, No Methods)
+// Internal Data Types
 // =============================================================================
 
 /**
  * Internal client data (plain object).
- * Uses BaseProviders (no zkConfig) - zkConfig is per-contract.
  * @internal
  */
 interface ClientData {
@@ -266,31 +156,8 @@ interface ClientData {
   readonly logging: boolean;
 }
 
-/**
- * Internal contract data (plain object).
- * Represents either a loaded (pre-deploy) or deployed contract.
- * @internal
- */
-interface ContractData {
-  readonly module: LoadedContractModule;
-  readonly providers: ContractProviders;
-  readonly logging: boolean;
-  /** Address (undefined until deployed/joined) */
-  readonly address: string | undefined;
-  /** Deployed instance (undefined until deployed/joined) */
-  readonly instance: unknown | undefined;
-}
-
-/**
- * Internal interface for deployed contract instance with callable transaction methods.
- * @internal
- */
-interface DeployedContractInstance {
-  callTx: Record<string, (...args: unknown[]) => Promise<{ public: { txHash: string; blockHeight: number; status: string } }>>;
-}
-
 // =============================================================================
-// Public Handle Interfaces (Objects with Methods)
+// Public Handle Interfaces
 // =============================================================================
 
 /**
@@ -302,54 +169,26 @@ interface DeployedContractInstance {
 export interface MiddayClient {
   /** Network configuration */
   readonly networkConfig: NetworkConfig;
-  /** Base providers (for advanced use - no zkConfig) */
+  /** Base providers (for advanced use — no zkConfig) */
   readonly providers: BaseProviders;
   /** Raw wallet context (null if using wallet connector) */
   readonly wallet: WalletContext | null;
 
-  // Promise API - for simple usage
   /**
    * Load a contract module. Returns a Contract in "loaded" state.
    * Call `deploy()` or `join()` on it to connect to the network.
    *
    * @typeParam M - Contract module type (inferred from options.module)
-   *
-   * @example
-   * ```typescript
-   * // Load with module - types are inferred!
-   * import * as CounterContract from './contracts/counter/contract';
-   *
-   * const contract = await client.loadContract({
-   *   module: CounterContract,
-   *   zkConfig: Midday.ZkConfig.fromPath('./contracts/counter'),
-   * });
-   * const state = await contract.ledgerState(); // state.counter is typed
-   * await contract.call('increment'); // autocompletes circuit names
-   * ```
    */
   loadContract<M extends ContractModule>(
-    options: LoadContractOptions<M>
+    options: LoadContractOptions<M>,
   ): Promise<Contract<InferLedger<M>, InferCircuits<M>>>;
 
-  /**
-   * Wait for a transaction to be finalized.
-   */
+  /** Wait for a transaction to be finalized. */
   waitForTx(txHash: string): Promise<FinalizedTxData>;
 
   /**
-   * Close the client and release all resources (wallet connections, WebSocket subscriptions).
-   *
-   * Call this before shutting down to avoid leaked connections and noisy errors.
-   *
-   * @example
-   * ```typescript
-   * const client = await Midday.Client.create(config);
-   * try {
-   *   // ... use client ...
-   * } finally {
-   *   await client.close();
-   * }
-   * ```
+   * Close the client and release all resources.
    *
    * @since 0.2.9
    */
@@ -357,143 +196,106 @@ export interface MiddayClient {
 
   /**
    * Supports `await using client = await Midday.Client.create(config);`
-   * Requires TypeScript 5.2+ and ES2022+ target.
    *
    * @since 0.2.9
    */
   [Symbol.asyncDispose](): Promise<void>;
 
-  // Effect API - for composition
   /** Effect versions of client methods */
   readonly effect: {
     loadContract<M extends ContractModule>(
-      options: LoadContractOptions<M>
+      options: LoadContractOptions<M>,
     ): Effect.Effect<Contract<InferLedger<M>, InferCircuits<M>>, ClientError>;
     waitForTx(txHash: string): Effect.Effect<FinalizedTxData, ClientError>;
     close(): Effect.Effect<void, ClientError>;
   };
 }
 
-/**
- * Contract state: either "loaded" (pre-deploy) or "deployed" (connected to network).
- *
- * @since 0.6.0
- * @category model
- */
-export type ContractState = 'loaded' | 'deployed';
+// =============================================================================
+// Provider Factory Functions (absorbed from Providers module)
+// =============================================================================
 
-/**
- * A contract handle that manages the full lifecycle: load → deploy/join → call.
- *
- * The contract has two states:
- * - **loaded**: Contract module loaded, ready for deploy() or join()
- * - **deployed**: Connected to network, ready for call() and ledgerState()
- *
- * @typeParam TLedger - The ledger state type (inferred from module)
- * @typeParam TCircuits - Union of circuit names (inferred from module)
- *
- * @since 0.2.6
- * @category model
- */
-export interface Contract<
-  TLedger = unknown,
-  TCircuits extends string = string,
-> {
-  /** Current state of the contract */
-  readonly state: ContractState;
-  /** The deployed contract address (undefined until deployed/joined) */
-  readonly address: string | undefined;
-  /** The loaded contract module */
-  readonly module: LoadedContractModule<TLedger, TCircuits>;
-  /** Contract providers (for advanced use) */
-  readonly providers: ContractProviders;
+function createBaseProvidersEffect(
+  walletContext: WalletContext,
+  options: CreateBaseProvidersOptions,
+): Effect.Effect<BaseProviders, ClientError> {
+  return Effect.try({
+    try: () => {
+      const { networkConfig, privateStateProvider } = options;
 
-  // Lifecycle methods (loaded → deployed)
-  /**
-   * Deploy a new contract instance.
-   * Transitions state from "loaded" to "deployed".
-   *
-   * @throws {ContractError} If already deployed
-   * @example
-   * ```typescript
-   * await contract.deploy();
-   * console.log(contract.address); // Now available
-   * ```
-   */
-  deploy(options?: DeployOptions): Promise<void>;
+      setNetworkId(networkConfig.networkId as 'undeployed');
 
-  /**
-   * Join an existing contract at an address.
-   * Transitions state from "loaded" to "deployed".
-   *
-   * @throws {ContractError} If already deployed
-   * @example
-   * ```typescript
-   * await contract.join('0x...');
-   * ```
-   */
-  join(address: string, options?: JoinOptions): Promise<void>;
+      const walletProvider: WalletProvider = {
+        getCoinPublicKey: () => walletContext.shieldedSecretKeys.coinPublicKey as unknown as ledger.CoinPublicKey,
+        getEncryptionPublicKey: () =>
+          walletContext.shieldedSecretKeys.encryptionPublicKey as unknown as ledger.EncPublicKey,
+        balanceTx: async (tx: UnboundTransaction, ttl?: Date): Promise<ledger.FinalizedTransaction> => {
+          const txTtl = ttl ?? new Date(Date.now() + 30 * 60 * 1000);
+          const recipe = await walletContext.wallet.balanceUnboundTransaction(
+            tx,
+            {
+              shieldedSecretKeys: walletContext.shieldedSecretKeys,
+              dustSecretKey: walletContext.dustSecretKey,
+            },
+            { ttl: txTtl },
+          );
+          return walletContext.wallet.finalizeRecipe(recipe);
+        },
+      };
 
-  // Contract methods (require deployed state)
-  /**
-   * Call a contract action.
-   *
-   * @throws {ContractError} If not deployed
-   * @example
-   * ```typescript
-   * const result = await contract.call('increment');
-   * ```
-   */
-  call(action: TCircuits, ...args: unknown[]): Promise<CallResult>;
+      const midnightProvider: MidnightProvider = {
+        submitTx: async (tx: ledger.FinalizedTransaction) => walletContext.wallet.submitTransaction(tx),
+      };
 
-  /**
-   * Get raw contract state.
-   *
-   * @throws {ContractError} If not deployed
-   */
-  getState(): Promise<unknown>;
+      const publicDataProvider = indexerPublicDataProvider(networkConfig.indexer, networkConfig.indexerWS);
 
-  /**
-   * Get raw contract state at a specific block height.
-   *
-   * @throws {ContractError} If not deployed
-   */
-  getStateAt(blockHeight: number): Promise<unknown>;
+      return {
+        walletProvider,
+        midnightProvider,
+        publicDataProvider,
+        privateStateProvider,
+        networkConfig,
+      };
+    },
+    catch: (cause) =>
+      new ClientError({
+        cause,
+        message: `Failed to create base providers: ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
+}
 
-  /**
-   * Get parsed ledger state.
-   *
-   * @throws {ContractError} If not deployed
-   * @example
-   * ```typescript
-   * const state = await contract.ledgerState();
-   * console.log(state.counter); // Typed!
-   * ```
-   */
-  ledgerState(): Promise<TLedger>;
+function createBaseFromWalletProvidersEffect(
+  walletProvider: WalletProvider,
+  midnightProvider: MidnightProvider,
+  options: CreateBaseProvidersOptions,
+): Effect.Effect<BaseProviders, ClientError> {
+  return Effect.try({
+    try: () => {
+      const { networkConfig, privateStateProvider } = options;
 
-  /**
-   * Get parsed ledger state at a specific block height.
-   *
-   * @throws {ContractError} If not deployed
-   */
-  ledgerStateAt(blockHeight: number): Promise<TLedger>;
+      setNetworkId(networkConfig.networkId as 'undeployed');
 
-  // Effect API
-  /** Effect versions of contract methods */
-  readonly effect: {
-    deploy(options?: DeployOptions): Effect.Effect<void, ContractError>;
-    join(address: string, options?: JoinOptions): Effect.Effect<void, ContractError>;
-    call(action: TCircuits, ...args: unknown[]): Effect.Effect<CallResult, ContractError>;
-    getState(): Effect.Effect<unknown, ContractError>;
-    getStateAt(blockHeight: number): Effect.Effect<unknown, ContractError>;
-    ledgerState(): Effect.Effect<TLedger, ContractError>;
-    ledgerStateAt(blockHeight: number): Effect.Effect<TLedger, ContractError>;
-  };
+      const publicDataProvider = indexerPublicDataProvider(networkConfig.indexer, networkConfig.indexerWS);
+
+      return {
+        walletProvider,
+        midnightProvider,
+        publicDataProvider,
+        privateStateProvider,
+        networkConfig,
+      };
+    },
+    catch: (cause) =>
+      new ClientError({
+        cause,
+        message: `Failed to create base providers from wallet: ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
 }
 
 // =============================================================================
-// Effect Implementations (Source of Truth)
+// Client Effect Implementations
 // =============================================================================
 
 function createClientDataEffect(config: ClientConfig): Effect.Effect<ClientData, ClientError> {
@@ -507,10 +309,8 @@ function createClientDataEffect(config: ClientConfig): Effect.Effect<ClientData,
       logging = true,
     } = config;
 
-    // Resolve network configuration
     const networkConfig = customNetworkConfig ?? Config.getNetworkConfig(network);
 
-    // Resolve seed (use dev wallet only for local network)
     const walletSeed = seed ?? (network === 'local' ? Config.DEV_WALLET_SEED : undefined);
     if (!walletSeed) {
       return yield* Effect.fail(
@@ -521,7 +321,6 @@ function createClientDataEffect(config: ClientConfig): Effect.Effect<ClientData,
       );
     }
 
-    // Initialize wallet
     yield* Effect.logDebug('Initializing wallet...');
     const walletContext = yield* Wallet.effect.init(walletSeed, networkConfig).pipe(
       Effect.mapError(
@@ -544,14 +343,13 @@ function createClientDataEffect(config: ClientConfig): Effect.Effect<ClientData,
     );
     yield* Effect.logDebug('Wallet synced');
 
-    // Create base providers (no zkConfig - that's per-contract)
     const providerOptions: CreateBaseProvidersOptions = {
       networkConfig,
       privateStateProvider,
       storageConfig: storage,
     };
 
-    const providers = Providers.createBase(walletContext, providerOptions);
+    const providers = yield* createBaseProvidersEffect(walletContext, providerOptions);
 
     return {
       wallet: walletContext,
@@ -572,7 +370,6 @@ function fromWalletDataEffect(
   return Effect.gen(function* () {
     const { privateStateProvider, logging = true } = config;
 
-    // Create network config from wallet configuration
     const networkConfig: NetworkConfig = {
       networkId: connection.config.networkId,
       indexer: connection.config.indexerUri,
@@ -581,17 +378,21 @@ function fromWalletDataEffect(
       proofServer: connection.config.proverServerUri ?? '',
     };
 
-    // Create wallet providers from connection
-    const { walletProvider, midnightProvider } = createWalletProviders(connection.wallet, connection.addresses);
+    const { walletProvider, midnightProvider } = Wallet.createWalletProviders(
+      connection.wallet,
+      connection.addresses,
+    );
 
-    // Create base providers (no zkConfig - that's per-contract)
     const providerOptions: CreateBaseProvidersOptions = {
       networkConfig,
       privateStateProvider,
     };
 
-    // Create providers using the wallet providers
-    const providers = Providers.createBaseFromWalletProviders(walletProvider, midnightProvider, providerOptions);
+    const providers = yield* createBaseFromWalletProvidersEffect(
+      walletProvider,
+      midnightProvider,
+      providerOptions,
+    );
 
     yield* Effect.logDebug('Connected to wallet');
 
@@ -617,86 +418,20 @@ function loadContractEffect(
   clientData: ClientData,
   options: LoadContractOptions,
 ): Effect.Effect<ContractData, ClientError> {
-  return Effect.tryPromise({
-    try: async () => {
-      let module: ContractModule;
-      let zkConfig: ZKConfigProvider<string>;
-
-      // Determine loading method
-      if (options.path) {
-        // Path-based loading (Node.js)
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const { join } = require('path');
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const { NodeZkConfigProvider } = require('@midnight-ntwrk/midnight-js-node-zk-config-provider');
-
-        const modulePath = join(options.path, 'contract', 'index.js');
-        module = await import(modulePath);
-        zkConfig = new NodeZkConfigProvider(options.path);
-      } else if (options.moduleUrl && options.zkConfigBaseUrl) {
-        // URL-based loading (browser)
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const { HttpZkConfigProvider } = require('./providers/HttpZkConfigProvider.js');
-
-        module = await import(/* webpackIgnore: true */ options.moduleUrl);
-        zkConfig = new HttpZkConfigProvider(options.zkConfigBaseUrl);
-      } else if (options.module && options.zkConfig) {
-        // Direct loading
-        module = options.module;
-        zkConfig = options.zkConfig;
-      } else {
-        throw new Error(
-          'Contract loading requires one of: ' +
-          '(1) module + zkConfig, ' +
-          '(2) path (Node.js), or ' +
-          '(3) moduleUrl + zkConfigBaseUrl (browser)'
-        );
-      }
-
-      // Create the v7 CompiledContract wrapper
-      const witnesses = options.witnesses ?? {};
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const compiledContract: any = CompiledContract.make('contract', module.Contract as any);
-      // IMPORTANT: Always call withWitnesses - even with empty {} - because the 
-      // contract constructor expects a witnesses object (context.witnesses must be defined)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const compiledContractWithWitnesses = (CompiledContract.withWitnesses as any)(compiledContract, witnesses);
-
-      const loadedModule: LoadedContractModule = {
-        Contract: module.Contract,
-        ledger: module.ledger,
-        privateStateId: options.privateStateId ?? 'contract',
-        witnesses,
-        compiledContract: compiledContractWithWitnesses,
-      };
-
-      // Create proofProvider with zkConfigProvider for this contract
-      const proofProvider = httpClientProofProvider(
-        clientData.providers.networkConfig.proofServer,
-        zkConfig,
-      );
-
-      // Create full providers with zkConfig and proofProvider for this contract
-      const providers: ContractProviders = {
-        ...clientData.providers,
-        zkConfigProvider: zkConfig,
-        proofProvider,
-      };
-
-      return {
-        module: loadedModule,
-        providers,
-        logging: clientData.logging,
-        address: undefined,
-        instance: undefined,
-      };
-    },
-    catch: (cause) =>
-      new ClientError({
-        cause,
-        message: `Failed to load contract: ${cause instanceof Error ? cause.message : String(cause)}`,
-      }),
-  });
+  return loadContractModuleEffect(
+    options,
+    clientData.providers.networkConfig,
+    clientData.providers,
+    clientData.logging,
+  ).pipe(
+    Effect.mapError(
+      (e) =>
+        new ClientError({
+          cause: e,
+          message: e.message,
+        }),
+    ),
+  );
 }
 
 function waitForTxEffect(
@@ -720,312 +455,6 @@ function waitForTxEffect(
   });
 }
 
-function deployContractEffect(
-  contractData: ContractData,
-  options?: DeployOptions,
-): Effect.Effect<ContractData, ContractError> {
-  return Effect.gen(function* () {
-    // State machine check
-    if (contractData.address !== undefined) {
-      return yield* Effect.fail(
-        new ContractError({
-          cause: new Error('Already deployed'),
-          message: `Contract already deployed at ${contractData.address}. Cannot deploy again.`,
-        }),
-      );
-    }
-
-    const { initialPrivateState = {} } = options ?? {};
-    const { module, providers, logging } = contractData;
-
-    yield* Effect.logDebug('Deploying contract...');
-
-    const deployed = yield* Effect.tryPromise({
-      try: () =>
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        deployContract(providers as any, {
-          compiledContract: module.compiledContract,
-          privateStateId: module.privateStateId,
-          initialPrivateState,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } as any),
-      catch: (cause) =>
-        new ContractError({
-          cause,
-          message: `Failed to deploy contract: ${cause instanceof Error ? cause.message : String(cause)}`,
-        }),
-    });
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const address = (deployed as any).deployTxData.public.contractAddress;
-
-    yield* Effect.logDebug(`Contract deployed at: ${address}`);
-
-    return {
-      address,
-      instance: deployed,
-      module,
-      providers,
-      logging,
-    };
-  });
-}
-
-function joinContractEffect(
-  contractData: ContractData,
-  address: string,
-  options?: JoinOptions,
-): Effect.Effect<ContractData, ContractError> {
-  return Effect.gen(function* () {
-    // State machine check
-    if (contractData.address !== undefined) {
-      return yield* Effect.fail(
-        new ContractError({
-          cause: new Error('Already deployed'),
-          message: `Contract already connected at ${contractData.address}. Cannot join another.`,
-        }),
-      );
-    }
-
-    const { initialPrivateState = {} } = options ?? {};
-    const { module, providers, logging } = contractData;
-
-    yield* Effect.logDebug(`Joining contract at ${address}...`);
-
-    const deployed = yield* Effect.tryPromise({
-      try: () =>
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        findDeployedContract(providers as any, {
-          contractAddress: address,
-          compiledContract: module.compiledContract,
-          privateStateId: module.privateStateId,
-          initialPrivateState,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } as any),
-      catch: (cause) =>
-        new ContractError({
-          cause,
-          message: `Failed to join contract at ${address}: ${cause instanceof Error ? cause.message : String(cause)}`,
-        }),
-    });
-
-    yield* Effect.logDebug('Contract joined');
-
-    return {
-      address,
-      instance: deployed,
-      module,
-      providers,
-      logging,
-    };
-  });
-}
-
-function callContractEffect(
-  contractData: ContractData,
-  action: string,
-  ...args: unknown[]
-): Effect.Effect<CallResult, ContractError> {
-  return Effect.gen(function* () {
-    // State machine check
-    if (contractData.instance === undefined) {
-      return yield* Effect.fail(
-        new ContractError({
-          cause: new Error('Not deployed'),
-          message: `Contract not deployed. Call deploy() or join() first.`,
-        }),
-      );
-    }
-
-    const { instance } = contractData;
-    yield* Effect.logDebug(`Calling ${action}()...`);
-
-    const deployed = instance as DeployedContractInstance;
-    const callTx = deployed.callTx;
-    if (!callTx || typeof callTx[action] !== 'function') {
-      return yield* Effect.fail(
-        new ContractError({
-          cause: new Error(`Unknown action: ${action}`),
-          message: `Unknown action: ${action}. Available: ${Object.keys(callTx || {}).join(', ')}`,
-        }),
-      );
-    }
-
-    const txData = yield* Effect.tryPromise({
-      try: () => callTx[action](...args),
-      catch: (cause) =>
-        new ContractError({
-          cause,
-          message: `Failed to call ${action}: ${cause instanceof Error ? cause.message : String(cause)}`,
-        }),
-    });
-
-    yield* Effect.logDebug('Transaction submitted');
-    yield* Effect.logDebug(`  TX Hash: ${txData.public.txHash}`);
-    yield* Effect.logDebug(`  Block: ${txData.public.blockHeight}`);
-
-    return {
-      txHash: txData.public.txHash,
-      blockHeight: txData.public.blockHeight,
-      status: txData.public.status,
-    };
-  });
-}
-
-function contractStateEffect(contractData: ContractData): Effect.Effect<unknown, ContractError> {
-  if (contractData.address === undefined) {
-    return Effect.fail(
-      new ContractError({
-        cause: new Error('Not deployed'),
-        message: `Contract not deployed. Call deploy() or join() first.`,
-      }),
-    );
-  }
-
-  const address = contractData.address;
-  return Effect.tryPromise({
-    try: async () => {
-      const { providers } = contractData;
-      const contractState = await providers.publicDataProvider.queryContractState(address);
-      if (!contractState) {
-        throw new Error(`Contract state not found at ${address}`);
-      }
-      return contractState.data;
-    },
-    catch: (cause) =>
-      new ContractError({
-        cause,
-        message: `Failed to query contract state: ${cause instanceof Error ? cause.message : String(cause)}`,
-      }),
-  });
-}
-
-function contractStateAtEffect(
-  contractData: ContractData,
-  blockHeight: number,
-): Effect.Effect<unknown, ContractError> {
-  if (contractData.address === undefined) {
-    return Effect.fail(
-      new ContractError({
-        cause: new Error('Not deployed'),
-        message: `Contract not deployed. Call deploy() or join() first.`,
-      }),
-    );
-  }
-
-  const address = contractData.address;
-  return Effect.tryPromise({
-    try: async () => {
-      const { providers } = contractData;
-      const contractState = await providers.publicDataProvider.queryContractState(address, {
-        type: 'blockHeight',
-        blockHeight,
-      });
-      if (!contractState) {
-        throw new Error(`Contract state not found at ${address} at block ${blockHeight}`);
-      }
-      return contractState.data;
-    },
-    catch: (cause) =>
-      new ContractError({
-        cause,
-        message: `Failed to query contract state at block ${blockHeight}: ${cause instanceof Error ? cause.message : String(cause)}`,
-      }),
-  });
-}
-
-function ledgerStateEffect(contractData: ContractData): Effect.Effect<unknown, ContractError> {
-  return contractStateEffect(contractData).pipe(
-    Effect.map((data) => contractData.module.ledger(data))
-  );
-}
-
-function ledgerStateAtEffect(
-  contractData: ContractData,
-  blockHeight: number,
-): Effect.Effect<unknown, ContractError> {
-  return contractStateAtEffect(contractData, blockHeight).pipe(
-    Effect.map((data) => contractData.module.ledger(data))
-  );
-}
-
-// =============================================================================
-// Handle Factories (Create handles with methods from data)
-// =============================================================================
-
-/**
- * Create a stateful Contract handle from internal data.
- * The contract maintains mutable state internally for simplicity.
- * @internal
- */
-function createContractHandle(initialData: ContractData): Contract {
-  // Mutable state - the contract data can change via deploy/join
-  let data: ContractData = initialData;
-
-  const handle: Contract = {
-    // Computed state property
-    get state(): ContractState {
-      return data.address !== undefined ? 'deployed' : 'loaded';
-    },
-
-    // Data accessors
-    get address() {
-      return data.address;
-    },
-    get module() {
-      return data.module;
-    },
-    get providers() {
-      return data.providers;
-    },
-
-    // Lifecycle methods
-    deploy: async (options) => {
-      const newData = await runEffectWithLogging(deployContractEffect(data, options), data.logging);
-      data = newData; // Update internal state
-    },
-    join: async (address, options) => {
-      const newData = await runEffectWithLogging(joinContractEffect(data, address, options), data.logging);
-      data = newData; // Update internal state
-    },
-
-    // Contract methods
-    call: (action, ...args) =>
-      runEffectWithLogging(callContractEffect(data, action, ...args), data.logging),
-    getState: () =>
-      runEffectWithLogging(contractStateEffect(data), data.logging),
-    getStateAt: (blockHeight) =>
-      runEffectWithLogging(contractStateAtEffect(data, blockHeight), data.logging),
-    ledgerState: () =>
-      runEffectWithLogging(ledgerStateEffect(data), data.logging),
-    ledgerStateAt: (blockHeight) =>
-      runEffectWithLogging(ledgerStateAtEffect(data, blockHeight), data.logging),
-
-    // Effect API
-    effect: {
-      deploy: (options) =>
-        deployContractEffect(data, options).pipe(
-          Effect.tap((newData) => Effect.sync(() => { data = newData; }))
-        ),
-      join: (address, options) =>
-        joinContractEffect(data, address, options).pipe(
-          Effect.tap((newData) => Effect.sync(() => { data = newData; }))
-        ),
-      call: (action, ...args) => callContractEffect(data, action, ...args),
-      getState: () => contractStateEffect(data),
-      getStateAt: (blockHeight) => contractStateAtEffect(data, blockHeight),
-      ledgerState: () => ledgerStateEffect(data),
-      ledgerStateAt: (blockHeight) => ledgerStateAtEffect(data, blockHeight),
-    },
-  };
-
-  return handle;
-}
-
-/**
- * Create a MiddayClient handle from internal data.
- * @internal
- */
 function closeClientEffect(data: ClientData): Effect.Effect<void, ClientError> {
   return Effect.gen(function* () {
     if (data.wallet) {
@@ -1042,18 +471,20 @@ function closeClientEffect(data: ClientData): Effect.Effect<void, ClientError> {
   });
 }
 
+// =============================================================================
+// Handle Factory
+// =============================================================================
+
 function createClientHandle(data: ClientData): MiddayClient {
   return {
-    // Data accessors
     networkConfig: data.networkConfig,
     providers: data.providers,
     wallet: data.wallet,
 
-    // Promise API - returns Contract directly (new API)
     loadContract: async <M extends ContractModule>(options: LoadContractOptions<M>) => {
       const contractData = await runEffectWithLogging(
         loadContractEffect(data, options),
-        data.logging
+        data.logging,
       );
       return createContractHandle(contractData) as Contract<InferLedger<M>, InferCircuits<M>>;
     },
@@ -1065,11 +496,10 @@ function createClientHandle(data: ClientData): MiddayClient {
     [Symbol.asyncDispose]: () =>
       runEffectWithLogging(closeClientEffect(data), data.logging),
 
-    // Effect API
     effect: {
       loadContract: <M extends ContractModule>(options: LoadContractOptions<M>) =>
         loadContractEffect(data, options).pipe(
-          Effect.map((contractData) => createContractHandle(contractData) as Contract<InferLedger<M>, InferCircuits<M>>)
+          Effect.map((contractData) => createContractHandle(contractData) as Contract<InferLedger<M>, InferCircuits<M>>),
         ),
       waitForTx: (txHash) => waitForTxEffect(data, txHash),
       close: () => closeClientEffect(data),
@@ -1078,7 +508,7 @@ function createClientHandle(data: ClientData): MiddayClient {
 }
 
 // =============================================================================
-// Module - Public API
+// Public API
 // =============================================================================
 
 /**
@@ -1108,19 +538,6 @@ export async function create(config: ClientConfig): Promise<MiddayClient> {
 
 /**
  * Run a function with a client that is automatically closed when done.
- *
- * Guarantees cleanup even if the body throws — the wallet and all WebSocket
- * connections are stopped before the promise settles.
- *
- * @example
- * ```typescript
- * await Midday.Client.withClient(config, async (client) => {
- *   const contract = await client.loadContract({ path: './contracts/counter' });
- *   await contract.deploy();
- *   await contract.call('increment');
- * });
- * // client.close() called automatically
- * ```
  *
  * @since 0.2.9
  * @category constructors
@@ -1158,79 +575,30 @@ export async function fromWallet(
 /**
  * Raw Effect APIs for advanced users who want to compose Effects.
  *
- * @example
- * ```typescript
- * const program = Effect.gen(function* () {
- *   const client = yield* Midday.Client.effect.create(config);
- *   const contract = yield* client.effect.loadContract({ module });
- *   yield* contract.effect.deploy();
- *   yield* contract.effect.call('increment');
- * });
- * ```
- *
  * @since 0.2.0
  * @category effect
  */
 export const effect = {
-  /**
-   * Create a client (Effect version).
-   */
   create: (config: ClientConfig): Effect.Effect<MiddayClient, ClientError> =>
     createClientDataEffect(config).pipe(Effect.map(createClientHandle)),
 
-  /**
-   * Create a scoped client that is automatically closed when the scope exits.
-   *
-   * @example
-   * ```typescript
-   * const program = Effect.scoped(
-   *   Effect.gen(function* () {
-   *     const client = yield* Midday.Client.effect.createScoped(config);
-   *     const contract = yield* client.effect.loadContract({ module });
-   *     yield* contract.effect.deploy();
-   *   })
-   * );
-   * // wallet stopped automatically when scope closes
-   * ```
-   *
-   * @since 0.2.9
-   */
   createScoped: (config: ClientConfig): Effect.Effect<MiddayClient, ClientError, Scope.Scope> =>
     Effect.acquireRelease(
       createClientDataEffect(config).pipe(Effect.map(createClientHandle)),
-      (client) => client.effect.close().pipe(
-        Effect.catchAll(() => Effect.void),
-      ),
+      (client) => client.effect.close().pipe(Effect.catchAll(() => Effect.void)),
     ),
 
-  /**
-   * Run an Effect with a client that is automatically closed when done.
-   *
-   * @example
-   * ```typescript
-   * const result = yield* Midday.Client.effect.withClient(config, (client) =>
-   *   Effect.gen(function* () {
-   *     const contract = yield* client.effect.loadContract({ module });
-   *     yield* contract.effect.deploy();
-   *   })
-   * );
-   * ```
-   *
-   * @since 0.2.9
-   */
-  withClient: <A, E>(config: ClientConfig, body: (client: MiddayClient) => Effect.Effect<A, E>): Effect.Effect<A, E | ClientError> =>
+  withClient: <A, E>(
+    config: ClientConfig,
+    body: (client: MiddayClient) => Effect.Effect<A, E>,
+  ): Effect.Effect<A, E | ClientError> =>
     Effect.scoped(
       Effect.acquireRelease(
         createClientDataEffect(config).pipe(Effect.map(createClientHandle)),
-        (client) => client.effect.close().pipe(
-          Effect.catchAll(() => Effect.void),
-        ),
+        (client) => client.effect.close().pipe(Effect.catchAll(() => Effect.void)),
       ).pipe(Effect.flatMap(body)),
     ),
 
-  /**
-   * Create a client from wallet (Effect version).
-   */
   fromWallet: (
     connection: WalletConnection,
     config: {
@@ -1242,102 +610,7 @@ export const effect = {
 };
 
 // =============================================================================
-// Contract Loading (Static Functions - Can Be Used Before Client Exists)
-// =============================================================================
-
-/**
- * Result of loading a contract from a path.
- *
- * @since 0.4.0
- * @category model
- */
-export interface ContractLoadResult<T = ContractModule> {
-  /** The contract module with TypeScript types. */
-  readonly module: T;
-  /** ZK config provider for circuit artifacts. */
-  readonly zkConfig: ZKConfigProvider<string>;
-}
-
-/**
- * Options for loading a contract.
- *
- * @since 0.4.0
- * @category model
- */
-export interface ContractLoadOptions {
-  /** Subdirectory within the contract path where the compiled module lives. @default 'contract' */
-  readonly moduleSubdir?: string;
-  /** Module entry point filename. @default 'index.js' */
-  readonly moduleEntry?: string;
-}
-
-/**
- * Load a Compact contract from a directory path.
- *
- * Note: Prefer using `client.loadContract({ path })` which handles this automatically.
- * This function is useful when you need to load the module before creating a client.
- *
- * @param contractPath - Absolute path to the contract directory
- * @param options - Optional loading configuration
- * @returns Promise resolving to the contract module and ZK config provider
- *
- * @example
- * ```typescript
- * // Preferred: let loadContract handle it
- * const contract = await client.loadContract({ path: contractPath });
- *
- * // Alternative: load separately (useful for pre-loading)
- * const { module, zkConfig } = await Midday.Client.loadContractModule(contractPath);
- * const contract = await client.loadContract({ module, zkConfig });
- * ```
- *
- * @since 0.4.0
- * @category loading
- */
-export async function loadContractModule<T = ContractModule>(
-  contractPath: string,
-  options: ContractLoadOptions = {}
-): Promise<ContractLoadResult<T>> {
-  const { moduleSubdir = 'contract', moduleEntry = 'index.js' } = options;
-
-  // Dynamic imports to avoid bundling Node.js code in browser
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { join } = require('path');
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { NodeZkConfigProvider } = require('@midnight-ntwrk/midnight-js-node-zk-config-provider');
-
-  const modulePath = join(contractPath, moduleSubdir, moduleEntry);
-  const module = (await import(modulePath)) as T;
-  const zkConfig = new NodeZkConfigProvider(contractPath) as ZKConfigProvider<string>;
-
-  return { module, zkConfig };
-}
-
-/**
- * Load a contract from URLs (browser environments).
- *
- * @param moduleUrl - URL to the contract module
- * @param zkConfigBaseUrl - Base URL for ZK artifacts
- * @returns Promise resolving to the contract module and ZK config provider
- *
- * @since 0.4.0
- * @category loading
- */
-export async function loadContractModuleFromUrl<T = ContractModule>(
-  moduleUrl: string,
-  zkConfigBaseUrl: string
-): Promise<ContractLoadResult<T>> {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { HttpZkConfigProvider } = require('./providers/HttpZkConfigProvider.js');
-
-  const module = (await import(/* webpackIgnore: true */ moduleUrl)) as T;
-  const zkConfig = new HttpZkConfigProvider(zkConfigBaseUrl) as ZKConfigProvider<string>;
-
-  return { module, zkConfig };
-}
-
-// =============================================================================
-// Effect DI - Service Definitions (For Advanced DI Patterns)
+// Effect DI
 // =============================================================================
 
 /**
@@ -1376,10 +649,6 @@ export const ClientLive: Layer.Layer<ClientService> = Layer.succeed(ClientServic
   fromWallet: effect.fromWallet,
 });
 
-// =============================================================================
-// Pre-configured Client Layer
-// =============================================================================
-
 /**
  * Context.Tag for a pre-initialized MiddayClient.
  *
@@ -1394,24 +663,6 @@ export class MiddayClientService extends Context.Tag('MiddayClientService')<
 /**
  * Create a Layer that provides a pre-initialized MiddayClient.
  *
- * @example
- * ```typescript
- * const clientLayer = Midday.Client.layer({
- *   seed: 'your-64-char-hex-seed',
- *   networkConfig: Midday.Config.NETWORKS.local,
- *   zkConfigProvider,
- *   privateStateProvider,
- * });
- *
- * const program = Effect.gen(function* () {
- *   const client = yield* Midday.MiddayClientService;
- *   const builder = yield* client.effect.loadContract({ module });
- *   return builder;
- * });
- *
- * await Effect.runPromise(program.pipe(Effect.provide(clientLayer)));
- * ```
- *
  * @since 0.3.0
  * @category layer
  */
@@ -1420,7 +671,7 @@ export function layer(config: ClientConfig): Layer.Layer<MiddayClientService, Cl
 }
 
 /**
- * Create a Layer that provides a pre-initialized MiddayClient from a wallet connection.
+ * Create a Layer from a wallet connection.
  *
  * @since 0.3.0
  * @category layer

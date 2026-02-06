@@ -58,7 +58,7 @@ describe('Contract E2E Tests', () => {
 
   describe('Counter Contract Lifecycle', () => {
     let client: Midday.Client.MiddayClient;
-    let contract: Midday.Client.Contract;
+    let contract: Midday.Contract.Contract;
     let contractAddress: string;
     let setupFailed = false;
 
