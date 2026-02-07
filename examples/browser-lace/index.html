@@ -95,6 +95,23 @@
         margin-top: 1rem;
         color: #6366f1;
       }
+      #balance-info {
+        display: none;
+        font-family: monospace;
+        font-size: 0.875rem;
+        background: #f0fdf4;
+        padding: 0.75rem;
+        border-radius: 6px;
+        margin-top: 1rem;
+        border: 1px solid #bbf7d0;
+      }
+      #balance-info div {
+        margin: 0.25rem 0;
+      }
+      .balance-label {
+        color: #166534;
+        font-weight: 600;
+      }
       .note {
         font-size: 0.875rem;
         color: #6b7280;
@@ -115,9 +132,15 @@
       <div id="address"></div>
       <div id="actions">
         <button class="action-btn" onclick="fundWallet()" style="background: #f59e0b;">Fund Wallet</button>
+        <button class="action-btn" onclick="refreshBalance()" style="background: #8b5cf6;">Refresh Balance</button>
         <button class="action-btn" onclick="deployContract()">Deploy Contract</button>
         <button class="action-btn" onclick="callAction()">Increment</button>
         <button class="action-btn" onclick="readState()">Read State</button>
+      </div>
+      <div id="balance-info">
+        <div><span class="balance-label">Shielded:</span> <span id="shielded-balance">-</span></div>
+        <div><span class="balance-label">Unshielded:</span> <span id="unshielded-balance">-</span></div>
+        <div><span class="balance-label">Dust:</span> <span id="dust-balance">-</span> / <span id="dust-cap">-</span> (cap)</div>
       </div>
       <div id="counter-value"></div>
       <div id="status"></div>

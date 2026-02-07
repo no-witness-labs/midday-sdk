@@ -13,6 +13,8 @@ import * as CounterContract from '../../../contracts/counter/contract/index.js';
 
 // Store connected wallet keys for funding
 let connectedKeys: { coinPublicKey: string; encryptionPublicKey: string } | null = null;
+// Store connected wallet API for balance queries
+let connectedApi: Midday.BrowserWallet.ConnectedAPI | null = null;
 
 // UI Elements
 const networkSelect = document.getElementById('network-select') as HTMLSelectElement;
@@ -58,6 +60,9 @@ async function connectWallet() {
         privateStateStoreName: 'lace-example',
       }),
     });
+
+    // Store connected API for balance queries
+    connectedApi = connection.wallet;
 
     // Store keys for funding and display address
     connectedKeys = {
@@ -150,6 +155,56 @@ async function readState() {
   }
 }
 
+// Format balance for display (convert from smallest unit)
+function formatBalance(value: bigint): string {
+  const whole = value / 1_000_000_000n;
+  const frac = value % 1_000_000_000n;
+  if (frac === 0n) return whole.toString();
+  return `${whole}.${frac.toString().padStart(9, '0').replace(/0+$/, '')}`;
+}
+
+// Refresh and display wallet balances
+async function refreshBalance() {
+  if (!connectedApi) {
+    updateStatus('Not connected - connect wallet first', true);
+    return;
+  }
+
+  try {
+    updateStatus('Fetching balances...');
+
+    const [shielded, unshielded, dust] = await Promise.all([
+      connectedApi.getShieldedBalances(),
+      connectedApi.getUnshieldedBalances(),
+      connectedApi.getDustBalance(),
+    ]);
+
+    // Get native token balance - try both empty string and first available key
+    const shieldedKeys = Object.keys(shielded);
+    const unshieldedKeys = Object.keys(unshielded);
+    const shieldedNative = shielded[''] ?? (shieldedKeys.length > 0 ? shielded[shieldedKeys[0]] : 0n);
+    const unshieldedNative = unshielded[''] ?? (unshieldedKeys.length > 0 ? unshielded[unshieldedKeys[0]] : 0n);
+
+    // Update UI
+    const balanceInfo = document.getElementById('balance-info');
+    const shieldedEl = document.getElementById('shielded-balance');
+    const unshieldedEl = document.getElementById('unshielded-balance');
+    const dustBalanceEl = document.getElementById('dust-balance');
+    const dustCapEl = document.getElementById('dust-cap');
+
+    if (balanceInfo) balanceInfo.style.display = 'block';
+    if (shieldedEl) shieldedEl.textContent = formatBalance(shieldedNative);
+    if (unshieldedEl) unshieldedEl.textContent = formatBalance(unshieldedNative);
+    if (dustBalanceEl) dustBalanceEl.textContent = formatBalance(dust.balance);
+    if (dustCapEl) dustCapEl.textContent = formatBalance(dust.cap);
+
+    updateStatus('Balances updated');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    updateStatus(`Failed to get balances: ${message}`, true);
+  }
+}
+
 // Fund wallet via faucet HTTP API (for local devnet only)
 async function fundWallet() {
   if (!connectedKeys) {
@@ -177,7 +232,10 @@ async function fundWallet() {
     }
 
     const result = await response.json();
-    updateStatus(`Funded! TX: ${result.txId.slice(0, 16)}...`);
+    updateStatus(`Funded! TX: ${result.txId.slice(0, 16)}... (wait ~10s then refresh balance)`);
+
+    // Auto-refresh balance after a delay for the tx to confirm
+    setTimeout(() => refreshBalance(), 10000);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     updateStatus(`Funding failed: ${message}. Run faucet server first.`, true);
@@ -192,6 +250,7 @@ connectBtn.addEventListener('click', connectWallet);
 (window as unknown as { callAction: typeof callAction }).callAction = callAction;
 (window as unknown as { readState: typeof readState }).readState = readState;
 (window as unknown as { fundWallet: typeof fundWallet }).fundWallet = fundWallet;
+(window as unknown as { refreshBalance: typeof refreshBalance }).refreshBalance = refreshBalance;
 
 // Initial status
 updateStatus('Select network and click "Connect Wallet" to begin');
