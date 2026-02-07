@@ -631,14 +631,14 @@ function loadContractEffect(
         const { NodeZkConfigProvider } = require('@midnight-ntwrk/midnight-js-node-zk-config-provider');
 
         const modulePath = join(options.path, 'contract', 'index.js');
-        module = await import(modulePath);
+        module = await import(/* @vite-ignore */ modulePath);
         zkConfig = new NodeZkConfigProvider(options.path);
       } else if (options.moduleUrl && options.zkConfigBaseUrl) {
         // URL-based loading (browser)
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const { HttpZkConfigProvider } = require('./providers/HttpZkConfigProvider.js');
 
-        module = await import(/* webpackIgnore: true */ options.moduleUrl);
+        module = await import(/* @vite-ignore */ /* webpackIgnore: true */ options.moduleUrl);
         zkConfig = new HttpZkConfigProvider(options.zkConfigBaseUrl);
       } else if (options.module && options.zkConfig) {
         // Direct loading
@@ -1307,7 +1307,7 @@ export async function loadContractModule<T = ContractModule>(
   const { NodeZkConfigProvider } = require('@midnight-ntwrk/midnight-js-node-zk-config-provider');
 
   const modulePath = join(contractPath, moduleSubdir, moduleEntry);
-  const module = (await import(modulePath)) as T;
+  const module = (await import(/* @vite-ignore */ modulePath)) as T;
   const zkConfig = new NodeZkConfigProvider(contractPath) as ZKConfigProvider<string>;
 
   return { module, zkConfig };
@@ -1330,7 +1330,7 @@ export async function loadContractModuleFromUrl<T = ContractModule>(
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { HttpZkConfigProvider } = require('./providers/HttpZkConfigProvider.js');
 
-  const module = (await import(/* webpackIgnore: true */ moduleUrl)) as T;
+  const module = (await import(/* @vite-ignore */ /* webpackIgnore: true */ moduleUrl)) as T;
   const zkConfig = new HttpZkConfigProvider(zkConfigBaseUrl) as ZKConfigProvider<string>;
 
   return { module, zkConfig };
