@@ -46,6 +46,19 @@ export interface ProofServerConfig {
 }
 
 /**
+ * Configuration for the faucet container.
+ *
+ * @since 0.2.0
+ * @category model
+ */
+export interface FaucetConfig {
+  readonly image?: string;
+  readonly port?: number;
+  /** Enable faucet server (default: true) */
+  readonly enabled?: boolean;
+}
+
+/**
  * Configuration interface for Midnight DevNet setup.
  * All properties are optional, with sensible defaults provided.
  *
@@ -61,6 +74,8 @@ export interface DevNetConfig {
   readonly indexer?: IndexerConfig;
   /** Proof server configuration */
   readonly proofServer?: ProofServerConfig;
+  /** Faucet configuration */
+  readonly faucet?: FaucetConfig;
 }
 
 /**
@@ -74,6 +89,7 @@ export interface ResolvedDevNetConfig {
   readonly node: Required<NodeConfig>;
   readonly indexer: Required<IndexerConfig>;
   readonly proofServer: Required<ProofServerConfig>;
+  readonly faucet: Required<FaucetConfig>;
 }
 
 /**
@@ -113,6 +129,18 @@ export const DEFAULT_PROOF_SERVER_CONFIG: Required<ProofServerConfig> = {
 } as const;
 
 /**
+ * Default faucet configuration.
+ *
+ * @since 0.2.0
+ * @category constants
+ */
+export const DEFAULT_FAUCET_CONFIG: Required<FaucetConfig> = {
+  image: 'midday-faucet:latest',
+  port: 3001,
+  enabled: true,
+} as const;
+
+/**
  * Default DevNet configuration.
  *
  * @since 0.2.0
@@ -123,6 +151,7 @@ export const DEFAULT_DEVNET_CONFIG: Required<DevNetConfig> = {
   node: DEFAULT_NODE_CONFIG,
   indexer: DEFAULT_INDEXER_CONFIG,
   proofServer: DEFAULT_PROOF_SERVER_CONFIG,
+  faucet: DEFAULT_FAUCET_CONFIG,
 } as const;
 
 /**

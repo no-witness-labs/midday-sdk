@@ -1,0 +1,20 @@
+{
+  "name": "@examples/browser-lace",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "vite",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@no-witness-labs/midday-sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "vite": "^5.0.0",
+    "vite-plugin-top-level-await": "^1.4.1",
+    "vite-plugin-wasm": "^3.3.0"
+  }
+}

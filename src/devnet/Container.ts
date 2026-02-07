@@ -511,6 +511,68 @@ export async function createProofServer(
 }
 
 /**
+ * Create a faucet container.
+ * @internal
+ */
+function createFaucetEffect(
+  config: ResolvedDevNetConfig,
+): Effect.Effect<Docker.Container, ContainerError> {
+  return Effect.gen(function* () {
+    return yield* Effect.tryPromise({
+      try: async () => {
+        const docker = new Docker();
+        const containerName = `${config.clusterName}-faucet`;
+        const networkName = `${config.clusterName}-network`;
+
+        await Images.ensureAvailable(config.faucet.image);
+        await ensureNetwork(networkName);
+
+        return docker.createContainer({
+          Image: config.faucet.image,
+          name: containerName,
+          ExposedPorts: {
+            [`${config.faucet.port}/tcp`]: {},
+          },
+          HostConfig: {
+            PortBindings: {
+              ['3001/tcp']: [{ HostPort: String(config.faucet.port) }],
+            },
+            NetworkMode: networkName,
+          },
+          Env: [
+            `NETWORK_ID=undeployed`,
+            `INDEXER_URL=http://${config.clusterName}-indexer:8088/api/v3/graphql`,
+            `INDEXER_WS_URL=ws://${config.clusterName}-indexer:8088/api/v3/graphql/ws`,
+            `NODE_URL=ws://${config.clusterName}-node:9944`,
+            `PROOF_SERVER_URL=http://${config.clusterName}-proof-server:6300`,
+            `FAUCET_PORT=3001`,
+          ],
+        });
+      },
+      catch: (cause: unknown) =>
+        new ContainerError({
+          operation: 'create',
+          container: `${config.clusterName}-faucet`,
+          cause,
+        }),
+    });
+  });
+}
+
+/**
+ * Create a faucet container.
+ *
+ * @since 0.2.0
+ * @category constructors
+ * @internal
+ */
+export async function createFaucet(
+  config: ResolvedDevNetConfig,
+): Promise<Docker.Container> {
+  return Effect.runPromise(createFaucetEffect(config));
+}
+
+/**
  * Raw Effect APIs for advanced users.
  *
  * @since 0.2.0
@@ -526,6 +588,7 @@ export const effect = {
   createNode: createNodeEffect,
   createIndexer: createIndexerEffect,
   createProofServer: createProofServerEffect,
+  createFaucet: createFaucetEffect,
 };
 
 /**
