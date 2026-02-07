@@ -4,12 +4,36 @@
  * Demonstrates how to use the SDK's devnet module for local development
  * and testing with Docker containers.
  *
+ * Includes faucet server for browser apps to fund wallets.
+ *
  * Prerequisites:
  * - Docker installed and running
  * - Sufficient system resources for Midnight containers
+ * - For Docker faucet: build image first with `cd docker/faucet && ./build.sh`
  */
-import { Cluster } from '@no-witness-labs/midday-sdk/devnet';
+import { Cluster, Faucet } from '@no-witness-labs/midday-sdk/devnet';
 import * as Midday from '@no-witness-labs/midday-sdk';
+
+// Build faucet Docker image if needed
+async function ensureFaucetImage(): Promise<void> {
+  const Docker = (await import('dockerode')).default;
+  const docker = new Docker();
+  const images = await docker.listImages({ filters: { reference: ['midday-faucet:latest'] } });
+
+  if (images.length > 0) {
+    return;
+  }
+
+  // Build the image (multi-stage build does everything inside Docker)
+  console.log('   Building faucet Docker image (first time only)...');
+  const { execSync } = await import('child_process');
+  const path = await import('path');
+  const faucetDir = path.resolve(import.meta.dirname, '../../../docker/faucet');
+
+  execSync('docker build -t midday-faucet:latest .', { cwd: faucetDir, stdio: 'pipe' });
+
+  console.log('   Faucet image built successfully');
+}
 
 async function main() {
   console.log('=== Devnet Testing Example ===\n');
@@ -17,6 +41,7 @@ async function main() {
   // Step 1: Create a devnet cluster
   console.log('1. Creating devnet cluster...');
   let cluster: Cluster.Cluster;
+  let client: Midday.Client.MiddayClient | null = null;
 
   try {
     cluster = await Cluster.make();
@@ -43,9 +68,15 @@ async function main() {
     console.log(`   Node: ${networkConfig.node}`);
     console.log(`   Proof Server: ${networkConfig.proofServer}`);
 
-    // Step 4: Create a Midday client using the devnet
-    console.log('\n4. Creating Midday client with devnet config...');
-    const client = await Midday.Client.create({
+    // Step 4: Start faucet for browser apps
+    console.log('\n4. Starting faucet...');
+    await ensureFaucetImage();
+    await Faucet.startDocker(cluster.networkConfig);
+    console.log('   Faucet: http://localhost:3001/faucet');
+
+    // Step 5: Create a Midday client using the devnet
+    console.log('\n5. Creating Midday client with devnet config...');
+    client = await Midday.Client.create({
       seed: Midday.Config.DEV_WALLET_SEED, // Use dev wallet for local testing
       networkConfig: cluster.networkConfig,
       privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
@@ -53,27 +84,28 @@ async function main() {
     console.log('   Client created');
     console.log(`   Network ID: ${client.networkConfig.networkId}`);
 
-    // Step 5: Demonstrate contract operations (structure only)
-    console.log('\n5. Contract operations (demonstration):');
+    // Step 6: Demonstrate contract operations (structure only)
+    console.log('\n6. Contract operations (demonstration):');
     console.log('   - Load contract: client.loadContract({ module, zkConfigProvider })');
     console.log('   - Deploy: await contract.deploy()');
     console.log('   - Call action: await contract.call("increment")');
     console.log('   - Read state: await contract.ledgerState()');
 
     console.log('\n=== Devnet ready for testing ===');
-    console.log('Press Ctrl+C to stop and cleanup...');
+    console.log('Faucet available at http://localhost:3001/faucet');
 
-    // Keep running until interrupted
-    await new Promise((resolve) => {
-      process.on('SIGINT', resolve);
-      process.on('SIGTERM', resolve);
-    });
-  } finally {
-    // Step 6: Cleanup
-    console.log('\n6. Cleaning up devnet cluster...');
-    await cluster.remove();
-    console.log('   Cluster removed');
-    console.log('\n=== Done ===');
+    // Close client - we don't need it running
+    if (client) {
+      await client.close();
+    }
+
+    console.log('\nRun cleanup when done:');
+    console.log('  pnpm --filter @examples/devnet-testing cleanup');
+  } catch (error) {
+    // On error, cleanup containers
+    console.error('\nError occurred, cleaning up...');
+    await cluster.remove().catch(() => {});
+    throw error;
   }
 }
 

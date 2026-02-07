@@ -11,6 +11,9 @@
 import * as Midday from '@no-witness-labs/midday-sdk';
 import * as CounterContract from '../../../contracts/counter/contract/index.js';
 
+// Store connected wallet keys for funding
+let connectedKeys: { coinPublicKey: string; encryptionPublicKey: string } | null = null;
+
 // UI Elements
 const networkSelect = document.getElementById('network-select') as HTMLSelectElement;
 const connectBtn = document.getElementById('connect-btn') as HTMLButtonElement;
@@ -56,8 +59,12 @@ async function connectWallet() {
       }),
     });
 
-    // Display connected address
-    addressDiv.textContent = `Connected: ${connection.addresses.shieldedAddress}`;
+    // Store keys for funding and display address
+    connectedKeys = {
+      coinPublicKey: connection.addresses.shieldedCoinPublicKey,
+      encryptionPublicKey: connection.addresses.shieldedEncryptionPublicKey,
+    };
+    addressDiv.textContent = `Connected: ${connection.addresses.shieldedCoinPublicKey.slice(0, 16)}...`;
     addressDiv.style.display = 'block';
 
     // Show action buttons
@@ -143,6 +150,40 @@ async function readState() {
   }
 }
 
+// Fund wallet via faucet HTTP API (for local devnet only)
+async function fundWallet() {
+  if (!connectedKeys) {
+    updateStatus('Not connected - connect wallet first', true);
+    return;
+  }
+
+  const network = networkSelect?.value || 'undeployed';
+  if (network !== 'undeployed') {
+    updateStatus('Faucet only works on local devnet', true);
+    return;
+  }
+
+  try {
+    updateStatus('Requesting funds from faucet...');
+    const response = await fetch('http://localhost:3001/faucet', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(connectedKeys),
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(error || `HTTP ${response.status}`);
+    }
+
+    const result = await response.json();
+    updateStatus(`Funded! TX: ${result.txId.slice(0, 16)}...`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    updateStatus(`Funding failed: ${message}. Run faucet server first.`, true);
+  }
+}
+
 // Set up event listeners
 connectBtn.addEventListener('click', connectWallet);
 
@@ -150,6 +191,7 @@ connectBtn.addEventListener('click', connectWallet);
 (window as unknown as { deployContract: typeof deployContract }).deployContract = deployContract;
 (window as unknown as { callAction: typeof callAction }).callAction = callAction;
 (window as unknown as { readState: typeof readState }).readState = readState;
+(window as unknown as { fundWallet: typeof fundWallet }).fundWallet = fundWallet;
 
 // Initial status
 updateStatus('Select network and click "Connect Wallet" to begin');

@@ -47,6 +47,9 @@ importers:
       '@midnight-ntwrk/midnight-js-types':
         specifier: 3.0.0
         version: 3.0.0
+      '@midnight-ntwrk/wallet-sdk-address-format':
+        specifier: 3.0.0
+        version: 3.0.0
       '@midnight-ntwrk/wallet-sdk-dust-wallet':
         specifier: 1.0.0
         version: 1.0.0(crossws@0.3.5)(ws@8.19.0)
