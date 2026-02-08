@@ -1,5 +1,16 @@
 # @no-witness-labs/midday-sdk
 
+## 0.2.12
+
+### Patch Changes
+
+- 336dbbe: Auto-build faucet/fee-relay Docker images inside SDK
+
+  - Add `Images.build()` for building Docker images from local context
+  - Auto-build in `Faucet.startDocker()` and `FeeRelay.startDocker()` when image is missing
+  - Ship `docker/` build contexts in npm package
+  - Remove `ensureDockerImage()` boilerplate from examples and template
+
 ## 0.2.11
 
 ### Patch Changes
