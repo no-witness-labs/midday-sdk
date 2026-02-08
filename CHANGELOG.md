@@ -11,6 +11,8 @@
   - Ship `docker/` build contexts in npm package
   - Remove `ensureDockerImage()` boilerplate from examples and template
 
+- a9b0411: fix: replace require() with await import() in Client.ts to prevent bundlers from statically following import chains into WASM/Node.js packages
+
 ## 0.2.11
 
 ### Patch Changes

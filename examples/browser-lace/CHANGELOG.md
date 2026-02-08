@@ -5,6 +5,7 @@
 ### Patch Changes
 
 - Updated dependencies [336dbbe]
+- Updated dependencies [a9b0411]
   - @no-witness-labs/midday-sdk@0.2.12
 
 ## 0.0.1
