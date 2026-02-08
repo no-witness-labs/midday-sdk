@@ -1,5 +1,11 @@
 # @no-witness-labs/midday-sdk
 
+## 0.2.13
+
+### Patch Changes
+
+- d6712f6: fix: replace require() with await import() in Client.ts to prevent bundlers from statically following import chains into WASM/Node.js packages
+
 ## 0.2.12
 
 ### Patch Changes
