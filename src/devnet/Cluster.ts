@@ -159,6 +159,14 @@ const makeEffect = (config: DevNetConfig = {}) =>
         ...Config.DEFAULT_PROOF_SERVER_CONFIG,
         ...config.proofServer,
       },
+      faucet: {
+        ...Config.DEFAULT_FAUCET_CONFIG,
+        ...config.faucet,
+      },
+      feeRelay: {
+        ...Config.DEFAULT_FEE_RELAY_CONFIG,
+        ...config.feeRelay,
+      },
     };
 
     // Clean up existing containers
