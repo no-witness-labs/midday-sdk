@@ -66,6 +66,7 @@ export * as Cluster from './Cluster.js';
 export * as Config from './Config.js';
 export * as Container from './Container.js';
 export * as Faucet from './Faucet.js';
+export * as FeeRelay from './FeeRelay.js';
 export * as Health from './Health.js';
 export * as Images from './Images.js';
 export * from './errors.js';

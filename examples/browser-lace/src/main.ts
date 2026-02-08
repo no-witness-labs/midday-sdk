@@ -11,8 +11,6 @@
 import * as Midday from '@no-witness-labs/midday-sdk';
 import * as CounterContract from '../../../contracts/counter/contract/index.js';
 
-// Store connected wallet keys for funding
-let connectedKeys: { coinPublicKey: string; encryptionPublicKey: string } | null = null;
 // Store connected wallet API for balance queries
 let connectedApi: Midday.BrowserWallet.ConnectedAPI | null = null;
 
@@ -27,6 +25,8 @@ const counterDiv = document.getElementById('counter-value') as HTMLDivElement;
 // State
 let client: Midday.Client.MiddayClient | null = null;
 let contract: Midday.Client.Contract | null = null;
+let lacePublicKey: string = '';
+let laceEncryptionKey: string = '';
 
 // Update status display
 function updateStatus(message: string, isError = false) {
@@ -54,28 +54,31 @@ async function connectWallet() {
 
     updateStatus('Creating SDK client...');
 
-    // Create client from wallet connection
+    // Check if user wants fee relay (genesis wallet pays fees) or own dust
+    const useFeeRelay = (document.getElementById('fee-relay-checkbox') as HTMLInputElement).checked;
+
     client = await Midday.Client.fromWallet(connection, {
       privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
         privateStateStoreName: 'lace-example',
       }),
+      ...(useFeeRelay ? { feeRelay: { url: 'http://localhost:3002' } } : {}),
     });
 
-    // Store connected API for balance queries
+    // Store connected API and keys for balance queries, faucet, and key comparison
     connectedApi = connection.wallet;
+    lacePublicKey = connection.addresses.shieldedCoinPublicKey;
+    laceEncryptionKey = connection.addresses.shieldedEncryptionPublicKey;
 
-    // Store keys for funding and display address
-    connectedKeys = {
-      coinPublicKey: connection.addresses.shieldedCoinPublicKey,
-      encryptionPublicKey: connection.addresses.shieldedEncryptionPublicKey,
-    };
-    addressDiv.textContent = `Connected: ${connection.addresses.shieldedCoinPublicKey.slice(0, 16)}...`;
+    addressDiv.textContent = `Connected: ${lacePublicKey.slice(0, 16)}...`;
     addressDiv.style.display = 'block';
 
     // Show action buttons
     actionsDiv.style.display = 'block';
 
-    updateStatus('Connected successfully!');
+    // Disable fee relay toggle after connecting (switching requires reconnection)
+    (document.getElementById('fee-relay-checkbox') as HTMLInputElement).disabled = true;
+
+    updateStatus(`Connected successfully! (${useFeeRelay ? 'fee relay' : 'own dust'})`);
     connectBtn.textContent = 'Connected';
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
@@ -111,6 +114,21 @@ async function deployContract() {
 
     updateStatus(`Contract deployed at: ${contract.address}`);
     updateCounter('0');
+
+    // Show key comparison: Lace wallet key vs contract's coin public key
+    const contractKey = String(contract.providers.walletProvider.getCoinPublicKey());
+    const keyInfoDiv = document.getElementById('key-info');
+    const laceKeyEl = document.getElementById('lace-key');
+    const contractKeyEl = document.getElementById('contract-key');
+    const keyMatchEl = document.getElementById('key-match');
+    if (keyInfoDiv) keyInfoDiv.style.display = 'block';
+    if (laceKeyEl) laceKeyEl.textContent = lacePublicKey;
+    if (contractKeyEl) contractKeyEl.textContent = contractKey;
+    if (keyMatchEl) {
+      const match = lacePublicKey === contractKey;
+      keyMatchEl.textContent = match ? 'Keys match - contract belongs to Lace wallet' : 'Keys DO NOT match';
+      keyMatchEl.style.color = match ? '#059669' : '#dc2626';
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     updateStatus(`Deploy failed: ${message}`, true);
@@ -205,40 +223,36 @@ async function refreshBalance() {
   }
 }
 
-// Fund wallet via faucet HTTP API (for local devnet only)
+// Fund wallet via faucet
 async function fundWallet() {
-  if (!connectedKeys) {
+  if (!lacePublicKey || !laceEncryptionKey) {
     updateStatus('Not connected - connect wallet first', true);
-    return;
-  }
-
-  const network = networkSelect?.value || 'undeployed';
-  if (network !== 'undeployed') {
-    updateStatus('Faucet only works on local devnet', true);
     return;
   }
 
   try {
     updateStatus('Requesting funds from faucet...');
+
     const response = await fetch('http://localhost:3001/faucet', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(connectedKeys),
+      body: JSON.stringify({
+        coinPublicKey: lacePublicKey,
+        encryptionPublicKey: laceEncryptionKey,
+      }),
     });
 
+    const data = await response.json();
+
     if (!response.ok) {
-      const error = await response.text();
-      throw new Error(error || `HTTP ${response.status}`);
+      updateStatus(`Faucet error: ${data.error}`, true);
+      return;
     }
 
-    const result = await response.json();
-    updateStatus(`Funded! TX: ${result.txId.slice(0, 16)}... (wait ~10s then refresh balance)`);
-
-    // Auto-refresh balance after a delay for the tx to confirm
-    setTimeout(() => refreshBalance(), 10000);
+    updateStatus(`Funded! TX: ${data.txId.slice(0, 16)}... (${data.amount} native tokens)`);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
-    updateStatus(`Funding failed: ${message}. Run faucet server first.`, true);
+    updateStatus(`Faucet failed: ${message}`, true);
   }
 }
 
@@ -249,8 +263,8 @@ connectBtn.addEventListener('click', connectWallet);
 (window as unknown as { deployContract: typeof deployContract }).deployContract = deployContract;
 (window as unknown as { callAction: typeof callAction }).callAction = callAction;
 (window as unknown as { readState: typeof readState }).readState = readState;
-(window as unknown as { fundWallet: typeof fundWallet }).fundWallet = fundWallet;
 (window as unknown as { refreshBalance: typeof refreshBalance }).refreshBalance = refreshBalance;
+(window as unknown as { fundWallet: typeof fundWallet }).fundWallet = fundWallet;
 
 // Initial status
 updateStatus('Select network and click "Connect Wallet" to begin');

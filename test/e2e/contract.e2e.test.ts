@@ -169,5 +169,43 @@ describe('Contract E2E Tests', () => {
       const state = await contract.ledgerState();
       expect(state).toBeDefined();
     });
+
+    // =========================================================================
+    // Fee Relay Spike
+    // =========================================================================
+
+    it('fee relay: non-funded wallet calls contract via genesis balanceTx', { timeout: 180_000 }, async () => {
+      if (setupFailed) return;
+
+      const USER_SEED = 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc';
+
+      // Create user client with fee relay — genesis wallet pays fees
+      await Midday.Client.withClient({
+        seed: USER_SEED,
+        networkConfig: cluster.networkConfig,
+        privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
+        logging: true,
+        feeRelay: { seed: GENESIS_SEED },
+      }, async (userClient) => {
+        // Load contract and join existing deployed contract
+        const userContract = await userClient.loadContract({
+          module: CounterContract,
+          zkConfig: Midday.ZkConfig.fromPath(COUNTER_CONTRACT_DIR),
+          privateStateId: 'fee-relay-user',
+        });
+
+        await userContract.join(contractAddress);
+
+        // THE TEST: user wallet calls increment, genesis pays the fee
+        const result = await userContract.call('increment');
+
+        expect(result.txHash).toBeDefined();
+        expect(result.blockHeight).toBeGreaterThan(0);
+
+        console.log('[FEE RELAY] SUCCESS — genesis wallet relayed fees for user transaction');
+        console.log(`[FEE RELAY]   txHash: ${result.txHash}`);
+        console.log(`[FEE RELAY]   blockHeight: ${result.blockHeight}`);
+      });
+    });
   });
 });

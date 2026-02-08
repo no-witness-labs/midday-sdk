@@ -74,6 +74,8 @@ export interface CreateBaseProvidersOptions {
   privateStateProvider: PrivateStateProvider;
   /** Storage configuration */
   storageConfig?: StorageConfig;
+  /** Optional fee relay wallet — uses this wallet for balanceTx/submitTx while keeping the primary wallet for ZK proofs */
+  feeRelayWallet?: WalletContext;
 }
 
 // =============================================================================
@@ -90,10 +92,13 @@ function createBaseEffect(
 ): Effect.Effect<BaseProviders, ProviderError> {
   return Effect.try({
     try: () => {
-      const { networkConfig, privateStateProvider } = options;
+      const { networkConfig, privateStateProvider, feeRelayWallet } = options;
 
       // Set network ID
       setNetworkId(networkConfig.networkId as 'undeployed');
+
+      // Fee relay: use relay wallet for balancing/submitting, user wallet for ZK proofs
+      const feeWalletCtx = feeRelayWallet ?? walletContext;
 
       // Wallet provider - handles transaction balancing
       const walletProvider: WalletProvider = {
@@ -102,23 +107,23 @@ function createBaseEffect(
           walletContext.shieldedSecretKeys.encryptionPublicKey as unknown as ledger.EncPublicKey,
         balanceTx: async (tx: UnboundTransaction, ttl?: Date): Promise<ledger.FinalizedTransaction> => {
           const txTtl = ttl ?? new Date(Date.now() + 30 * 60 * 1000);
-          const recipe = await walletContext.wallet.balanceUnboundTransaction(
+          const recipe = await feeWalletCtx.wallet.balanceUnboundTransaction(
             tx,
             {
-              shieldedSecretKeys: walletContext.shieldedSecretKeys,
-              dustSecretKey: walletContext.dustSecretKey,
+              shieldedSecretKeys: feeWalletCtx.shieldedSecretKeys,
+              dustSecretKey: feeWalletCtx.dustSecretKey,
             },
             { ttl: txTtl },
           );
           // Finalize the recipe to get the FinalizedTransaction
-          const finalizedTx = await walletContext.wallet.finalizeRecipe(recipe);
+          const finalizedTx = await feeWalletCtx.wallet.finalizeRecipe(recipe);
           return finalizedTx;
         },
       };
 
       // Midnight provider - handles transaction submission
       const midnightProvider: MidnightProvider = {
-        submitTx: async (tx: ledger.FinalizedTransaction) => await walletContext.wallet.submitTransaction(tx),
+        submitTx: async (tx: ledger.FinalizedTransaction) => await feeWalletCtx.wallet.submitTransaction(tx),
       };
 
       // Public data provider - reads from indexer

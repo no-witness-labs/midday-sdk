@@ -129,6 +129,10 @@
         <option value="preview">Preview (Testnet)</option>
       </select>
       <button id="connect-btn">Connect Wallet</button>
+      <label id="fee-relay-toggle" style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem; font-size: 0.875rem; color: #374151; cursor: pointer;">
+        <input type="checkbox" id="fee-relay-checkbox" checked style="width: 1rem; height: 1rem; cursor: pointer;" />
+        Use Fee Relay (genesis wallet pays fees)
+      </label>
       <div id="address"></div>
       <div id="actions">
         <button class="action-btn" onclick="fundWallet()" style="background: #f59e0b;">Fund Wallet</button>
@@ -143,6 +147,11 @@
         <div><span class="balance-label">Dust:</span> <span id="dust-balance">-</span> / <span id="dust-cap">-</span> (cap)</div>
       </div>
       <div id="counter-value"></div>
+      <div id="key-info" style="display: none; font-family: monospace; font-size: 0.75rem; background: #eef2ff; padding: 0.75rem; border-radius: 6px; margin-top: 1rem; border: 1px solid #c7d2fe; word-break: break-all;">
+        <div style="margin-bottom: 0.25rem;"><span style="color: #4338ca; font-weight: 600;">Lace Wallet Key:</span> <span id="lace-key">-</span></div>
+        <div><span style="color: #4338ca; font-weight: 600;">Contract Key:</span> <span id="contract-key">-</span></div>
+        <div id="key-match" style="margin-top: 0.5rem; font-weight: 600;"></div>
+      </div>
       <div id="status"></div>
       <p class="note">
         Requires Lace wallet browser extension.

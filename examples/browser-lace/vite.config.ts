@@ -8,7 +8,7 @@ import { readFile } from 'fs/promises';
  * Vite plugin to serve ZK config artifacts with the URL pattern expected by HttpZkConfigProvider.
  *
  * The SDK's HttpZkConfigProvider expects:
- *   - GET /zk-config/{circuitId}/zkir -> zkir/{circuitId}.zkir
+ *   - GET /zk-config/{circuitId}/zkir -> zkir/{circuitId}.bzkir
  *   - GET /zk-config/{circuitId}/prover-key -> keys/{circuitId}.prover
  *   - GET /zk-config/{circuitId}/verifier-key -> keys/{circuitId}.verifier
  */
@@ -30,7 +30,7 @@ function zkConfigMiddleware(contractPath: string): Plugin {
 
         switch (type) {
           case 'zkir':
-            filePath = resolve(contractPath, 'zkir', `${circuitId}.zkir`);
+            filePath = resolve(contractPath, 'zkir', `${circuitId}.bzkir`);
             break;
           case 'prover-key':
             filePath = resolve(contractPath, 'keys', `${circuitId}.prover`);
@@ -64,7 +64,13 @@ export default defineConfig({
     target: 'esnext',
   },
   optimizeDeps: {
+    // Exclude SDK from pre-bundling (it's a workspace link)
+    // but include deps that contain Wasm so vite-plugin-wasm can handle them
     exclude: ['@no-witness-labs/midday-sdk'],
+    include: [
+      '@midnight-ntwrk/ledger-v7',
+      '@midnight-ntwrk/compact-runtime',
+    ],
   },
   server: {
     fs: {

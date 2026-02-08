@@ -38,6 +38,7 @@ import { Context, Data, Effect, Layer, Scope } from 'effect';
 import { deployContract, findDeployedContract } from '@midnight-ntwrk/midnight-js-contracts';
 import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
 import { CompiledContract } from '@midnight-ntwrk/compact-js';
+import { Transaction } from '@midnight-ntwrk/ledger-v7';
 import type { ZKConfigProvider, PrivateStateProvider } from '@midnight-ntwrk/midnight-js-types';
 
 import * as Config from './Config.js';
@@ -49,6 +50,7 @@ import type { WalletContext } from './Wallet.js';
 import type { WalletConnection } from './wallet/connector.js';
 import { createWalletProviders } from './wallet/provider.js';
 import { runEffectWithLogging } from './utils/effect-runtime.js';
+import { bytesToHex, hexToBytes } from './utils/hex.js';
 
 // =============================================================================
 // Errors
@@ -99,6 +101,11 @@ export interface ClientConfig {
   storage?: StorageConfig;
   /** Enable logging (default: true) */
   logging?: boolean;
+  /** Fee relay — delegate fee payment to a funded wallet so non-funded wallets can transact.
+   * - `{ seed }` — Node.js: initialize a local wallet from seed
+   * - `{ url }` — Browser: proxy to a fee relay HTTP server
+   */
+  feeRelay?: { seed: string } | { url: string };
 }
 
 /**
@@ -261,6 +268,7 @@ export interface CallResult {
  */
 interface ClientData {
   readonly wallet: WalletContext | null;
+  readonly relayerWallet: WalletContext | null;
   readonly networkConfig: NetworkConfig;
   readonly providers: BaseProviders;
   readonly logging: boolean;
@@ -306,6 +314,8 @@ export interface MiddayClient {
   readonly providers: BaseProviders;
   /** Raw wallet context (null if using wallet connector) */
   readonly wallet: WalletContext | null;
+  /** Fee relay wallet context (null if fee relay not configured) */
+  readonly relayerWallet: WalletContext | null;
 
   // Promise API - for simple usage
   /**
@@ -505,6 +515,7 @@ function createClientDataEffect(config: ClientConfig): Effect.Effect<ClientData,
       privateStateProvider,
       storage,
       logging = true,
+      feeRelay,
     } = config;
 
     // Resolve network configuration
@@ -544,17 +555,52 @@ function createClientDataEffect(config: ClientConfig): Effect.Effect<ClientData,
     );
     yield* Effect.logDebug('Wallet synced');
 
+    // Initialize fee relay wallet if configured (seed-based only for Client.create)
+    let relayerWallet: WalletContext | null = null;
+    if (feeRelay && 'seed' in feeRelay) {
+      yield* Effect.logDebug('Initializing fee relay wallet...');
+      relayerWallet = yield* Wallet.effect.init(feeRelay.seed, networkConfig).pipe(
+        Effect.mapError(
+          (e) =>
+            new ClientError({
+              cause: e,
+              message: `Failed to initialize fee relay wallet: ${e.message}`,
+            }),
+        ),
+      );
+
+      yield* Wallet.effect.waitForSync(relayerWallet).pipe(
+        Effect.mapError(
+          (e) =>
+            new ClientError({
+              cause: e,
+              message: `Failed to sync fee relay wallet: ${e.message}`,
+            }),
+        ),
+      );
+      yield* Effect.logDebug('Fee relay wallet synced');
+    } else if (feeRelay && 'url' in feeRelay) {
+      return yield* Effect.fail(
+        new ClientError({
+          cause: new Error('URL-based fee relay not supported with Client.create'),
+          message: 'URL-based fee relay ({ url }) is only supported with Client.fromWallet. Use { seed } for Client.create.',
+        }),
+      );
+    }
+
     // Create base providers (no zkConfig - that's per-contract)
     const providerOptions: CreateBaseProvidersOptions = {
       networkConfig,
       privateStateProvider,
       storageConfig: storage,
+      feeRelayWallet: relayerWallet ?? undefined,
     };
 
     const providers = Providers.createBase(walletContext, providerOptions);
 
     return {
       wallet: walletContext,
+      relayerWallet,
       networkConfig,
       providers,
       logging,
@@ -567,10 +613,11 @@ function fromWalletDataEffect(
   config: {
     privateStateProvider: PrivateStateProvider;
     logging?: boolean;
+    feeRelay?: { seed: string } | { url: string };
   },
 ): Effect.Effect<ClientData, ClientError> {
   return Effect.gen(function* () {
-    const { privateStateProvider, logging = true } = config;
+    const { privateStateProvider, logging = true, feeRelay } = config;
 
     // Create network config from wallet configuration
     const networkConfig: NetworkConfig = {
@@ -582,7 +629,106 @@ function fromWalletDataEffect(
     };
 
     // Create wallet providers from connection
-    const { walletProvider, midnightProvider } = createWalletProviders(connection.wallet, connection.addresses);
+    let { walletProvider, midnightProvider } = createWalletProviders(connection.wallet, connection.addresses);
+
+    // Initialize fee relay if configured
+    let relayerWallet: WalletContext | null = null;
+    if (feeRelay && 'seed' in feeRelay) {
+      // Seed-based: initialize a local wallet (Node.js)
+      yield* Effect.logDebug('Initializing fee relay wallet...');
+      relayerWallet = yield* Wallet.effect.init(feeRelay.seed, networkConfig).pipe(
+        Effect.mapError(
+          (e) =>
+            new ClientError({
+              cause: e,
+              message: `Failed to initialize fee relay wallet: ${e.message}`,
+            }),
+        ),
+      );
+
+      yield* Wallet.effect.waitForSync(relayerWallet).pipe(
+        Effect.mapError(
+          (e) =>
+            new ClientError({
+              cause: e,
+              message: `Failed to sync fee relay wallet: ${e.message}`,
+            }),
+        ),
+      );
+      yield* Effect.logDebug('Fee relay wallet synced');
+
+      // Override balanceTx/submitTx to use relay wallet, keep Lace's ZK keys
+      const relayCtx = relayerWallet;
+      walletProvider = {
+        ...walletProvider,
+        balanceTx: async (tx, ttl) => {
+          const txTtl = ttl ?? new Date(Date.now() + 30 * 60 * 1000);
+          const recipe = await relayCtx.wallet.balanceUnboundTransaction(
+            tx,
+            {
+              shieldedSecretKeys: relayCtx.shieldedSecretKeys,
+              dustSecretKey: relayCtx.dustSecretKey,
+            },
+            { ttl: txTtl },
+          );
+          return await relayCtx.wallet.finalizeRecipe(recipe);
+        },
+      };
+      midnightProvider = {
+        submitTx: async (tx) => await relayCtx.wallet.submitTransaction(tx),
+      };
+    } else if (feeRelay && 'url' in feeRelay) {
+      // URL-based: proxy to a remote fee relay server (browser)
+      const relayUrl = feeRelay.url.replace(/\/$/, '');
+      yield* Effect.logDebug(`Using fee relay server at ${relayUrl}`);
+
+      walletProvider = {
+        ...walletProvider,
+        balanceTx: async (tx) => {
+          const txBytes = tx.serialize();
+          const txHex = bytesToHex(txBytes);
+
+          const response = await fetch(`${relayUrl}/balance-tx`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tx: txHex }),
+          });
+          if (!response.ok) {
+            const err = await response.json().catch(() => ({ error: response.statusText }));
+            throw new Error(`Fee relay balance-tx failed: ${err.error}`);
+          }
+
+          const { tx: finalizedHex } = await response.json();
+          // FinalizedTransaction = Transaction<SignatureEnabled, Proof, Binding>
+          const finalizedBytes = hexToBytes(finalizedHex);
+          return Transaction.deserialize(
+            'signature' as import('@midnight-ntwrk/ledger-v7').SignatureEnabled['instance'],
+            'proof' as import('@midnight-ntwrk/ledger-v7').Proof['instance'],
+            'binding' as import('@midnight-ntwrk/ledger-v7').Binding['instance'],
+            finalizedBytes,
+          );
+        },
+      };
+      midnightProvider = {
+        submitTx: async (tx) => {
+          const txBytes = tx.serialize();
+          const txHex = bytesToHex(txBytes);
+
+          const response = await fetch(`${relayUrl}/submit-tx`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tx: txHex }),
+          });
+          if (!response.ok) {
+            const err = await response.json().catch(() => ({ error: response.statusText }));
+            throw new Error(`Fee relay submit-tx failed: ${err.error}`);
+          }
+
+          const { txId } = await response.json();
+          return txId;
+        },
+      };
+    }
 
     // Create base providers (no zkConfig - that's per-contract)
     const providerOptions: CreateBaseProvidersOptions = {
@@ -597,6 +743,7 @@ function fromWalletDataEffect(
 
     return {
       wallet: null,
+      relayerWallet,
       networkConfig,
       providers,
       logging,
@@ -1028,6 +1175,17 @@ function createContractHandle(initialData: ContractData): Contract {
  */
 function closeClientEffect(data: ClientData): Effect.Effect<void, ClientError> {
   return Effect.gen(function* () {
+    if (data.relayerWallet) {
+      yield* Wallet.effect.close(data.relayerWallet).pipe(
+        Effect.mapError(
+          (e) =>
+            new ClientError({
+              cause: e,
+              message: `Failed to close fee relay wallet: ${e.message}`,
+            }),
+        ),
+      );
+    }
     if (data.wallet) {
       yield* Wallet.effect.close(data.wallet).pipe(
         Effect.mapError(
@@ -1048,6 +1206,7 @@ function createClientHandle(data: ClientData): MiddayClient {
     networkConfig: data.networkConfig,
     providers: data.providers,
     wallet: data.wallet,
+    relayerWallet: data.relayerWallet,
 
     // Promise API - returns Contract directly (new API)
     loadContract: async <M extends ContractModule>(options: LoadContractOptions<M>) => {
@@ -1148,6 +1307,7 @@ export async function fromWallet(
   config: {
     privateStateProvider: PrivateStateProvider;
     logging?: boolean;
+    feeRelay?: { seed: string } | { url: string };
   },
 ): Promise<MiddayClient> {
   const logging = config.logging ?? true;
@@ -1236,6 +1396,7 @@ export const effect = {
     config: {
       privateStateProvider: PrivateStateProvider;
       logging?: boolean;
+      feeRelay?: { seed: string } | { url: string };
     },
   ): Effect.Effect<MiddayClient, ClientError> =>
     fromWalletDataEffect(connection, config).pipe(Effect.map(createClientHandle)),
@@ -1353,6 +1514,7 @@ export interface ClientServiceImpl {
     config: {
       privateStateProvider: PrivateStateProvider;
       logging?: boolean;
+      feeRelay?: { seed: string } | { url: string };
     },
   ) => Effect.Effect<MiddayClient, ClientError>;
 }
@@ -1431,6 +1593,7 @@ export function layerFromWallet(
     zkConfigProvider: ZKConfigProvider<string>;
     privateStateProvider: PrivateStateProvider;
     logging?: boolean;
+    feeRelay?: { seed: string } | { url: string };
   },
 ): Layer.Layer<MiddayClientService, ClientError> {
   return Layer.effect(MiddayClientService, effect.fromWallet(connection, config));

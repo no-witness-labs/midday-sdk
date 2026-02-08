@@ -9,7 +9,7 @@ This example shows:
 - Creating a Midday client from wallet connection
 - Using IndexedDB for persistent private state
 - Contract deployment and interaction in the browser
-- Funding wallet from devnet faucet
+- Fee relay for browser wallets (devnet feature)
 
 ## Prerequisites
 
@@ -19,7 +19,7 @@ This example shows:
 
 ## Quick Start (Local Devnet)
 
-### 1. Start the devnet (includes faucet server)
+### 1. Start the devnet (includes fee relay server)
 
 ```bash
 # Terminal 1
@@ -29,7 +29,7 @@ DOCKER_HOST=unix:///var/run/docker.sock pnpm --filter @examples/devnet-testing s
 Wait until you see:
 ```
 === Devnet ready for testing ===
-Faucet available at http://localhost:3001/faucet
+Fee relay available at http://localhost:3002
 ```
 
 ### 2. Start the browser app
@@ -44,9 +44,8 @@ pnpm --filter @examples/browser-lace dev
 1. Open http://localhost:5173
 2. Select "Local Devnet" from dropdown
 3. Click "Connect Wallet" - approve in Lace
-4. Click "Fund Wallet" - get tokens from faucet
-5. Click "Deploy Contract" - deploy counter contract
-6. Click "Increment" / "Read State" - interact with contract
+4. Click "Deploy Contract" - deploy counter contract (fees paid by genesis via fee relay)
+5. Click "Increment" / "Read State" - interact with contract
 
 ### 4. Cleanup
 
@@ -62,7 +61,7 @@ DOCKER_HOST=unix:///var/run/docker.sock pnpm --filter @examples/devnet-testing c
 
 | Network | Description |
 |---------|-------------|
-| Local Devnet | Local Docker containers, use faucet to fund wallet |
+| Local Devnet | Local Docker containers, fee relay pays tx fees from genesis |
 | Preview | Midnight testnet, need testnet tokens |
 
 ## Architecture
@@ -77,15 +76,73 @@ DOCKER_HOST=unix:///var/run/docker.sock pnpm --filter @examples/devnet-testing c
 │  - Counter UI   │     │  - Prover :6300 │
 └────────┬────────┘     └─────────────────┘
          │
-         │ POST /faucet
+         │ POST /balance-tx, /submit-tx
          ▼
 ┌─────────────────┐
-│  Faucet Server  │
-│  (:3001)        │
+│  Fee Relay      │
+│  (:3002)        │
 │                 │
-│  Funds wallet   │
+│  Pays tx fees   │
 │  from genesis   │
 └─────────────────┘
+```
+
+## Fee Relay (Devnet Feature)
+
+On local devnet, only the genesis wallet has dust (tDUST) to pay transaction fees. Browser wallets like Lace start with zero balance. The **fee relay** solves this by letting the genesis wallet pay fees on behalf of browser wallets.
+
+### How it works
+
+A transaction in Midnight has two independent layers:
+
+| Layer | Who | What |
+|-------|-----|------|
+| **ZK layer** | Lace wallet | Circuit execution, ZK proofs, coin ownership |
+| **Fee layer** | Genesis wallet (via fee relay) | Dust for tx fees, submission to node |
+
+The transaction flow for `deploy` or `increment`:
+
+```
+1. Circuit executes with Lace's coinPublicKey     ← Lace owns the state
+2. ZK proof generated (proof server :6300)         ← proves Lace authorized it
+3. UnboundTransaction created                      ← locked to Lace, needs fees
+4. Fee relay: genesis wallet adds dust via         ← can't alter the ZK proof
+   POST /balance-tx → FinalizedTransaction
+5. Fee relay: genesis wallet submits via           ← just sends bytes to node
+   POST /submit-tx → TransactionId
+```
+
+The genesis wallet **cannot** modify contract state or change ownership — the ZK proof from step 2 locks the transaction to the Lace wallet's keys. Genesis only adds fee inputs/outputs in step 4, which is independent of the ZK layer.
+
+### Key separation
+
+```typescript
+// These come from Lace — contract ownership
+walletProvider.getCoinPublicKey()       // → Lace's shielded coin key
+walletProvider.getEncryptionPublicKey() // → Lace's encryption key
+
+// These are overridden by fee relay — fee payment only
+walletProvider.balanceTx()  // → genesis wallet pays dust
+midnightProvider.submitTx() // → genesis wallet submits
+```
+
+### Usage
+
+```typescript
+// Server-side: start fee relay alongside devnet
+import { Cluster, FeeRelay } from '@no-witness-labs/midday-sdk/devnet';
+
+const cluster = await Cluster.make();
+await cluster.start();
+FeeRelay.startServer(cluster.networkConfig, { port: 3002 });
+
+// Browser: point feeRelay to the server URL
+const client = await Midday.Client.fromWallet(connection, {
+  privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
+    privateStateStoreName: 'my-app',
+  }),
+  feeRelay: { url: 'http://localhost:3002' },
+});
 ```
 
 ## Code Walkthrough
@@ -96,31 +153,18 @@ DOCKER_HOST=unix:///var/run/docker.sock pnpm --filter @examples/devnet-testing c
 const connection = await Midday.BrowserWallet.connectWallet('undeployed');
 ```
 
-### 2. Create Client from Wallet
+### 2. Create Client from Wallet (with fee relay)
 
 ```typescript
 const client = await Midday.Client.fromWallet(connection, {
   privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
     privateStateStoreName: 'my-app',
   }),
+  feeRelay: { url: 'http://localhost:3002' },
 });
 ```
 
-### 3. Fund Wallet (Local Devnet)
-
-```typescript
-// Browser calls faucet HTTP server
-const response = await fetch('http://localhost:3001/faucet', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    coinPublicKey: connection.addresses.shieldedCoinPublicKey,
-    encryptionPublicKey: connection.addresses.shieldedEncryptionPublicKey,
-  }),
-});
-```
-
-### 4. Load and Deploy Contract
+### 3. Load and Deploy Contract
 
 ```typescript
 const contract = await client.loadContract({
@@ -131,7 +175,7 @@ const contract = await client.loadContract({
 await contract.deploy();
 ```
 
-### 5. Call Actions
+### 4. Call Actions
 
 ```typescript
 const result = await contract.call('increment');
@@ -144,12 +188,9 @@ console.log(`TX: ${result.txHash}`);
 - Ensure Lace extension is installed and enabled
 - Refresh the page after installing
 
-**Funding failed:**
-- Ensure devnet is running with faucet server
-- Check Terminal 1 for faucet logs
-
 **Deploy failed:**
-- Ensure wallet has funds (click "Fund Wallet" first)
+- Ensure devnet is running with fee relay server
+- Check that http://localhost:3002/health returns `{"status":"ok"}`
 - Check browser console for detailed errors
 
 **Docker issues:**
