@@ -9,31 +9,9 @@
  * Prerequisites:
  * - Docker installed and running
  * - Sufficient system resources for Midnight containers
- * - For Docker faucet: build image first with `cd docker/faucet && ./build.sh`
  */
 import { Cluster, Faucet, FeeRelay } from '@no-witness-labs/midday-sdk/devnet';
 import * as Midday from '@no-witness-labs/midday-sdk';
-
-// Build a Docker image if needed
-async function ensureDockerImage(reference: string, dockerDir: string, label: string): Promise<void> {
-  const Docker = (await import('dockerode')).default;
-  const docker = new Docker();
-  const images = await docker.listImages({ filters: { reference: [reference] } });
-
-  if (images.length > 0) {
-    return;
-  }
-
-  // Build the image (multi-stage build does everything inside Docker)
-  console.log(`   Building ${label} Docker image (first time only)...`);
-  const { execSync } = await import('child_process');
-  const path = await import('path');
-  const dir = path.resolve(import.meta.dirname, dockerDir);
-
-  execSync(`docker build -t ${reference} .`, { cwd: dir, stdio: 'pipe' });
-
-  console.log(`   ${label} image built successfully`);
-}
 
 async function main() {
   console.log('=== Devnet Testing Example ===\n');
@@ -70,8 +48,6 @@ async function main() {
 
     // Step 4: Start faucet and fee relay for browser apps
     console.log('\n4. Starting faucet and fee relay...');
-    await ensureDockerImage('midday-faucet:latest', '../../../docker/faucet', 'faucet');
-    await ensureDockerImage('midday-fee-relay:latest', '../../../docker/fee-relay', 'fee relay');
     await Faucet.startDocker(cluster.networkConfig);
     console.log('   Faucet: http://localhost:3001/faucet');
     await FeeRelay.startDocker(cluster.networkConfig);

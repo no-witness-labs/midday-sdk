@@ -17,6 +17,7 @@
   },
   "files": [
     "dist",
+    "docker",
     "README.md"
   ],
   "scripts": {

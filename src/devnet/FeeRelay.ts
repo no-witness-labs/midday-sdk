@@ -26,6 +26,7 @@ import type { UnboundTransaction } from '@midnight-ntwrk/midnight-js-types';
 
 import type { NetworkConfig } from '../Config.js';
 import { hexToBytes, bytesToHex } from '../utils/hex.js';
+import * as Images from './Images.js';
 
 /**
  * Genesis wallet seed that is pre-funded in local devnet.
@@ -334,6 +335,15 @@ export async function startDocker(
     image = 'midday-fee-relay:latest',
     clusterName = 'midday-devnet',
   } = options;
+
+  // Auto-build image if not available
+  const available = await Images.isAvailable(image);
+  if (!available) {
+    const { resolve, dirname } = await import('path');
+    const { fileURLToPath } = await import('url');
+    const sdkRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+    Images.build(image, resolve(sdkRoot, 'docker/fee-relay'));
+  }
 
   const Docker = (await import('dockerode')).default;
   const docker = new Docker();
