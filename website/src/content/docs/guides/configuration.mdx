@@ -18,9 +18,6 @@ Midday SDK comes with pre-configured network settings for common environments.
       networkConfig: Midday.Config.NETWORKS.local,
       privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
     });
-
-    // Load contract (zkConfig loaded per-contract)
-    const contract = await client.loadContract({ path: './contracts/counter' });
     ```
   </TabItem>
   <TabItem label="Testnet">
@@ -29,12 +26,6 @@ Midday SDK comes with pre-configured network settings for common environments.
       networkConfig: Midday.Config.NETWORKS.testnet,
       seed: 'your-64-char-hex-seed',
       privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
-    });
-
-    // Load contract from URL (browser)
-    const contract = await client.loadContract({
-      moduleUrl: 'https://cdn.example.com/contracts/counter/index.js',
-      zkConfigBaseUrl: 'https://cdn.example.com/contracts/counter',
     });
     ```
   </TabItem>
@@ -65,27 +56,21 @@ Each contract has its own zk circuits. zkConfig is loaded when you load a contra
 ### From Path (Node.js)
 
 ```typescript
-// Automatically loads zkConfig from the same directory
-const contract = await client.loadContract({ 
-  path: './contracts/my-contract' 
+const loaded = await client.loadContract({
+  module: CounterContract,
+  zkConfig: Midday.ZkConfig.fromPath('./contracts/counter'),
+  privateStateId: 'my-counter',
 });
 ```
 
 ### From URL (Browser)
 
 ```typescript
-const contract = await client.loadContract({
-  moduleUrl: 'https://cdn.example.com/contracts/counter/index.js',
-  zkConfigBaseUrl: 'https://cdn.example.com/contracts/counter',
+const loaded = await client.loadContract({
+  module: CounterContract,
+  zkConfig: new Midday.ZkConfig.HttpZkConfigProvider('https://cdn.example.com/zk'),
+  privateStateId: 'my-counter',
 });
-```
-
-### Pre-loaded Module
-
-```typescript
-// For advanced use cases where you pre-load the module
-const zkConfig = Midday.ZkConfigProviders.fromPath('./contracts/counter');
-const contract = await client.loadContract({ module, zkConfig });
 ```
 
 ## Private State Provider
@@ -124,23 +109,45 @@ const client = await Midday.Client.create({
 Never commit seeds to version control. Use environment variables or secure secret management.
 :::
 
+### Wallet Factories
+
+The SDK provides convenient wallet factories:
+
+```typescript
+// From seed (Node.js)
+const wallet = await Midday.Wallet.fromSeed({ seed, networkConfig });
+
+// From browser (Lace extension)
+const wallet = await Midday.Wallet.fromBrowser('testnet');
+
+// Read-only (address only, no signing)
+const wallet = Midday.Wallet.fromAddress('0x...');
+```
+
 ### Lace Wallet (Browser)
 
 For browser applications, connect to the Lace wallet extension:
 
 ```typescript
-const connection = await Midday.BrowserWallet.connectWallet('testnet');
+const connection = await Midday.Wallet.connectWallet('testnet');
 const client = await Midday.Client.fromWallet(connection, {
   privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
     privateStateStoreName: 'my-app'
   }),
 });
-
-// Load contract with zkConfig
-const contract = await client.loadContract({
-  moduleUrl: 'https://cdn.example.com/contracts/counter/index.js',
-  zkConfigBaseUrl: 'https://cdn.example.com/contracts/counter',
-});
 ```
 
 See the [Browser Usage](/midday-sdk/guides/browser-usage/) guide for more details.
+
+### Fee Relay
+
+For browser apps where users don't need to hold dust tokens:
+
+```typescript
+const client = await Midday.Client.fromWallet(connection, {
+  privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
+    privateStateStoreName: 'my-app',
+  }),
+  feeRelay: { url: 'http://localhost:3002' },
+});
+```

@@ -12,7 +12,7 @@ import * as Midday from '@no-witness-labs/midday-sdk';
 import * as CounterContract from '../../../contracts/counter/contract/index.js';
 
 // Store connected wallet API for balance queries
-let connectedApi: Midday.BrowserWallet.ConnectedAPI | null = null;
+let connectedApi: Midday.Wallet.ConnectedAPI | null = null;
 
 // UI Elements
 const networkSelect = document.getElementById('network-select') as HTMLSelectElement;
@@ -24,7 +24,7 @@ const counterDiv = document.getElementById('counter-value') as HTMLDivElement;
 
 // State
 let client: Midday.Client.MiddayClient | null = null;
-let contract: Midday.Client.Contract | null = null;
+let contract: Midday.Contract.DeployedContract | null = null;
 let lacePublicKey: string = '';
 let laceEncryptionKey: string = '';
 
@@ -50,7 +50,7 @@ async function connectWallet() {
 
     // Connect to wallet - this will prompt user to approve
     const network = networkSelect?.value || 'undeployed';
-    const connection = await Midday.BrowserWallet.connectWallet(network as 'preview' | 'undeployed');
+    const connection = await Midday.Wallet.connectWallet(network as 'preview' | 'undeployed');
 
     updateStatus('Creating SDK client...');
 
@@ -66,8 +66,8 @@ async function connectWallet() {
 
     // Store connected API and keys for balance queries, faucet, and key comparison
     connectedApi = connection.wallet;
-    lacePublicKey = connection.addresses.shieldedCoinPublicKey;
-    laceEncryptionKey = connection.addresses.shieldedEncryptionPublicKey;
+    lacePublicKey = connection.coinPublicKey;
+    laceEncryptionKey = connection.encryptionPublicKey;
 
     addressDiv.textContent = `Connected: ${lacePublicKey.slice(0, 16)}...`;
     addressDiv.style.display = 'block';
@@ -103,14 +103,14 @@ async function deployContract() {
 
     // Load contract with module + zkConfig
     // Use HttpZkConfigProvider which expects: /{circuitId}/zkir, /{circuitId}/prover-key, /{circuitId}/verifier-key
-    contract = await client.loadContract({
+    const loaded = await client.loadContract({
       module: CounterContract,
       zkConfig: new Midday.ZkConfig.HttpZkConfigProvider(zkConfigUrl),
       privateStateId: 'browser-lace-counter',
     });
 
     updateStatus('Deploying contract...');
-    await contract.deploy();
+    contract = await loaded.deploy();
 
     updateStatus(`Contract deployed at: ${contract.address}`);
     updateCounter('0');
@@ -144,7 +144,7 @@ async function callAction() {
 
   try {
     updateStatus('Calling increment...');
-    const result = await contract.call('increment');
+    const result = await contract.actions.increment();
     updateStatus(`TX submitted: ${result.txHash.slice(0, 16)}...`);
 
     // Read updated state

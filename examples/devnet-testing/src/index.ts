@@ -65,10 +65,10 @@ async function main() {
 
     // Step 6: Demonstrate contract operations (structure only)
     console.log('\n6. Contract operations (demonstration):');
-    console.log('   - Load contract: client.loadContract({ module, zkConfigProvider })');
-    console.log('   - Deploy: await contract.deploy()');
-    console.log('   - Call action: await contract.call("increment")');
-    console.log('   - Read state: await contract.ledgerState()');
+    console.log('   - Load contract: client.loadContract({ module, zkConfig })');
+    console.log('   - Deploy: const deployed = await contract.deploy()');
+    console.log('   - Call action: await deployed.actions.increment()');
+    console.log('   - Read state: await deployed.ledgerState()');
 
     console.log('\n=== Devnet ready for testing ===');
     console.log('Faucet available at http://localhost:3001/faucet');

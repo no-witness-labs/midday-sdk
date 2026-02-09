@@ -24,10 +24,10 @@ Effect provides:
     Simplest approach, ideal for quick prototypes. Uses method chaining:
     ```typescript
     const client = await Midday.Client.create(config);
-    const contract = await client.loadContract({ path: './contracts/counter' });
-    await contract.deploy();
-    await contract.call('increment');
-    const state = await contract.ledgerState();
+    const loaded = await client.loadContract({ module, zkConfig, privateStateId: 'my-id' });
+    const deployed = await loaded.deploy();
+    await deployed.actions.increment();
+    const state = await deployed.ledgerState();
     ```
   </TabItem>
   <TabItem label="Effect API">
@@ -35,10 +35,10 @@ Effect provides:
     ```typescript
     const program = Effect.gen(function* () {
       const client = yield* Midday.Client.effect.create(config);
-      const contract = yield* client.effect.loadContract({ path: './contracts/counter' });
-      yield* contract.effect.deploy();
-      yield* contract.effect.call('increment');
-      const state = yield* contract.effect.ledgerState();
+      const loaded = yield* client.effect.loadContract({ module, zkConfig, privateStateId: 'my-id' });
+      const deployed = yield* loaded.effect.deploy();
+      yield* deployed.effect.actions.increment();
+      const state = yield* deployed.effect.ledgerState();
       return state;
     });
     ```
@@ -49,11 +49,11 @@ Effect provides:
     const ClientLayer = Midday.Client.layer(config);
 
     const program = Effect.gen(function* () {
-      const client = yield* Midday.MiddayClientService;
-      const contract = yield* client.effect.loadContract({ path: './contracts/counter' });
-      yield* contract.effect.deploy();
-      yield* contract.effect.call('increment');
-      return yield* contract.effect.ledgerState();
+      const client = yield* Midday.Client.MiddayClientService;
+      const loaded = yield* client.effect.loadContract({ module, zkConfig, privateStateId: 'my-id' });
+      const deployed = yield* loaded.effect.deploy();
+      yield* deployed.effect.actions.increment();
+      return yield* deployed.effect.ledgerState();
     });
 
     await Effect.runPromise(program.pipe(Effect.provide(ClientLayer)));
@@ -68,29 +68,41 @@ The SDK follows these principles:
 1. **Effect is source of truth** - All logic is implemented as Effect functions
 2. **Client is the hub** - Everything flows from the client
 3. **Two interfaces** - `.effect.method()` for Effect users, `.method()` for Promise users
-4. **Contract state machine** - Contracts have states (`loaded` → `deployed`)
+4. **Two-handle pattern** - `LoadedContract` and `DeployedContract` are distinct types
 
 ```typescript
-// Every handle (Client, Contract) has both interfaces:
-interface Contract {
-  // State machine
-  state: 'loaded' | 'deployed';
-  address: string | undefined;
-  
-  // Promise API (lifecycle)
-  deploy(): Promise<void>;
-  join(address: string): Promise<void>;
-  
-  // Promise API (operations)
-  call(action: string, ...args: unknown[]): Promise<CallResult>;
-  ledgerState(): Promise<unknown>;
+// LoadedContract — returned by loadContract()
+interface LoadedContract<TLedger, TCircuits, TActions> {
+  readonly module: LoadedContractModule;
+  readonly providers: ContractProviders;
 
-  // Effect API
-  effect: {
-    deploy(): Effect.Effect<void, ContractError>;
-    join(address: string): Effect.Effect<void, ContractError>;
-    call(action: string, ...args: unknown[]): Effect.Effect<CallResult, ContractError>;
-    ledgerState(): Effect.Effect<unknown, ContractError>;
+  deploy(options?: DeployOptions): Promise<DeployedContract<TLedger, TCircuits, TActions>>;
+  join(address: string, options?: JoinOptions): Promise<DeployedContract<TLedger, TCircuits, TActions>>;
+
+  readonly effect: {
+    deploy(options?: DeployOptions): Effect.Effect<DeployedContract, ContractError | TxTimeoutError>;
+    join(address: string, options?: JoinOptions): Effect.Effect<DeployedContract, ContractError | TxTimeoutError>;
+  };
+}
+
+// DeployedContract — returned by deploy() or join()
+interface DeployedContract<TLedger, TCircuits, TActions> {
+  readonly address: string;
+  readonly actions: TActions;  // typed action methods
+
+  call(action: TCircuits, ...args: unknown[]): Promise<CallResult>;
+  ledgerState(): Promise<TLedger>;
+  getState(): Promise<unknown>;
+  onStateChange(callback: (state: TLedger) => void): Unsubscribe;
+  watchState(): AsyncIterableIterator<TLedger>;
+
+  readonly effect: {
+    readonly actions: ToEffectActions<TActions>;
+    call(action: TCircuits, ...args: unknown[]): Effect.Effect<CallResult, ContractError>;
+    ledgerState(): Effect.Effect<TLedger, ContractError>;
+    getState(): Effect.Effect<unknown, ContractError>;
+    watchState(): Stream.Stream<TLedger, ContractError>;
+    watchRawState(): Stream.Stream<unknown, ContractError>;
   };
 }
 ```
@@ -119,14 +131,8 @@ const result = await Effect.runPromise(
 
 | Service | Layer Factory | Description |
 |---------|---------------|-------------|
-| `MiddayClientService` | `Client.layer(config)` | Pre-initialized client instance |
-| `ClientService` | `ClientLive` | Client factory service |
-| `WalletService` | `WalletLive` | Wallet initialization |
-| `ProvidersService` | `ProvidersLive` | Provider setup |
-| `ZkConfigService` | `ZkConfigLive` | ZK configuration loading |
-| `PrivateStateService` | `PrivateStateLive` | Private state management |
-| `WalletConnectorService` | `WalletConnectorLive` | Browser wallet connection |
-| `WalletProviderService` | `WalletProviderLive` | Wallet provider operations |
+| `Client.MiddayClientService` | `Client.layer(config)` | Pre-initialized client instance |
+| `Client.ClientService` | `Client.ClientLive` | Client factory service |
 
 ## Using Layers
 
@@ -140,21 +146,24 @@ import { Effect } from 'effect';
 
 // Create client layer with configuration
 const ClientLayer = Midday.Client.layer({
+  seed: 'your-64-char-hex-seed',
   networkConfig: Midday.Config.NETWORKS.local,
   privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
 });
 
 const program = Effect.gen(function* () {
   // Get pre-configured client from context
-  const client = yield* Midday.MiddayClientService;
-  
-  // Load contract - zkConfig loaded from path
-  const contract = yield* client.effect.loadContract({ 
-    path: './contracts/counter' 
+  const client = yield* Midday.Client.MiddayClientService;
+
+  // Load and deploy
+  const loaded = yield* client.effect.loadContract({
+    module: CounterContract,
+    zkConfig: Midday.ZkConfig.fromPath('./contracts/counter'),
+    privateStateId: 'my-counter',
   });
-  yield* contract.effect.deploy();
-  
-  return contract;
+  const deployed = yield* loaded.effect.deploy();
+
+  return deployed;
 });
 
 await Effect.runPromise(program.pipe(Effect.provide(ClientLayer)));
@@ -166,16 +175,16 @@ For creating multiple clients with different configs:
 
 ```typescript
 const program = Effect.gen(function* () {
-  const clientService = yield* Midday.ClientService;
-  
+  const clientService = yield* Midday.Client.ClientService;
+
   // Create different clients
   const localClient = yield* clientService.create(localConfig);
   const testnetClient = yield* clientService.create(testnetConfig);
-  
+
   return { localClient, testnetClient };
 });
 
-await Effect.runPromise(program.pipe(Effect.provide(Midday.ClientLive)));
+await Effect.runPromise(program.pipe(Effect.provide(Midday.Client.ClientLive)));
 ```
 
 ## Error Handling
@@ -185,20 +194,47 @@ Effect makes errors explicit in the type system:
 ```typescript
 const program = Effect.gen(function* () {
   const client = yield* Midday.Client.effect.create(config);
-  const contract = yield* client.effect.loadContract({ path: './contracts/counter' });
-  yield* contract.effect.deploy();
-  const result = yield* contract.effect.call('increment');
+  const loaded = yield* client.effect.loadContract({ module, zkConfig, privateStateId: 'my-id' });
+  const deployed = yield* loaded.effect.deploy();
+  const result = yield* deployed.effect.call('increment');
   return result;
 }).pipe(
   Effect.catchTag('ContractError', (error) => {
     console.error('Contract operation failed:', error.message);
     return Effect.succeed({ status: 'failed' });
   }),
+  Effect.catchTag('TxTimeoutError', (error) => {
+    console.error('Timeout:', error.message);
+    return Effect.succeed({ status: 'timeout' });
+  }),
   Effect.catchAll((error) => {
     console.error('Unexpected error:', error);
     return Effect.fail(error);
   })
 );
+```
+
+## State Watching with Effect Streams
+
+Effect users get `Stream` variants for state watching:
+
+```typescript
+import { Stream } from 'effect';
+
+const program = Effect.gen(function* () {
+  const deployed = /* ... */;
+
+  // Watch as Effect Stream
+  const stream = deployed.effect.watchState();
+
+  // Take first 5 state changes
+  yield* stream.pipe(
+    Stream.take(5),
+    Stream.runForEach((state) =>
+      Effect.sync(() => console.log('Counter:', state.counter))
+    ),
+  );
+});
 ```
 
 ## Testing with Effect
@@ -208,20 +244,24 @@ Replace services with test implementations:
 ```typescript
 import { Layer, Effect } from 'effect';
 
-// Create mock client
-const mockClient: Midday.MiddayClient = {
+// Create mock client matching the MiddayClient interface
+const mockClient: Midday.Client.MiddayClient = {
   networkConfig: Midday.Config.NETWORKS.local,
   providers: mockProviders,
   wallet: null,
-  loadContract: () => Promise.resolve(mockBuilder),
+  connectedWallet: null,
+  relayerWallet: null,
+  loadContract: () => Promise.resolve(mockLoadedContract),
   waitForTx: () => Promise.resolve({ txHash: '0x123', blockHeight: 1, blockHash: '0xabc' }),
+  close: () => Promise.resolve(),
   effect: {
-    loadContract: () => Effect.succeed(mockBuilder),
+    loadContract: () => Effect.succeed(mockLoadedContract),
     waitForTx: () => Effect.succeed({ txHash: '0x123', blockHeight: 1, blockHash: '0xabc' }),
+    close: () => Effect.void,
   },
 };
 
-const TestClientLayer = Layer.succeed(Midday.MiddayClientService, mockClient);
+const TestClientLayer = Layer.succeed(Midday.Client.MiddayClientService, mockClient);
 
 // Run tests with mock client
 const result = await Effect.runPromise(
@@ -251,14 +291,14 @@ Effect handles cleanup automatically:
 
 ```typescript
 const program = Effect.gen(function* () {
-  // Scoped resources are automatically cleaned up
   const client = yield* Midday.Client.effect.create(config);
-  const contract = yield* client.effect.loadContract({ path: './contracts/counter' });
-  yield* contract.effect.deploy();
-  
+  const loaded = yield* client.effect.loadContract({ module, zkConfig, privateStateId: 'my-id' });
+  const deployed = yield* loaded.effect.deploy();
+
   // Use the contract...
-  yield* contract.effect.call('increment');
-  
-  // Resources cleaned up when scope ends
+  yield* deployed.effect.actions.increment();
+
+  // Clean up when done
+  yield* client.effect.close();
 });
 ```

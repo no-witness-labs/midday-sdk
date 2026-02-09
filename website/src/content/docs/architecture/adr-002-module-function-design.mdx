@@ -5,7 +5,9 @@ description: Why Midday SDK uses module-functions instead of classes
 
 ## Status
 
-**Accepted**
+**Superseded** — The pure module-function pattern described here evolved into a **client-centric hub with method-bearing handles**. See the current API where `LoadedContract` and `DeployedContract` have methods (`.deploy()`, `.call()`, `.actions`, `.effect.*`) rather than standalone functions.
+
+The core principles (immutable data, Effect as source of truth, module namespaces) remain, but operations now live on handle objects rather than as module-level functions.
 
 ## Context
 

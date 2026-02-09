@@ -50,33 +50,33 @@ async function main() {
       zkConfig: Midday.ZkConfig.fromPath(COUNTER_CONTRACT_DIR),
       privateStateId: 'counter-example',
     });
-    console.log(`   Contract loaded (state: ${contract.state})\n`);
+    console.log(`   Contract loaded\n`);
 
-    // Step 4: Deploy contract
+    // Step 4: Deploy contract (returns a DeployedContract handle)
     console.log('4. Deploying contract...');
-    await contract.deploy();
+    const deployed = await contract.deploy();
     console.log(`   Contract deployed!`);
-    console.log(`   Address: ${contract.address}\n`);
+    console.log(`   Address: ${deployed.address}\n`);
 
-    // Step 5: Call increment
+    // Step 5: Call increment (using typed actions)
     console.log('5. Calling increment()...');
-    const result1 = await contract.call('increment');
+    const result1 = await deployed.actions.increment();
     console.log(`   TX Hash: ${result1.txHash}`);
     console.log(`   Block: ${result1.blockHeight}\n`);
 
     // Step 6: Read state
     console.log('6. Reading ledger state...');
-    const state1 = await contract.ledgerState();
+    const state1 = await deployed.ledgerState();
     console.log(`   Counter value: ${state1.counter}\n`);
 
     // Step 7: Call increment again
     console.log('7. Calling increment() again...');
-    const result2 = await contract.call('increment');
+    const result2 = await deployed.actions.increment();
     console.log(`   TX Hash: ${result2.txHash}\n`);
 
     // Step 8: Read state again
     console.log('8. Reading ledger state...');
-    const state2 = await contract.ledgerState();
+    const state2 = await deployed.ledgerState();
     console.log(`   Counter value: ${state2.counter}\n`);
 
     console.log('=== Example complete ===');

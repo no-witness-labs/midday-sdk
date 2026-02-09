@@ -52,7 +52,7 @@ function createEffect(config: ClientConfig): Effect.Effect<MidnightClient, Clien
 
     yield* Effect.logDebug('Wallet synced');
 
-    const providers = Providers.create(walletContext, providerOptions);
+    const providers = client.providers;
 
     return { wallet: walletContext, networkConfig, providers, logging };
   });
@@ -90,14 +90,14 @@ export const ClientLive: Layer.Layer<ClientService> = Layer.succeed(ClientServic
 #### Layer for Pre-configured Dependencies
 
 ```typescript
-export function layer(config: ClientConfig): Layer.Layer<MidnightClientService, ClientError> {
-  return Layer.effect(MidnightClientService, createEffect(config));
+export function layer(config: ClientConfig): Layer.Layer<MiddayClientService, ClientError> {
+  return Layer.effect(MiddayClientService, createEffect(config));
 }
 
 // Usage
 const clientLayer = Midday.Client.layer(config);
 const program = Effect.gen(function* () {
-  const client = yield* Midday.MidnightClientService;
+  const client = yield* Midday.Client.MiddayClientService;
   // client is automatically available
 });
 await Effect.runPromise(program.pipe(Effect.provide(clientLayer)));

@@ -21,7 +21,7 @@ Midday SDK supports browser environments with integration for the [Lace wallet](
    ```typescript
    import * as Midday from '@no-witness-labs/midday-sdk';
 
-   const connection = await Midday.BrowserWallet.connectWallet('testnet');
+   const connection = await Midday.Wallet.connectWallet('testnet');
    ```
 
    This will prompt the user to approve the connection in their Lace wallet.
@@ -36,15 +36,16 @@ Midday SDK supports browser environments with integration for the [Lace wallet](
    });
    ```
 
-3. **Load a contract (zkConfig loaded per-contract)**
+3. **Load and deploy a contract**
 
    ```typescript
-   const contract = await client.loadContract({
-     moduleUrl: 'https://cdn.example.com/contracts/counter/index.js',
-     zkConfigBaseUrl: 'https://cdn.example.com/contracts/counter',
+   const loaded = await client.loadContract({
+     module: CounterContract,
+     zkConfig: new Midday.ZkConfig.HttpZkConfigProvider('https://cdn.example.com/zk'),
+     privateStateId: 'my-counter',
    });
-   await contract.deploy();
-   await contract.call('increment');
+   const deployed = await loaded.deploy();
+   await deployed.actions.increment();
    ```
 
 </Steps>
@@ -53,32 +54,47 @@ Midday SDK supports browser environments with integration for the [Lace wallet](
 
 ```typescript
 import * as Midday from '@no-witness-labs/midday-sdk';
+import * as CounterContract from './contracts/counter/contract/index.js';
 
 async function main() {
   // Connect to Lace wallet
-  const connection = await Midday.BrowserWallet.connectWallet('testnet');
+  const connection = await Midday.Wallet.connectWallet('testnet');
 
-  // Create client from wallet connection (no zkConfig at client level)
+  // Create client from wallet connection
   const client = await Midday.Client.fromWallet(connection, {
     privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
       privateStateStoreName: 'my-app'
     }),
   });
 
-  // Load contract with zkConfig (each contract has its own zk circuits)
-  const contract = await client.loadContract({
-    moduleUrl: 'https://cdn.example.com/contracts/counter/index.js',
-    zkConfigBaseUrl: 'https://cdn.example.com/contracts/counter',
+  // Load contract with zkConfig
+  const loaded = await client.loadContract({
+    module: CounterContract,
+    zkConfig: new Midday.ZkConfig.HttpZkConfigProvider('/zk-config'),
+    privateStateId: 'my-counter',
   });
 
   // Deploy and interact
-  await contract.deploy();
-  await contract.call('increment');
+  const deployed = await loaded.deploy();
+  await deployed.actions.increment();
 
   // Read state
-  const state = await contract.ledgerState();
+  const state = await deployed.ledgerState();
   console.log('Counter:', state.counter);
 }
+```
+
+## Fee Relay (Optional)
+
+For apps where users don't need to hold dust tokens, enable fee relay:
+
+```typescript
+const client = await Midday.Client.fromWallet(connection, {
+  privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
+    privateStateStoreName: 'my-app',
+  }),
+  feeRelay: { url: 'http://localhost:3002' },
+});
 ```
 
 ## Browser-Specific Considerations
@@ -99,12 +115,13 @@ Use a unique store name per application to avoid conflicts.
 
 ### ZK Configuration
 
-In browser environments, zkConfig is loaded per-contract from a URL:
+In browser environments, use `HttpZkConfigProvider` to load zk artifacts from a URL:
 
 ```typescript
-const contract = await client.loadContract({
-  moduleUrl: 'https://cdn.example.com/contracts/counter/index.js',
-  zkConfigBaseUrl: 'https://cdn.example.com/contracts/counter',
+const loaded = await client.loadContract({
+  module: CounterContract,
+  zkConfig: new Midday.ZkConfig.HttpZkConfigProvider('https://cdn.example.com/zk'),
+  privateStateId: 'my-counter',
 });
 ```
 
@@ -118,22 +135,26 @@ Match the network to the wallet's current network:
 
 ```typescript
 // Connect to testnet
-const connection = await Midday.BrowserWallet.connectWallet('testnet');
+const connection = await Midday.Wallet.connectWallet('testnet');
 
 // Or connect to mainnet (when available)
-const connection = await Midday.BrowserWallet.connectWallet('mainnet');
+const connection = await Midday.Wallet.connectWallet('mainnet');
 ```
 
-## Handling Wallet Events
+## Wallet Connection Details
 
-The wallet connection provides events for state changes:
+The wallet connection provides keys and configuration:
 
 ```typescript
-const connection = await Midday.BrowserWallet.connectWallet('testnet');
+const connection = await Midday.Wallet.connectWallet('testnet');
 
-// The connection includes the wallet state
-console.log('Connected address:', connection.address);
-console.log('Balance:', connection.balance);
+// Access wallet keys
+console.log('Coin public key:', connection.coinPublicKey);
+console.log('Encryption key:', connection.encryptionPublicKey);
+
+// Access the connected wallet API for balance queries
+const shielded = await connection.wallet.getShieldedBalances();
+const dust = await connection.wallet.getDustBalance();
 ```
 
 ## Troubleshooting

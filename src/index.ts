@@ -20,10 +20,14 @@
  *   privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
  * });
  *
- * const contract = await client.loadContract({ path: './contracts/counter' });
- * await contract.deploy();
- * await contract.call('increment');
- * const state = await contract.ledgerState();
+ * const loaded = await client.loadContract({
+ *   module: CounterContract,
+ *   zkConfig: Midday.ZkConfig.fromPath('./contracts/counter'),
+ *   privateStateId: 'my-counter',
+ * });
+ * const deployed = await loaded.deploy();
+ * await deployed.actions.increment();
+ * const state = await deployed.ledgerState();
  * ```
  *
  * @example
@@ -39,10 +43,14 @@
  *     privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
  *   });
  *
- *   const contract = yield* client.effect.loadContract({ path: './contracts/counter' });
- *   yield* contract.effect.deploy();
- *   yield* contract.effect.call('increment');
- *   const state = yield* contract.effect.ledgerState();
+ *   const loaded = yield* client.effect.loadContract({
+ *     module: CounterContract,
+ *     zkConfig: Midday.ZkConfig.fromPath('./contracts/counter'),
+ *     privateStateId: 'my-counter',
+ *   });
+ *   const deployed = yield* loaded.effect.deploy();
+ *   yield* deployed.effect.actions.increment();
+ *   const state = yield* deployed.effect.ledgerState();
  *
  *   return state;
  * });

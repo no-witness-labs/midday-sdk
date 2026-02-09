@@ -43,27 +43,27 @@ const program = Effect.gen(function* () {
     zkConfig: Midday.ZkConfig.fromPath(COUNTER_CONTRACT_DIR),
     privateStateId: 'effect-di-example',
   });
-  console.log(`   Contract loaded (state: ${contract.state})\n`);
+  console.log(`   Contract loaded\n`);
 
-  // Deploy using Effect API
+  // Deploy using Effect API (returns a DeployedContract handle)
   console.log('3. Deploying contract (Effect API)...');
-  yield* contract.effect.deploy();
+  const deployed = yield* contract.effect.deploy();
   console.log(`   Contract deployed!`);
-  console.log(`   Address: ${contract.address}\n`);
+  console.log(`   Address: ${deployed.address}\n`);
 
-  // Call increment using Effect API
+  // Call increment using typed actions (Effect API)
   console.log('4. Calling increment() (Effect API)...');
-  const result = yield* contract.effect.call('increment');
+  const result = yield* deployed.effect.actions.increment();
   console.log(`   TX Hash: ${result.txHash}`);
   console.log(`   Block: ${result.blockHeight}\n`);
 
   // Read state using Effect API
   console.log('5. Reading ledger state (Effect API)...');
-  const state = yield* contract.effect.ledgerState();
+  const state = yield* deployed.effect.ledgerState();
   console.log(`   Counter value: ${state.counter}\n`);
 
   console.log('=== Effect DI Example complete ===');
-  return { address: contract.address, counter: state.counter };
+  return { address: deployed.address, counter: state.counter };
 });
 
 // =============================================================================

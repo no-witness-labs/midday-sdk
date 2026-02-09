@@ -85,10 +85,9 @@ SDK Errors
 Errors wrap the original cause and add a human-readable message:
 
 ```typescript
-function contractFromEffect(
-  client: MidnightClient,
-  options: ContractFromOptions,
-): Effect.Effect<ContractBuilder, ClientError> {
+function loadContractEffect(
+  options: LoadContractOptions,
+): Effect.Effect<LoadedContract, ClientError> {
   return Effect.try({
     try: () => { /* ... */ },
     catch: (cause) =>
@@ -105,7 +104,7 @@ function contractFromEffect(
 #### Catch Specific Error Types
 
 ```typescript
-const program = Midday.Contract.effect.call(contract, 'increment').pipe(
+const program = deployed.effect.call('increment').pipe(
   Effect.catchTag('ContractError', (error) => {
     console.error('Contract call failed:', error.message);
     return Effect.succeed({ status: 'failed' });
@@ -183,7 +182,7 @@ function cleanErrorChain(error: Error): Error {
 try {
   const client = await Midday.Client.create(config);
 } catch (error) {
-  if (error instanceof Midday.ClientError) {
+  if (error instanceof Midday.Client.ClientError) {
     console.error('Client error:', error.message);
     console.error('Cause:', error.cause);
   }
