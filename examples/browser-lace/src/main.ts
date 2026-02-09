@@ -90,6 +90,8 @@ async function deployContract() {
 
   try {
     updateStatus('Loading contract...');
+    console.log('[browser-lace] Loading contract...');
+    console.time('[browser-lace] loadContract');
 
     // ZkConfig URL - served by Vite dev server middleware
     // For production, host contract artifacts on a CDN
@@ -102,9 +104,14 @@ async function deployContract() {
       zkConfig: new Midday.ZkConfig.HttpZkConfigProvider(zkConfigUrl),
       privateStateId: 'browser-lace-counter',
     });
+    console.timeEnd('[browser-lace] loadContract');
 
-    updateStatus('Deploying contract...');
+    updateStatus('Deploying contract (proof generation may take a while)...');
+    console.log('[browser-lace] Deploying contract...');
+    console.time('[browser-lace] deploy');
     contract = await loaded.deploy();
+    console.timeEnd('[browser-lace] deploy');
+    console.log('[browser-lace] Deployed at:', contract.address);
 
     updateStatus(`Contract deployed at: ${contract.address}`);
     updateCounter('0');
@@ -124,8 +131,10 @@ async function deployContract() {
       keyMatchEl.style.color = match ? '#059669' : '#dc2626';
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    updateStatus(`Deploy failed: ${message}`, true);
+    console.error('[browser-lace] Deploy failed:', error);
+    const message = error instanceof Error ? error.message : String(error);
+    const cause = error instanceof Error && error.cause ? `\nCause: ${error.cause}` : '';
+    updateStatus(`Deploy failed: ${message}${cause}`, true);
   }
 }
 

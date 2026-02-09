@@ -401,7 +401,7 @@ function createClientDataEffect(config: ClientConfig): Effect.Effect<ClientData,
     if (connectedWallet) {
       yield* Effect.logDebug('Using pre-created wallet...');
 
-      const { walletProvider, midnightProvider } = yield* connectedWallet.effect.providers().pipe(
+      let { walletProvider, midnightProvider } = yield* connectedWallet.effect.providers().pipe(
         Effect.mapError(
           (e) =>
             new ClientError({
@@ -410,6 +410,79 @@ function createClientDataEffect(config: ClientConfig): Effect.Effect<ClientData,
             }),
         ),
       );
+
+      // Apply fee relay override if configured
+      if (feeRelay && 'url' in feeRelay) {
+        const relayUrl = feeRelay.url.replace(/\/$/, '');
+        yield* Effect.logDebug(`Using fee relay server at ${relayUrl}`);
+
+        walletProvider = {
+          ...walletProvider,
+          balanceTx: async (tx) => {
+            // Serialize the UnboundTransaction to hex for the fee relay
+            // The browser WASM and fee relay WASM must use compatible serialization
+            let txHex: string;
+            try {
+              const txBytes = tx.serialize();
+              txHex = bytesToHex(txBytes);
+            } catch (serializeErr) {
+              throw new Error(
+                `Failed to serialize transaction for fee relay: ${serializeErr instanceof Error ? serializeErr.message : String(serializeErr)}`,
+              );
+            }
+
+            const response = await fetch(`${relayUrl}/balance-tx`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ tx: txHex }),
+            });
+            if (!response.ok) {
+              const err = await response.json().catch(() => ({ error: response.statusText }));
+              throw new Error(`Fee relay balance-tx failed: ${err.error}`);
+            }
+
+            const data = await response.json();
+            if (!data.tx) {
+              throw new Error('Fee relay returned empty tx');
+            }
+
+            const finalizedBytes = hexToBytes(data.tx);
+            // Use the same deserialize pattern as the Docker fee relay server
+            return Transaction.deserialize(
+              'signature' as import('@midnight-ntwrk/ledger-v7').SignatureEnabled['instance'],
+              'proof' as import('@midnight-ntwrk/ledger-v7').Proof['instance'],
+              'binding' as import('@midnight-ntwrk/ledger-v7').Binding['instance'],
+              finalizedBytes,
+            ) as unknown as import('@midnight-ntwrk/ledger-v7').FinalizedTransaction;
+          },
+        };
+        midnightProvider = {
+          submitTx: async (tx) => {
+            const txBytes = tx.serialize();
+            const txHex = bytesToHex(txBytes);
+
+            const response = await fetch(`${relayUrl}/submit-tx`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ tx: txHex }),
+            });
+            if (!response.ok) {
+              const err = await response.json().catch(() => ({ error: response.statusText }));
+              throw new Error(`Fee relay submit-tx failed: ${err.error}`);
+            }
+
+            const { txId } = await response.json();
+            return txId;
+          },
+        };
+      } else if (feeRelay && 'seed' in feeRelay) {
+        return yield* Effect.fail(
+          new ClientError({
+            cause: new Error('Seed-based fee relay not supported with ConnectedWallet'),
+            message: 'Seed-based fee relay ({ seed }) is not supported with a pre-created wallet. Use { url } for browser wallets.',
+          }),
+        );
+      }
 
       setNetworkId(networkConfig.networkId as 'undeployed');
       const publicDataProvider = Config.publicDataProvider(networkConfig);
@@ -614,7 +687,7 @@ function fromWalletDataEffect(
             'proof' as import('@midnight-ntwrk/ledger-v7').Proof['instance'],
             'binding' as import('@midnight-ntwrk/ledger-v7').Binding['instance'],
             finalizedBytes,
-          );
+          ) as unknown as import('@midnight-ntwrk/ledger-v7').FinalizedTransaction;
         },
       };
       midnightProvider = {

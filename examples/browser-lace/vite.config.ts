@@ -1,6 +1,7 @@
 import { defineConfig, type Plugin } from 'vite';
 import wasm from 'vite-plugin-wasm';
 import topLevelAwait from 'vite-plugin-top-level-await';
+import { nodePolyfills } from 'vite-plugin-node-polyfills';
 import { resolve } from 'path';
 import { readFile } from 'fs/promises';
 
@@ -59,7 +60,12 @@ function zkConfigMiddleware(contractPath: string): Plugin {
 const contractsDir = resolve(__dirname, '../../contracts/counter');
 
 export default defineConfig({
-  plugins: [wasm(), topLevelAwait(), zkConfigMiddleware(contractsDir)],
+  plugins: [
+    nodePolyfills({ include: ['buffer', 'process'] }),
+    wasm(),
+    topLevelAwait(),
+    zkConfigMiddleware(contractsDir),
+  ],
   build: {
     target: 'esnext',
   },
