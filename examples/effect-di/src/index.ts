@@ -62,6 +62,9 @@ const program = Effect.gen(function* () {
   const state = yield* deployed.effect.ledgerState();
   console.log(`   Counter value: ${state.counter}\n`);
 
+  // Close the client to stop wallet sync before containers are removed
+  yield* client.effect.close();
+
   console.log('=== Effect DI Example complete ===');
   return { address: deployed.address, counter: state.counter };
 });

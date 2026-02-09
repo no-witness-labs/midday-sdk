@@ -22,6 +22,8 @@ const COUNTER_CONTRACT_DIR = join(__dirname, '../../../contracts/counter');
 async function main() {
   console.log('=== Counter Example (Promise API) ===\n');
 
+  let client: Midday.Client.MiddayClient | null = null;
+
   // Step 1: Create and start devnet
   console.log('1. Starting local devnet...');
   const cluster = await Cluster.make({
@@ -36,7 +38,7 @@ async function main() {
 
     // Step 2: Create client
     console.log('2. Creating Midday client...');
-    const client = await Midday.Client.create({
+    client = await Midday.Client.create({
       seed: Midday.Config.DEV_WALLET_SEED,
       networkConfig: cluster.networkConfig,
       privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
@@ -81,8 +83,10 @@ async function main() {
 
     console.log('=== Example complete ===');
   } finally {
-    // Cleanup
-    console.log('\nCleaning up devnet...');
+    // Cleanup: close client first (stops wallet sync), then remove containers
+    console.log('\nCleaning up...');
+    if (client) await client.close();
+    console.log('Removing devnet...');
     await cluster.remove();
     console.log('Done!');
   }
