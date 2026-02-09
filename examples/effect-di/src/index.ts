@@ -14,10 +14,10 @@
  */
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { Cluster } from '@no-witness-labs/midday-sdk/devnet';
+import { Cluster, ClusterService } from '@no-witness-labs/midday-sdk/devnet';
 import * as Midday from '@no-witness-labs/midday-sdk';
 import * as CounterContract from '../../../contracts/counter/contract/index.js';
-import { Effect } from 'effect';
+import { Effect, Layer } from 'effect';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -69,39 +69,44 @@ const program = Effect.gen(function* () {
 });
 
 // =============================================================================
-// Main Entry Point — fully Effect-managed
+// Layer Composition — all lifecycle is in the layer graph
 // =============================================================================
 
 /**
- * The entire lifecycle is a single Effect program:
- *
- * 1. Cluster is a scoped resource via makeScoped (create+start / remove)
- * 2. Client layer is scoped (auto-closes when scope ends)
- * 3. Cleanup order is guaranteed: client closes → cluster removes (LIFO)
+ * ClusterLayer: managed devnet cluster (auto-starts on creation, auto-removes on release)
  */
-const main = Effect.gen(function* () {
-  yield* Effect.log('Starting local devnet...');
+const ClusterLayer = Cluster.managedLayer({ clusterName: 'effect-di-example' });
 
-  // Cluster as a scoped resource — automatically started and removed on scope exit
-  const cluster = yield* Cluster.effect.makeScoped({ clusterName: 'effect-di-example' });
-  yield* Effect.log(`Devnet ready: ${cluster.networkConfig.node}`);
+/**
+ * ClientLayer: derives a MiddayClient from the ClusterService.
+ * Consumes ClusterService → provides MiddayClientService.
+ * The client is scoped (auto-closes when the layer is released).
+ */
+const ClientFromCluster = Layer.scoped(
+  Midday.Client.MiddayClientService,
+  Effect.gen(function* () {
+    const cluster = yield* ClusterService;
+    yield* Effect.log(`Devnet ready: ${cluster.networkConfig.node}`);
+    return yield* Midday.Client.effect.createScoped({
+      seed: Midday.Config.DEV_WALLET_SEED,
+      networkConfig: cluster.networkConfig,
+      privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
+    });
+  }),
+);
 
-  // Build the client layer using the cluster's network config
-  const ClientLayer = Midday.Client.layer({
-    seed: Midday.Config.DEV_WALLET_SEED,
-    networkConfig: cluster.networkConfig,
-    privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
-  });
+/**
+ * AppLayer: full application layer — Cluster feeds into Client.
+ * Cleanup is automatic and in LIFO order: client closes → cluster removes.
+ */
+const AppLayer = ClientFromCluster.pipe(Layer.provide(ClusterLayer));
 
-  // Run the program with the client layer provided
-  const result = yield* program.pipe(Effect.provide(ClientLayer));
+// =============================================================================
+// Run — pure program + composed layers
+// =============================================================================
 
-  yield* Effect.log(`Final result: contract=${result.address}, counter=${result.counter}`);
-  return result;
-}).pipe(Effect.scoped); // Scope manages both cluster and client lifecycle
-
-// Single entry point — run the entire Effect program
-Effect.runPromise(main).then(
+// Single entry point — the program has zero lifecycle code
+Effect.runPromise(program.pipe(Effect.provide(AppLayer))).then(
   (result) => {
     console.log(`\nDone! Counter: ${result.counter}`);
   },
