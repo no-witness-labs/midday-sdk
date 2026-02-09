@@ -23,7 +23,7 @@
  * @module
  */
 
-import { Data, Effect } from 'effect';
+import { Data, Effect, Stream } from 'effect';
 import { deployContract, findDeployedContract } from '@midnight-ntwrk/midnight-js-contracts';
 import { CompiledContract } from '@midnight-ntwrk/compact-js';
 import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
@@ -34,6 +34,7 @@ import type {
   PrivateStateProvider,
   ProofProvider,
 } from '@midnight-ntwrk/midnight-js-types';
+import type { ContractStateObservableConfig } from '@midnight-ntwrk/midnight-js-types';
 import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
 
 import { runEffectWithLogging } from './Runtime.js';
@@ -377,6 +378,43 @@ export interface DeployedContract<
   /** Get parsed ledger state at a specific block height. */
   ledgerStateAt(blockHeight: number): Promise<TLedger>;
 
+  /**
+   * Watch for parsed ledger state changes (callback style).
+   * Returns an unsubscribe function.
+   *
+   * @example
+   * ```typescript
+   * const unsub = contract.onStateChange((state) => {
+   *   console.log(state.counter);
+   * });
+   * // later: unsub();
+   * ```
+   *
+   * @since 0.9.0
+   */
+  onStateChange(callback: (state: TLedger) => void, options?: WatchOptions): Unsubscribe;
+
+  /**
+   * Watch for parsed ledger state changes (async iterator style).
+   *
+   * @example
+   * ```typescript
+   * for await (const state of contract.watchState()) {
+   *   console.log(state.counter);
+   *   if (state.counter > 10n) break;
+   * }
+   * ```
+   *
+   * @since 0.9.0
+   */
+  watchState(options?: WatchOptions): AsyncIterableIterator<TLedger>;
+
+  /** Watch for raw state changes (callback). */
+  onRawStateChange(callback: (state: unknown) => void, options?: WatchOptions): Unsubscribe;
+
+  /** Watch for raw state changes (async iterator). */
+  watchRawState(options?: WatchOptions): AsyncIterableIterator<unknown>;
+
   /** Effect versions of deployed contract methods */
   readonly effect: {
     /** Type-safe Effect action methods. */
@@ -386,6 +424,10 @@ export interface DeployedContract<
     getStateAt(blockHeight: number): Effect.Effect<unknown, ContractError>;
     ledgerState(): Effect.Effect<TLedger, ContractError>;
     ledgerStateAt(blockHeight: number): Effect.Effect<TLedger, ContractError>;
+    /** Watch parsed state as an Effect.Stream. */
+    watchState(options?: WatchOptions): Stream.Stream<TLedger, ContractError>;
+    /** Watch raw state as an Effect.Stream. */
+    watchRawState(options?: WatchOptions): Stream.Stream<unknown, ContractError>;
   };
 }
 
@@ -416,12 +458,26 @@ export interface ReadonlyContract<TLedger = unknown> {
   /** Read raw contract state at an address and specific block height. */
   readRawStateAt(address: string, blockHeight: number): Promise<unknown>;
 
+  /** Watch parsed state changes at an address (callback). */
+  onStateChange(address: string, callback: (state: TLedger) => void, options?: WatchOptions): Unsubscribe;
+
+  /** Watch parsed state changes at an address (async iterator). */
+  watchState(address: string, options?: WatchOptions): AsyncIterableIterator<TLedger>;
+
+  /** Watch raw state changes at an address (callback). */
+  onRawStateChange(address: string, callback: (state: unknown) => void, options?: WatchOptions): Unsubscribe;
+
+  /** Watch raw state changes at an address (async iterator). */
+  watchRawState(address: string, options?: WatchOptions): AsyncIterableIterator<unknown>;
+
   /** Effect versions of read-only methods. */
   readonly effect: {
     readState(address: string): Effect.Effect<TLedger, ContractError>;
     readStateAt(address: string, blockHeight: number): Effect.Effect<TLedger, ContractError>;
     readRawState(address: string): Effect.Effect<unknown, ContractError>;
     readRawStateAt(address: string, blockHeight: number): Effect.Effect<unknown, ContractError>;
+    watchState(address: string, options?: WatchOptions): Stream.Stream<TLedger, ContractError>;
+    watchRawState(address: string, options?: WatchOptions): Stream.Stream<unknown, ContractError>;
   };
 }
 
@@ -776,6 +832,29 @@ export type PublicDataProvider = ReturnType<typeof indexerPublicDataProvider>;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type LedgerParser<TLedger> = (state: any) => TLedger;
 
+/**
+ * Function returned by callback-style watch methods. Call it to stop watching.
+ *
+ * @since 0.9.0
+ * @category model
+ */
+export type Unsubscribe = () => void;
+
+/**
+ * Options for watching contract state changes.
+ *
+ * Controls where the subscription stream starts from. Maps to the indexer's
+ * `ContractStateObservableConfig` under the hood.
+ *
+ * @since 0.9.0
+ * @category model
+ */
+export type WatchOptions =
+  | { readonly from: 'latest' }
+  | { readonly from: 'all' }
+  | { readonly from: 'blockHeight'; readonly blockHeight: number; readonly inclusive?: boolean }
+  | { readonly from: 'txId'; readonly txId: string; readonly inclusive?: boolean };
+
 // =============================================================================
 // Read-Only State Queries
 // =============================================================================
@@ -917,6 +996,197 @@ export async function readRawStateAt(
   blockHeight: number,
 ): Promise<unknown> {
   return runEffectWithLogging(readRawStateEffect(address, provider, blockHeight), false);
+}
+
+// =============================================================================
+// Watch / Subscription Internals
+// =============================================================================
+
+/**
+ * Convert WatchOptions to the indexer's ContractStateObservableConfig.
+ * @internal
+ */
+function toObservableConfig(options?: WatchOptions): ContractStateObservableConfig {
+  if (!options || options.from === 'latest') return { type: 'latest' };
+  if (options.from === 'all') return { type: 'all' };
+  if (options.from === 'blockHeight') {
+    return { type: 'blockHeight', blockHeight: options.blockHeight, inclusive: options.inclusive };
+  }
+  return { type: 'txId', txId: options.txId, inclusive: options.inclusive };
+}
+
+/**
+ * Watch raw contract state as an Effect.Stream.
+ *
+ * Wraps the indexer's RxJS `contractStateObservable` into an Effect.Stream.
+ * This is the source of truth — callback and AsyncIterator APIs derive from it.
+ *
+ * @internal Effect.Stream source of truth
+ */
+function watchRawStateStream(
+  address: string,
+  provider: PublicDataProvider,
+  options?: WatchOptions,
+): Stream.Stream<unknown, ContractError> {
+  return Stream.asyncPush<unknown, ContractError>((emit) =>
+    Effect.acquireRelease(
+      Effect.sync(() => {
+        const config = toObservableConfig(options);
+        const sub = provider.contractStateObservable(address, config).subscribe({
+          next: (state) => emit.single(state.data),
+          error: (err) =>
+            emit.fail(
+              new ContractError({
+                cause: err,
+                message: `Watch stream error: ${err instanceof Error ? err.message : String(err)}`,
+              }),
+            ),
+          complete: () => emit.end(),
+        });
+        return sub;
+      }),
+      (sub) => Effect.sync(() => sub.unsubscribe()),
+    ),
+  );
+}
+
+/**
+ * Watch parsed ledger state as an Effect.Stream.
+ *
+ * @internal Effect.Stream source of truth
+ */
+function watchStateStream<TLedger>(
+  address: string,
+  provider: PublicDataProvider,
+  ledgerParser: LedgerParser<TLedger>,
+  options?: WatchOptions,
+): Stream.Stream<TLedger, ContractError> {
+  return Stream.map(watchRawStateStream(address, provider, options), (data) => ledgerParser(data));
+}
+
+/**
+ * Subscribe to a Stream via callback. Returns an unsubscribe function.
+ * @internal
+ */
+function streamToCallback<A, E>(
+  stream: Stream.Stream<A, E>,
+  onValue: (value: A) => void,
+  onError?: (error: E) => void,
+): Unsubscribe {
+  const fiber = Effect.runFork(
+    Stream.runForEach(stream, (value) => Effect.sync(() => onValue(value))).pipe(
+      Effect.catchAll((err) =>
+        Effect.sync(() => {
+          if (onError) onError(err);
+        }),
+      ),
+    ),
+  );
+  return () => Effect.runFork(fiber.interruptAsFork(fiber.id()));
+}
+
+/**
+ * Convert a Stream to an AsyncIterableIterator.
+ * @internal
+ */
+function streamToAsyncIterator<A>(
+  stream: Stream.Stream<A, ContractError>,
+): AsyncIterableIterator<A> {
+  const queue: A[] = [];
+  let done = false;
+  let error: ContractError | null = null;
+  let resolve: (() => void) | null = null;
+
+  const fiber = Effect.runFork(
+    Stream.runForEach(stream, (value) =>
+      Effect.sync(() => {
+        queue.push(value);
+        if (resolve) {
+          resolve();
+          resolve = null;
+        }
+      }),
+    ).pipe(
+      Effect.catchAll((err) =>
+        Effect.sync(() => {
+          error = err;
+          if (resolve) {
+            resolve();
+            resolve = null;
+          }
+        }),
+      ),
+      Effect.ensuring(
+        Effect.sync(() => {
+          done = true;
+          if (resolve) {
+            resolve();
+            resolve = null;
+          }
+        }),
+      ),
+    ),
+  );
+
+  const iterator: AsyncIterableIterator<A> = {
+    next: async () => {
+      while (queue.length === 0 && !done && !error) {
+        await new Promise<void>((r) => { resolve = r; });
+      }
+      if (queue.length > 0) {
+        return { value: queue.shift()!, done: false };
+      }
+      if (error) {
+        throw error;
+      }
+      return { value: undefined as unknown as A, done: true };
+    },
+    return: async () => {
+      Effect.runFork(fiber.interruptAsFork(fiber.id()));
+      done = true;
+      return { value: undefined as unknown as A, done: true };
+    },
+    [Symbol.asyncIterator]() {
+      return this;
+    },
+  };
+
+  return iterator;
+}
+
+// =============================================================================
+// Public Watch API — Standalone
+// =============================================================================
+
+/**
+ * Watch parsed contract state changes. Returns an unsubscribe function.
+ *
+ * @since 0.9.0
+ * @category subscriptions
+ */
+export function watchState<TLedger>(
+  address: string,
+  provider: PublicDataProvider,
+  ledgerParser: LedgerParser<TLedger>,
+  onValue: (state: TLedger) => void,
+  options?: WatchOptions,
+): Unsubscribe {
+  return streamToCallback(watchStateStream(address, provider, ledgerParser, options), onValue);
+}
+
+/**
+ * Watch raw contract state changes. Returns an unsubscribe function.
+ *
+ * @since 0.9.0
+ * @category subscriptions
+ */
+export function watchRawState(
+  address: string,
+  provider: PublicDataProvider,
+  onValue: (state: unknown) => void,
+  options?: WatchOptions,
+): Unsubscribe {
+  return streamToCallback(watchRawStateStream(address, provider, options), onValue);
 }
 
 // =============================================================================
@@ -1100,6 +1370,15 @@ export function createDeployedContractHandle(data: DeployedContractData): Deploy
     ledgerStateAt: (blockHeight) =>
       runEffectWithLogging(ledgerStateAtEffect(data, blockHeight), data.logging),
 
+    onStateChange: (callback, options) =>
+      streamToCallback(watchStateStream(data.address, data.providers.publicDataProvider, data.module.ledger, options), callback),
+    watchState: (options) =>
+      streamToAsyncIterator(watchStateStream(data.address, data.providers.publicDataProvider, data.module.ledger, options)),
+    onRawStateChange: (callback, options) =>
+      streamToCallback(watchRawStateStream(data.address, data.providers.publicDataProvider, options), callback),
+    watchRawState: (options) =>
+      streamToAsyncIterator(watchRawStateStream(data.address, data.providers.publicDataProvider, options)),
+
     effect: {
       actions: effectActions,
       call: (action, ...args) => callContractEffect(data, action, ...args),
@@ -1107,6 +1386,10 @@ export function createDeployedContractHandle(data: DeployedContractData): Deploy
       getStateAt: (blockHeight) => contractStateAtEffect(data, blockHeight),
       ledgerState: () => ledgerStateEffect(data),
       ledgerStateAt: (blockHeight) => ledgerStateAtEffect(data, blockHeight),
+      watchState: (options) =>
+        watchStateStream(data.address, data.providers.publicDataProvider, data.module.ledger, options),
+      watchRawState: (options) =>
+        watchRawStateStream(data.address, data.providers.publicDataProvider, options),
     },
   };
 }
@@ -1138,11 +1421,24 @@ export function createReadonlyContractHandle<TLedger>(
     readRawStateAt: (address, blockHeight) =>
       runEffectWithLogging(readRawStateEffect(address, provider, blockHeight), false),
 
+    onStateChange: (address, callback, options) =>
+      streamToCallback(watchStateStream(address, provider, ledgerParser, options), callback),
+    watchState: (address, options) =>
+      streamToAsyncIterator(watchStateStream(address, provider, ledgerParser, options)),
+    onRawStateChange: (address, callback, options) =>
+      streamToCallback(watchRawStateStream(address, provider, options), callback),
+    watchRawState: (address, options) =>
+      streamToAsyncIterator(watchRawStateStream(address, provider, options)),
+
     effect: {
       readState: (address) => readStateEffect(address, provider, ledgerParser),
       readStateAt: (address, blockHeight) => readStateEffect(address, provider, ledgerParser, blockHeight),
       readRawState: (address) => readRawStateEffect(address, provider),
       readRawStateAt: (address, blockHeight) => readRawStateEffect(address, provider, blockHeight),
+      watchState: (address, options) =>
+        watchStateStream(address, provider, ledgerParser, options),
+      watchRawState: (address, options) =>
+        watchRawStateStream(address, provider, options),
     },
   };
 }
@@ -1250,4 +1546,6 @@ export const effect = {
   create: createContractEffect,
   readState: readStateEffect,
   readRawState: readRawStateEffect,
+  watchState: watchStateStream,
+  watchRawState: watchRawStateStream,
 };
