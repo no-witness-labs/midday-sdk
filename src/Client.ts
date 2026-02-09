@@ -26,7 +26,7 @@
  * @module
  */
 
-import { Context, Data, Effect, Layer, Scope } from 'effect';
+import { Context, Data, Duration, Effect, Layer, Scope } from 'effect';
 import { setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
 import type {
@@ -71,6 +71,33 @@ export class ClientError extends Data.TaggedError('ClientError')<{
   readonly cause: unknown;
   readonly message: string;
 }> {}
+
+/**
+ * Error when a transaction wait exceeds the configured timeout.
+ *
+ * @since 0.10.0
+ * @category errors
+ */
+export class TxTimeoutError extends Data.TaggedError('TxTimeoutError')<{
+  readonly txHash: string;
+  readonly timeout: number;
+  readonly message: string;
+}> {}
+
+// =============================================================================
+// Transaction Types
+// =============================================================================
+
+/**
+ * Options for waiting on a transaction.
+ *
+ * @since 0.10.0
+ * @category model
+ */
+export interface WaitForTxOptions {
+  /** Timeout in milliseconds. If the transaction isn't finalized within this duration, a `TxTimeoutError` is thrown. */
+  readonly timeout?: number;
+}
 
 // =============================================================================
 // Provider Types (absorbed from Providers module)
@@ -244,8 +271,13 @@ export interface MiddayClient {
     options: LoadContractOptions<M>,
   ): Promise<LoadedContract<InferLedger<M>, InferCircuits<M>, InferActions<M>>>;
 
-  /** Wait for a transaction to be finalized. */
-  waitForTx(txHash: string): Promise<FinalizedTxData>;
+  /** Wait for a transaction to be finalized.
+   *
+   * @param txHash - Transaction hash to watch
+   * @param options - Optional settings (e.g., timeout)
+   * @throws {TxTimeoutError} When the timeout is exceeded
+   */
+  waitForTx(txHash: string, options?: WaitForTxOptions): Promise<FinalizedTxData>;
 
   /**
    * Close the client and release all resources.
@@ -266,7 +298,7 @@ export interface MiddayClient {
     loadContract<M extends ContractModule>(
       options: LoadContractOptions<M>,
     ): Effect.Effect<LoadedContract<InferLedger<M>, InferCircuits<M>, InferActions<M>>, ClientError>;
-    waitForTx(txHash: string): Effect.Effect<FinalizedTxData, ClientError>;
+    waitForTx(txHash: string, options?: WaitForTxOptions): Effect.Effect<FinalizedTxData, ClientError | TxTimeoutError>;
     close(): Effect.Effect<void, ClientError>;
   };
 }
@@ -491,8 +523,9 @@ function loadContractEffect(
 function waitForTxEffect(
   clientData: ClientData,
   txHash: string,
-): Effect.Effect<FinalizedTxData, ClientError> {
-  return Effect.tryPromise({
+  options?: WaitForTxOptions,
+): Effect.Effect<FinalizedTxData, ClientError | TxTimeoutError> {
+  const base = Effect.tryPromise({
     try: async () => {
       const data = await clientData.providers.publicDataProvider.watchForTxData(txHash);
       return {
@@ -507,6 +540,20 @@ function waitForTxEffect(
         message: `Failed to wait for transaction: ${cause instanceof Error ? cause.message : String(cause)}`,
       }),
   });
+
+  if (options?.timeout != null) {
+    return Effect.timeoutFail(base, {
+      duration: Duration.millis(options.timeout),
+      onTimeout: () =>
+        new TxTimeoutError({
+          txHash,
+          timeout: options.timeout!,
+          message: `Transaction ${txHash} was not finalized within ${options.timeout}ms`,
+        }),
+    });
+  }
+
+  return base;
 }
 
 function closeClientEffect(data: ClientData): Effect.Effect<void, ClientError> {
@@ -553,8 +600,8 @@ function createClientHandle(data: ClientData): MiddayClient {
       );
       return createLoadedContractHandle(contractData) as LoadedContract<InferLedger<M>, InferCircuits<M>, InferActions<M>>;
     },
-    waitForTx: (txHash) =>
-      runEffectWithLogging(waitForTxEffect(data, txHash), data.logging),
+    waitForTx: (txHash, options?) =>
+      runEffectWithLogging(waitForTxEffect(data, txHash, options), data.logging),
     close: () =>
       runEffectWithLogging(closeClientEffect(data), data.logging),
 
@@ -566,7 +613,7 @@ function createClientHandle(data: ClientData): MiddayClient {
         loadContractEffect(data, options).pipe(
           Effect.map((contractData) => createLoadedContractHandle(contractData) as LoadedContract<InferLedger<M>, InferCircuits<M>, InferActions<M>>),
         ),
-      waitForTx: (txHash) => waitForTxEffect(data, txHash),
+      waitForTx: (txHash, options?) => waitForTxEffect(data, txHash, options),
       close: () => closeClientEffect(data),
     },
   };

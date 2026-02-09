@@ -23,7 +23,7 @@
  * @module
  */
 
-import { Data, Effect, Stream } from 'effect';
+import { Data, Duration, Effect, Stream } from 'effect';
 import { deployContract, findDeployedContract } from '@midnight-ntwrk/midnight-js-contracts';
 import { CompiledContract } from '@midnight-ntwrk/compact-js';
 import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
@@ -51,6 +51,18 @@ import { runEffectWithLogging } from './Runtime.js';
  */
 export class ContractError extends Data.TaggedError('ContractError')<{
   readonly cause: unknown;
+  readonly message: string;
+}> {}
+
+/**
+ * Error when a contract operation exceeds the configured timeout.
+ *
+ * @since 0.10.0
+ * @category errors
+ */
+export class TxTimeoutError extends Data.TaggedError('TxTimeoutError')<{
+  readonly operation: string;
+  readonly timeout: number;
   readonly message: string;
 }> {}
 
@@ -210,6 +222,8 @@ export interface LoadContractOptions<M extends ContractModule = ContractModule> 
 export interface DeployOptions {
   /** Initial private state (defaults to {}) */
   initialPrivateState?: unknown;
+  /** Timeout in milliseconds. Throws `TxTimeoutError` if deployment isn't finalized in time. */
+  timeout?: number;
 }
 
 /**
@@ -221,6 +235,8 @@ export interface DeployOptions {
 export interface JoinOptions {
   /** Initial private state (defaults to {}) */
   initialPrivateState?: unknown;
+  /** Timeout in milliseconds. Throws `TxTimeoutError` if joining isn't finalized in time. */
+  timeout?: number;
 }
 
 /**
@@ -303,6 +319,7 @@ export interface LoadedContract<
    *
    * @returns A deployed contract handle ready for calls.
    * @throws {ContractError} When deployment fails
+   * @throws {TxTimeoutError} When the timeout is exceeded
    */
   deploy(options?: DeployOptions): Promise<DeployedContract<TLedger, TCircuits, TActions>>;
 
@@ -311,13 +328,14 @@ export interface LoadedContract<
    *
    * @returns A deployed contract handle ready for calls.
    * @throws {ContractError} When joining fails
+   * @throws {TxTimeoutError} When the timeout is exceeded
    */
   join(address: string, options?: JoinOptions): Promise<DeployedContract<TLedger, TCircuits, TActions>>;
 
   /** Effect versions of loaded contract methods */
   readonly effect: {
-    deploy(options?: DeployOptions): Effect.Effect<DeployedContract<TLedger, TCircuits, TActions>, ContractError>;
-    join(address: string, options?: JoinOptions): Effect.Effect<DeployedContract<TLedger, TCircuits, TActions>, ContractError>;
+    deploy(options?: DeployOptions): Effect.Effect<DeployedContract<TLedger, TCircuits, TActions>, ContractError | TxTimeoutError>;
+    join(address: string, options?: JoinOptions): Effect.Effect<DeployedContract<TLedger, TCircuits, TActions>, ContractError | TxTimeoutError>;
   };
 }
 
@@ -636,8 +654,8 @@ export function loadContractModuleEffect(
 function deployContractEffect(
   contractData: LoadedContractData,
   options?: DeployOptions,
-): Effect.Effect<DeployedContractData, ContractError> {
-  return Effect.gen(function* () {
+): Effect.Effect<DeployedContractData, ContractError | TxTimeoutError> {
+  const base = Effect.gen(function* () {
     const { initialPrivateState = {} } = options ?? {};
     const { module, providers, logging } = contractData;
 
@@ -672,14 +690,28 @@ function deployContractEffect(
       logging,
     };
   });
+
+  if (options?.timeout != null) {
+    return Effect.timeoutFail(base, {
+      duration: Duration.millis(options.timeout),
+      onTimeout: () =>
+        new TxTimeoutError({
+          operation: 'deploy',
+          timeout: options.timeout!,
+          message: `Contract deployment was not finalized within ${options.timeout}ms`,
+        }),
+    });
+  }
+
+  return base;
 }
 
 function joinContractEffect(
   contractData: LoadedContractData,
   address: string,
   options?: JoinOptions,
-): Effect.Effect<DeployedContractData, ContractError> {
-  return Effect.gen(function* () {
+): Effect.Effect<DeployedContractData, ContractError | TxTimeoutError> {
+  const base = Effect.gen(function* () {
     const { initialPrivateState = {} } = options ?? {};
     const { module, providers, logging } = contractData;
 
@@ -712,6 +744,20 @@ function joinContractEffect(
       logging,
     };
   });
+
+  if (options?.timeout != null) {
+    return Effect.timeoutFail(base, {
+      duration: Duration.millis(options.timeout),
+      onTimeout: () =>
+        new TxTimeoutError({
+          operation: 'join',
+          timeout: options.timeout!,
+          message: `Contract join at ${address} was not finalized within ${options.timeout}ms`,
+        }),
+    });
+  }
+
+  return base;
 }
 
 function callContractEffect(
