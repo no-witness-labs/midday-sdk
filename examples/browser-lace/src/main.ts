@@ -169,7 +169,7 @@ async function readState() {
     updateStatus('Reading state...');
     const state = (await contract.ledgerState()) as { counter: bigint };
     updateCounter(state.counter.toString());
-    updateStatus('State read successfully');
+    updateStatus(`Counter value: ${state.counter}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     updateStatus(`Read failed: ${message}`, true);
