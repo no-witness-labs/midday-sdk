@@ -137,7 +137,9 @@ await cluster.start();
 FeeRelay.startServer(cluster.networkConfig, { port: 3002 });
 
 // Browser: point feeRelay to the server URL
-const client = await Midday.Client.fromWallet(connection, {
+const wallet = await Midday.Wallet.fromBrowser('undeployed');
+const client = await Midday.Client.create({
+  wallet,
   privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
     privateStateStoreName: 'my-app',
   }),
@@ -150,13 +152,14 @@ const client = await Midday.Client.fromWallet(connection, {
 ### 1. Connect to Lace Wallet
 
 ```typescript
-const connection = await Midday.BrowserWallet.connectWallet('undeployed');
+const wallet = await Midday.Wallet.fromBrowser('undeployed');
 ```
 
 ### 2. Create Client from Wallet (with fee relay)
 
 ```typescript
-const client = await Midday.Client.fromWallet(connection, {
+const client = await Midday.Client.create({
+  wallet,
   privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
     privateStateStoreName: 'my-app',
   }),
@@ -167,18 +170,18 @@ const client = await Midday.Client.fromWallet(connection, {
 ### 3. Load and Deploy Contract
 
 ```typescript
-const contract = await client.loadContract({
+const loaded = await client.loadContract({
   module: CounterContract,
   zkConfig: new Midday.ZkConfig.HttpZkConfigProvider('/zk-config'),
   privateStateId: 'my-counter',
 });
-await contract.deploy();
+const deployed = await loaded.deploy();
 ```
 
 ### 4. Call Actions
 
 ```typescript
-const result = await contract.call('increment');
+const result = await deployed.call('increment');
 console.log(`TX: ${result.txHash}`);
 ```
 

@@ -208,7 +208,7 @@ For dashboards and monitoring — no wallet or proof server needed:
 
 ```typescript
 const reader = Midday.Client.createReadonly({
-  networkConfig: Midday.Config.NETWORKS.testnet,
+  networkConfig: Midday.Config.NETWORKS.preview,
 });
 
 const counter = reader.loadContract({ module: CounterContract });

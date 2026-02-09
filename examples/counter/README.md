@@ -87,18 +87,19 @@ const client = await Midday.Client.create({
 ### 3. Load & Deploy Contract
 
 ```typescript
-const contract = await client.loadContract({
+const loaded = await client.loadContract({
   module: CounterContract,
   zkConfig: Midday.ZkConfig.fromPath(COUNTER_CONTRACT_DIR),
+  privateStateId: 'counter-example',
 });
-await contract.deploy();
+const deployed = await loaded.deploy();
 ```
 
 ### 4. Call Actions & Read State
 
 ```typescript
-await contract.call('increment');
-const state = await contract.ledgerState();
+await deployed.actions.increment();
+const state = await deployed.ledgerState();
 console.log(state.counter);
 ```
 

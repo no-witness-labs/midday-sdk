@@ -101,10 +101,11 @@ const result = await Effect.runPromise(program.pipe(Effect.provide(ClientLayer))
 import * as Midday from '@no-witness-labs/midday-sdk';
 
 // Connect to Lace wallet
-const connection = await Midday.Wallet.connectWallet('testnet');
+const wallet = await Midday.Wallet.fromBrowser('preview');
 
-// Create client from wallet connection
-const client = await Midday.Client.fromWallet(connection, {
+// Create client with connected wallet
+const client = await Midday.Client.create({
+  wallet,
   privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
     privateStateStoreName: 'my-app',
   }),
@@ -123,12 +124,12 @@ await deployed.actions.increment();
 ## Wallet Factories
 
 ```typescript
-// From seed (Node.js)
-const wallet = await Midday.Wallet.fromSeed({ seed, networkConfig });
+// From seed (Node.js) — positional args
+const wallet = await Midday.Wallet.fromSeed(seed, networkConfig);
 const balance = await wallet.getBalance();
 
 // From browser (Lace extension)
-const wallet = await Midday.Wallet.fromBrowser('testnet');
+const wallet = await Midday.Wallet.fromBrowser('preview');
 const balance = await wallet.getBalance();
 
 // Read-only (address only, no signing)
@@ -141,7 +142,7 @@ console.log(wallet.address);
 ```typescript
 // No wallet, seed, or proof server required
 const reader = Midday.Client.createReadonly({
-  networkConfig: Midday.Config.NETWORKS.testnet,
+  networkConfig: Midday.Config.NETWORKS.preview,
 });
 
 const counter = reader.loadContract({ module: CounterContract });
@@ -160,9 +161,9 @@ const client = await Midday.Client.create({
   // ...
 });
 
-// Testnet
+// Preview network
 const client = await Midday.Client.create({
-  networkConfig: Midday.Config.NETWORKS.testnet,
+  networkConfig: Midday.Config.NETWORKS.preview,
   seed: 'your-64-char-hex-seed',
   // ...
 });
@@ -280,7 +281,7 @@ const deployed = await loaded.deploy({ timeout: 60_000 });
 - `Midday.Client` — Client creation, contract loading, read-only client, fee relay
 - `Midday.Contract` — Contract types (`LoadedContract`, `DeployedContract`, `ReadonlyContract`)
 - `Midday.Config` — Network configuration presets and constants
-- `Midday.Wallet` — Wallet factories (`fromSeed`, `fromBrowser`, `fromAddress`, `connectWallet`)
+- `Midday.Wallet` — Wallet factories (`fromSeed`, `fromBrowser`, `fromAddress`)
 - `Midday.PrivateState` — Private state providers (in-memory, IndexedDB)
 - `Midday.ZkConfig` — ZK configuration providers (`fromPath`, `HttpZkConfigProvider`)
 - `Midday.Hash` — Cryptographic hash utilities
@@ -319,6 +320,7 @@ import type {
   ReadonlyWallet,
   WalletConnection,
   WalletBalance,
+  DustBalance,
   WalletProviders,
 
   // Config

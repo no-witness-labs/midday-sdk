@@ -32,7 +32,7 @@ We use **Effect.ts** as the core runtime for all SDK operations.
 #### Effect.gen for Sequential Composition
 
 ```typescript
-function createEffect(config: ClientConfig): Effect.Effect<MidnightClient, ClientError> {
+function createEffect(config: ClientConfig): Effect.Effect<MiddayClient, ClientError> {
   return Effect.gen(function* () {
     yield* Effect.logDebug('Initializing wallet...');
 
@@ -82,7 +82,7 @@ export class ClientService extends Context.Tag('ClientService')<
 export const ClientLive: Layer.Layer<ClientService> = Layer.succeed(ClientService, {
   create: createEffect,
   fromWallet: fromWalletEffect,
-  contractFrom: contractFromEffect,
+  loadContract: loadContractEffect,
   waitForTx: waitForTxEffect,
 });
 ```
@@ -108,7 +108,7 @@ await Effect.runPromise(program.pipe(Effect.provide(clientLayer)));
 We provide utilities that clean up Effect internals from stack traces:
 
 ```typescript
-// src/utils/effect-runtime.ts
+// src/Runtime.ts
 export async function runEffectPromise<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
   const exit = await Effect.runPromiseExit(effect);
   if (Exit.isFailure(exit)) {
@@ -169,7 +169,7 @@ Effect is an implementation detail for Promise API users:
 const client = await Midday.Client.create(config);
 
 // Under the hood:
-export async function create(config: ClientConfig): Promise<MidnightClient> {
+export async function create(config: ClientConfig): Promise<MiddayClient> {
   return runEffectWithLogging(createEffect(config), config.logging ?? true);
 }
 ```

@@ -21,7 +21,7 @@ Midday SDK supports browser environments with integration for the [Lace wallet](
    ```typescript
    import * as Midday from '@no-witness-labs/midday-sdk';
 
-   const connection = await Midday.Wallet.connectWallet('testnet');
+   const wallet = await Midday.Wallet.fromBrowser('preview');
    ```
 
    This will prompt the user to approve the connection in their Lace wallet.
@@ -29,7 +29,8 @@ Midday SDK supports browser environments with integration for the [Lace wallet](
 2. **Create a client from the connection**
 
    ```typescript
-   const client = await Midday.Client.fromWallet(connection, {
+   const client = await Midday.Client.create({
+     wallet,
      privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
        privateStateStoreName: 'my-app'
      }),
@@ -58,10 +59,11 @@ import * as CounterContract from './contracts/counter/contract/index.js';
 
 async function main() {
   // Connect to Lace wallet
-  const connection = await Midday.Wallet.connectWallet('testnet');
+  const wallet = await Midday.Wallet.fromBrowser('preview');
 
-  // Create client from wallet connection
-  const client = await Midday.Client.fromWallet(connection, {
+  // Create client with connected wallet
+  const client = await Midday.Client.create({
+    wallet,
     privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
       privateStateStoreName: 'my-app'
     }),
@@ -89,7 +91,8 @@ async function main() {
 For apps where users don't need to hold dust tokens, enable fee relay:
 
 ```typescript
-const client = await Midday.Client.fromWallet(connection, {
+const client = await Midday.Client.create({
+  wallet,
   privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
     privateStateStoreName: 'my-app',
   }),
@@ -134,11 +137,11 @@ Ensure your ZK config server has proper CORS headers configured. The server shou
 Match the network to the wallet's current network:
 
 ```typescript
-// Connect to testnet
-const connection = await Midday.Wallet.connectWallet('testnet');
+// Connect to preview network
+const wallet = await Midday.Wallet.fromBrowser('preview');
 
 // Or connect to mainnet (when available)
-const connection = await Midday.Wallet.connectWallet('mainnet');
+const wallet = await Midday.Wallet.fromBrowser('mainnet');
 ```
 
 ## Wallet Connection Details
@@ -146,22 +149,21 @@ const connection = await Midday.Wallet.connectWallet('mainnet');
 The wallet connection provides keys and configuration:
 
 ```typescript
-const connection = await Midday.Wallet.connectWallet('testnet');
+const wallet = await Midday.Wallet.fromBrowser('preview');
 
-// Access wallet keys
-console.log('Coin public key:', connection.coinPublicKey);
-console.log('Encryption key:', connection.encryptionPublicKey);
+// Access wallet info
+console.log('Address:', wallet.address);
 
-// Access the connected wallet API for balance queries
-const shielded = await connection.wallet.getShieldedBalances();
-const dust = await connection.wallet.getDustBalance();
+// Get balance
+const balance = await wallet.getBalance();
+console.log('Balance:', balance);
 ```
 
 ## Troubleshooting
 
 ### Wallet Not Found
 
-If `connectWallet` throws an error, ensure:
+If `fromBrowser` throws an error, ensure:
 
 1. Lace wallet extension is installed
 2. The wallet is unlocked

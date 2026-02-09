@@ -20,10 +20,10 @@ Midday SDK comes with pre-configured network settings for common environments.
     });
     ```
   </TabItem>
-  <TabItem label="Testnet">
+  <TabItem label="Preview">
     ```typescript
     const client = await Midday.Client.create({
-      networkConfig: Midday.Config.NETWORKS.testnet,
+      networkConfig: Midday.Config.NETWORKS.preview,
       seed: 'your-64-char-hex-seed',
       privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
     });
@@ -99,7 +99,7 @@ For server-side applications, provide a 64-character hex seed:
 
 ```typescript
 const client = await Midday.Client.create({
-  networkConfig: Midday.Config.NETWORKS.testnet,
+  networkConfig: Midday.Config.NETWORKS.preview,
   seed: 'your-64-char-hex-seed', // 32 bytes as hex
   privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
 });
@@ -114,11 +114,11 @@ Never commit seeds to version control. Use environment variables or secure secre
 The SDK provides convenient wallet factories:
 
 ```typescript
-// From seed (Node.js)
-const wallet = await Midday.Wallet.fromSeed({ seed, networkConfig });
+// From seed (Node.js) — positional args
+const wallet = await Midday.Wallet.fromSeed(seed, networkConfig);
 
 // From browser (Lace extension)
-const wallet = await Midday.Wallet.fromBrowser('testnet');
+const wallet = await Midday.Wallet.fromBrowser('preview');
 
 // Read-only (address only, no signing)
 const wallet = Midday.Wallet.fromAddress('0x...');
@@ -129,8 +129,9 @@ const wallet = Midday.Wallet.fromAddress('0x...');
 For browser applications, connect to the Lace wallet extension:
 
 ```typescript
-const connection = await Midday.Wallet.connectWallet('testnet');
-const client = await Midday.Client.fromWallet(connection, {
+const wallet = await Midday.Wallet.fromBrowser('preview');
+const client = await Midday.Client.create({
+  wallet,
   privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
     privateStateStoreName: 'my-app'
   }),
@@ -144,7 +145,8 @@ See the [Browser Usage](/midday-sdk/guides/browser-usage/) guide for more detail
 For browser apps where users don't need to hold dust tokens:
 
 ```typescript
-const client = await Midday.Client.fromWallet(connection, {
+const client = await Midday.Client.create({
+  wallet,
   privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
     privateStateStoreName: 'my-app',
   }),

@@ -42,22 +42,24 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 
 ```typescript
 import * as Midday from '@no-witness-labs/midday-sdk';
+import * as CounterContract from './contracts/counter/contract/index.js';
 
 // Create client (no zkConfig at client level)
 const client = await Midday.Client.create({
-  networkConfig: Midday.Config.NETWORKS.testnet,
+  networkConfig: Midday.Config.NETWORKS.preview,
   seed: 'your-64-char-hex-seed',
   privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
 });
 
 // Load contract (zkConfig loaded per-contract)
-const contract = await client.loadContract({
-  moduleUrl: 'https://cdn.example.com/contracts/counter/index.js',
-  zkConfigBaseUrl: 'https://cdn.example.com/contracts/counter',
+const loaded = await client.loadContract({
+  module: CounterContract,
+  zkConfig: Midday.ZkConfig.fromPath('./contracts/counter'),
+  privateStateId: 'my-counter',
 });
 
 // Deploy and interact
-await contract.deploy();
-await contract.call('increment');
-const state = await contract.ledgerState();
+const deployed = await loaded.deploy();
+await deployed.actions.increment();
+const state = await deployed.ledgerState();
 ```

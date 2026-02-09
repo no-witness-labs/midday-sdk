@@ -215,6 +215,19 @@ export interface WalletProviders {
 // =============================================================================
 
 /**
+ * Dust token balance with cap information.
+ *
+ * @since 0.11.0
+ * @category model
+ */
+export interface DustBalance {
+  /** Current dust balance */
+  readonly balance: bigint;
+  /** Maximum dust cap */
+  readonly cap: bigint;
+}
+
+/**
  * Wallet balance across all account types.
  *
  * @since 0.7.0
@@ -225,8 +238,8 @@ export interface WalletBalance {
   readonly shielded: Record<string, bigint>;
   /** Unshielded (public) balances by token type */
   readonly unshielded: Record<string, bigint>;
-  /** Dust balance */
-  readonly dust: bigint;
+  /** Dust balance and cap */
+  readonly dust: DustBalance;
 }
 
 /**
@@ -244,6 +257,9 @@ export interface WalletBalance {
  * const wallet = await Midday.Wallet.fromBrowser('testnet');
  *
  * // Same interface regardless of source
+ * console.log(wallet.address);            // shielded address
+ * console.log(wallet.coinPublicKey);      // ZK coin public key
+ * console.log(wallet.encryptionPublicKey); // encryption public key
  * const balance = await wallet.getBalance();
  * const { walletProvider, midnightProvider } = wallet.providers();
  * await wallet.close();
@@ -259,6 +275,10 @@ export interface ConnectedWallet {
   readonly source: 'seed' | 'browser';
   /** Primary wallet address */
   readonly address: string;
+  /** ZK coin public key (for receiving shielded transfers) */
+  readonly coinPublicKey: string;
+  /** Encryption public key (for encrypted communication) */
+  readonly encryptionPublicKey: string;
 
   /** Get current wallet balance across all account types. */
   getBalance(): Promise<WalletBalance>;
@@ -662,8 +682,12 @@ function getBalanceFromSeedEffect(walletContext: WalletContext): Effect.Effect<W
         shielded: ((state as any).shielded?.balances as Record<string, bigint>) ?? {},
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         unshielded: ((state as any).unshielded?.balances as Record<string, bigint>) ?? {},
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        dust: ((state as any).dust?.walletBalance?.(new Date()) as bigint) ?? 0n,
+        dust: {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          balance: ((state as any).dust?.walletBalance?.(new Date()) as bigint) ?? 0n,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          cap: ((state as any).dust?.walletCap?.(new Date()) as bigint) ?? 0n,
+        },
       };
     },
     catch: (cause) =>
@@ -685,7 +709,10 @@ function getBalanceFromBrowserEffect(connection: WalletConnection): Effect.Effec
       return {
         shielded,
         unshielded,
-        dust: dustInfo.balance,
+        dust: {
+          balance: dustInfo.balance,
+          cap: dustInfo.cap,
+        },
       };
     },
     catch: (cause) =>
@@ -709,9 +736,11 @@ function fromSeedEffect(
     }
 
     const address = walletContext.unshieldedKeystore.getBech32Address().asString();
+    const coinPublicKey = String(walletContext.shieldedSecretKeys.coinPublicKey);
+    const encryptionPublicKey = String(walletContext.shieldedSecretKeys.encryptionPublicKey);
     const backend: WalletBackend = { type: 'seed', context: walletContext };
 
-    return createConnectedWalletHandle(backend, address);
+    return createConnectedWalletHandle(backend, address, { coinPublicKey, encryptionPublicKey });
   });
 }
 
@@ -719,13 +748,19 @@ function fromBrowserEffect(networkId: string = 'testnet'): Effect.Effect<Connect
   return Effect.gen(function* () {
     const connection = yield* connectEffect(networkId);
     const address = connection.addresses.shieldedAddress;
+    const coinPublicKey = connection.coinPublicKey;
+    const encryptionPublicKey = connection.encryptionPublicKey;
     const backend: WalletBackend = { type: 'browser', connection };
 
-    return createConnectedWalletHandle(backend, address);
+    return createConnectedWalletHandle(backend, address, { coinPublicKey, encryptionPublicKey });
   });
 }
 
-function createConnectedWalletHandle(backend: WalletBackend, address: string): ConnectedWallet {
+function createConnectedWalletHandle(
+  backend: WalletBackend,
+  address: string,
+  keys: { coinPublicKey: string; encryptionPublicKey: string },
+): ConnectedWallet {
   const getBalanceEff = (): Effect.Effect<WalletBalance, WalletError> =>
     backend.type === 'seed'
       ? getBalanceFromSeedEffect(backend.context)
@@ -750,6 +785,8 @@ function createConnectedWalletHandle(backend: WalletBackend, address: string): C
     type: 'connected',
     source: backend.type === 'seed' ? 'seed' : 'browser',
     address,
+    coinPublicKey: keys.coinPublicKey,
+    encryptionPublicKey: keys.encryptionPublicKey,
 
     getBalance: () => runEffectPromise(getBalanceEff()),
     providers: () => runEffect(providersEff()),

@@ -217,7 +217,7 @@ console.log(`Counter: ${state.counter}`); // 3n
 
 ```typescript
 // Another user tries with wrong password
-const wrongWitnesses = createWitnesses(stringToBytes32('wrong-password'));
+const wrongWitnesses = createWitnesses(Midday.Hash.stringToBytes32('wrong-password'));
 
 const attackerLoaded = await otherClient.loadContract({
   module: SecretCounterContract,

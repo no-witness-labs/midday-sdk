@@ -92,15 +92,21 @@ interface DeployedContract<TLedger, TCircuits, TActions> {
 
   call(action: TCircuits, ...args: unknown[]): Promise<CallResult>;
   ledgerState(): Promise<TLedger>;
+  ledgerStateAt(blockHeight: number): Promise<TLedger>;
   getState(): Promise<unknown>;
+  getStateAt(blockHeight: number): Promise<unknown>;
   onStateChange(callback: (state: TLedger) => void): Unsubscribe;
+  onRawStateChange(callback: (state: unknown) => void): Unsubscribe;
   watchState(): AsyncIterableIterator<TLedger>;
+  watchRawState(): AsyncIterableIterator<unknown>;
 
   readonly effect: {
     readonly actions: ToEffectActions<TActions>;
     call(action: TCircuits, ...args: unknown[]): Effect.Effect<CallResult, ContractError>;
     ledgerState(): Effect.Effect<TLedger, ContractError>;
+    ledgerStateAt(blockHeight: number): Effect.Effect<TLedger, ContractError>;
     getState(): Effect.Effect<unknown, ContractError>;
+    getStateAt(blockHeight: number): Effect.Effect<unknown, ContractError>;
     watchState(): Stream.Stream<TLedger, ContractError>;
     watchRawState(): Stream.Stream<unknown, ContractError>;
   };
@@ -249,11 +255,11 @@ const mockClient: Midday.Client.MiddayClient = {
   networkConfig: Midday.Config.NETWORKS.local,
   providers: mockProviders,
   wallet: null,
-  connectedWallet: null,
   relayerWallet: null,
   loadContract: () => Promise.resolve(mockLoadedContract),
   waitForTx: () => Promise.resolve({ txHash: '0x123', blockHeight: 1, blockHash: '0xabc' }),
   close: () => Promise.resolve(),
+  [Symbol.asyncDispose]: async () => {},
   effect: {
     loadContract: () => Effect.succeed(mockLoadedContract),
     waitForTx: () => Effect.succeed({ txHash: '0x123', blockHeight: 1, blockHash: '0xabc' }),

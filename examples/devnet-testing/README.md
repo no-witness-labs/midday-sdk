@@ -49,10 +49,10 @@ Press `Ctrl+C` to stop and cleanup.
    Network ID: undeployed
 
 5. Contract operations (demonstration):
-   - Load contract: client.loadContract({ module, zkConfigProvider })
-   - Deploy: await contract.deploy()
-   - Call action: await contract.call("increment")
-   - Read state: await contract.ledgerState()
+   - Load contract: client.loadContract({ module, zkConfig, privateStateId })
+   - Deploy: const deployed = await loaded.deploy()
+   - Call action: await deployed.actions.increment()
+   - Read state: await deployed.ledgerState()
 
 === Devnet ready for testing ===
 Press Ctrl+C to stop and cleanup...

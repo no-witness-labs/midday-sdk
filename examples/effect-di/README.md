@@ -84,10 +84,10 @@ const program = Effect.gen(function* () {
   const client = yield* Midday.Client.MiddayClientService;
 
   // Use Effect API for contract operations
-  const contract = yield* client.effect.loadContract({ module, zkConfig });
-  yield* contract.effect.deploy();
-  yield* contract.effect.call('increment');
-  const state = yield* contract.effect.ledgerState();
+  const loaded = yield* client.effect.loadContract({ module, zkConfig, privateStateId: 'my-id' });
+  const deployed = yield* loaded.effect.deploy();
+  yield* deployed.effect.actions.increment();
+  const state = yield* deployed.effect.ledgerState();
 
   return state;
 });

@@ -831,9 +831,14 @@ function createReadonlyClientHandle(
  *   privateStateProvider,
  * });
  *
- * const contract = await client.loadContract({ path: './contracts/counter' });
- * await contract.deploy();
- * await contract.call('increment');
+ * const loaded = await client.loadContract({
+ *   module: CounterContract,
+ *   zkConfig: Midday.ZkConfig.fromPath('./contracts/counter'),
+ *   privateStateId: 'my-counter',
+ * });
+ * const deployed = await loaded.deploy();
+ * await deployed.actions.increment();
+ * const state = await deployed.ledgerState();
  * ```
  *
  * @since 0.2.0
@@ -858,7 +863,8 @@ export async function create(config: ClientConfig): Promise<MiddayClient> {
  *   networkConfig: Midday.Config.NETWORKS.local,
  * });
  *
- * const state = await reader.readState(address, CounterContract.ledger);
+ * const counter = reader.loadContract({ module: CounterContract });
+ * const state = await counter.readState(address);
  * console.log(state.counter); // 42n
  * ```
  *

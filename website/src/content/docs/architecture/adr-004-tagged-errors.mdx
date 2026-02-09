@@ -36,24 +36,36 @@ export class ClientError extends Data.TaggedError('ClientError')<{
   readonly message: string;
 }> {}
 
+export class TxTimeoutError extends Data.TaggedError('TxTimeoutError')<{
+  readonly txHash: string;
+  readonly timeout: number;
+  readonly message: string;
+}> {}
+```
+
+```typescript
+// src/Contract.ts
 export class ContractError extends Data.TaggedError('ContractError')<{
+  readonly cause: unknown;
+  readonly message: string;
+}> {}
+
+export class TxTimeoutError extends Data.TaggedError('TxTimeoutError')<{
+  readonly operation: string;
+  readonly message: string;
+}> {}
+```
+
+```typescript
+// src/ZkConfig.ts
+export class ZkConfigError extends Data.TaggedError('ZkConfigError')<{
   readonly cause: unknown;
   readonly message: string;
 }> {}
 ```
 
 ```typescript
-// src/providers/errors.ts
-export class ProviderError extends Data.TaggedError('ProviderError')<{
-  readonly cause: unknown;
-  readonly message: string;
-}> {}
-
-export class ZkConfigError extends Data.TaggedError('ZkConfigError')<{
-  readonly cause: unknown;
-  readonly message: string;
-}> {}
-
+// src/PrivateState.ts
 export class PrivateStateError extends Data.TaggedError('PrivateStateError')<{
   readonly cause: unknown;
   readonly message: string;
@@ -61,7 +73,7 @@ export class PrivateStateError extends Data.TaggedError('PrivateStateError')<{
 ```
 
 ```typescript
-// src/wallet/errors.ts
+// src/Wallet.ts
 export class WalletError extends Data.TaggedError('WalletError')<{
   readonly cause: unknown;
   readonly message: string;
@@ -72,12 +84,13 @@ export class WalletError extends Data.TaggedError('WalletError')<{
 
 ```
 SDK Errors
-├── ClientError        # Client creation/configuration failures
-├── ContractError      # Contract deployment/call failures
-├── WalletError        # Wallet initialization/sync failures
-├── ProviderError      # Provider setup failures
-├── ZkConfigError      # ZK configuration loading failures
-└── PrivateStateError  # Private state storage failures
+├── ClientError           # Client creation/configuration failures
+├── Client.TxTimeoutError # waitForTx exceeded timeout (has txHash)
+├── ContractError         # Contract deployment/call failures
+├── Contract.TxTimeoutError # Deploy/join exceeded timeout (has operation)
+├── WalletError           # Wallet initialization/sync failures
+├── ZkConfigError         # ZK configuration loading failures
+└── PrivateStateError     # Private state storage failures
 ```
 
 ### Error Creation
@@ -150,7 +163,7 @@ All errors have consistent properties:
 We clean Effect internals from stack traces for better debugging:
 
 ```typescript
-// src/utils/effect-runtime.ts
+// src/Runtime.ts
 function cleanErrorChain(error: Error): Error {
   // Remove Effect.ts internal frames
   // Preserve original error chain
