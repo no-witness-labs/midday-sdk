@@ -3,7 +3,10 @@
  *
  * Complete working example demonstrating Effect DI pattern with contract operations.
  * This example spins up a local devnet, deploys the counter contract using Effect,
- * and demonstrates dependency injection patterns.
+ * and demonstrates dependency injection, scoped resource management, and Effect logging.
+ *
+ * Everything is a single Effect program — cluster and client are both managed
+ * resources with automatic LIFO cleanup (client closes before cluster removes).
  *
  * Prerequisites:
  * - Docker installed and running
@@ -11,10 +14,10 @@
  */
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { Cluster } from '@no-witness-labs/midday-sdk/devnet';
+import { Cluster, ClusterService } from '@no-witness-labs/midday-sdk/devnet';
 import * as Midday from '@no-witness-labs/midday-sdk';
 import * as CounterContract from '../../../contracts/counter/contract/index.js';
-import { Effect } from 'effect';
+import { Effect, Layer } from 'effect';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -26,83 +29,89 @@ const COUNTER_CONTRACT_DIR = join(__dirname, '../../../contracts/counter');
 
 /**
  * Main program using Effect DI pattern.
- * The ClientLayer is provided at runtime, making this testable and composable.
+ *
+ * This is a pure Effect with a single service dependency (MiddayClientService).
+ * The layer is provided at the call site, making this testable and composable.
  */
 const program = Effect.gen(function* () {
-  console.log('=== Effect DI Example ===\n');
+  yield* Effect.log('=== Effect DI Example ===');
 
   // Access the injected client via MiddayClientService
   const client = yield* Midday.Client.MiddayClientService;
-  console.log('1. Client accessed via MiddayClientService');
-  console.log(`   Network: ${client.networkConfig.networkId}\n`);
+  yield* Effect.log(`Client accessed via MiddayClientService (network: ${client.networkConfig.networkId})`);
 
   // Load contract using Effect API
-  console.log('2. Loading counter contract (Effect API)...');
+  yield* Effect.log('Loading counter contract...');
   const contract = yield* client.effect.loadContract({
     module: CounterContract,
     zkConfig: Midday.ZkConfig.fromPath(COUNTER_CONTRACT_DIR),
     privateStateId: 'effect-di-example',
   });
-  console.log(`   Contract loaded (state: ${contract.state})\n`);
+  yield* Effect.log('Contract loaded');
 
-  // Deploy using Effect API
-  console.log('3. Deploying contract (Effect API)...');
-  yield* contract.effect.deploy();
-  console.log(`   Contract deployed!`);
-  console.log(`   Address: ${contract.address}\n`);
+  // Deploy using Effect API (returns a DeployedContract handle)
+  yield* Effect.log('Deploying contract...');
+  const deployed = yield* contract.effect.deploy();
+  yield* Effect.log(`Contract deployed at: ${deployed.address}`);
 
-  // Call increment using Effect API
-  console.log('4. Calling increment() (Effect API)...');
-  const result = yield* contract.effect.call('increment');
-  console.log(`   TX Hash: ${result.txHash}`);
-  console.log(`   Block: ${result.blockHeight}\n`);
+  // Call increment using typed actions (Effect API)
+  yield* Effect.log('Calling increment()...');
+  const result = yield* deployed.effect.actions.increment();
+  yield* Effect.log(`TX Hash: ${result.txHash} (block: ${result.blockHeight})`);
 
   // Read state using Effect API
-  console.log('5. Reading ledger state (Effect API)...');
-  const state = yield* contract.effect.ledgerState();
-  console.log(`   Counter value: ${state.counter}\n`);
+  yield* Effect.log('Reading ledger state...');
+  const state = yield* deployed.effect.ledgerState();
+  yield* Effect.log(`Counter value: ${state.counter}`);
 
-  console.log('=== Effect DI Example complete ===');
-  return { address: contract.address, counter: state.counter };
+  yield* Effect.log('=== Effect DI Example complete ===');
+  return { address: deployed.address, counter: state.counter };
 });
 
 // =============================================================================
-// Main Entry Point
+// Layer Composition — all lifecycle is in the layer graph
 // =============================================================================
 
-async function main() {
-  // Step 1: Create and start devnet
-  console.log('Starting local devnet...\n');
-  const cluster = await Cluster.make({
-    clusterName: 'effect-di-example',
-  });
+/**
+ * ClusterLayer: managed devnet cluster (auto-starts on creation, auto-removes on release)
+ */
+const ClusterLayer = Cluster.managedLayer({ clusterName: 'effect-di-example' });
 
-  try {
-    await cluster.start();
-    console.log(`Devnet ready: ${cluster.networkConfig.node}\n`);
-
-    // Step 2: Create the Client Layer for DI
-    const ClientLayer = Midday.Client.layer({
+/**
+ * ClientLayer: derives a MiddayClient from the ClusterService.
+ * Consumes ClusterService → provides MiddayClientService.
+ * The client is scoped (auto-closes when the layer is released).
+ */
+const ClientFromCluster = Layer.scoped(
+  Midday.Client.MiddayClientService,
+  Effect.gen(function* () {
+    const cluster = yield* ClusterService;
+    yield* Effect.log(`Devnet ready: ${cluster.networkConfig.node}`);
+    return yield* Midday.Client.effect.createScoped({
       seed: Midday.Config.DEV_WALLET_SEED,
       networkConfig: cluster.networkConfig,
       privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
     });
+  }),
+);
 
-    // Step 3: Run the Effect program with the provided layer
-    const result = await Effect.runPromise(program.pipe(Effect.provide(ClientLayer)));
+/**
+ * AppLayer: full application layer — Cluster feeds into Client.
+ * Cleanup is automatic and in LIFO order: client closes → cluster removes.
+ */
+const AppLayer = ClientFromCluster.pipe(Layer.provide(ClusterLayer));
 
-    console.log(`\nFinal result:`);
-    console.log(`  Contract: ${result.address}`);
-    console.log(`  Counter: ${result.counter}`);
-  } finally {
-    // Cleanup
-    console.log('\nCleaning up devnet...');
-    await cluster.remove();
-    console.log('Done!');
-  }
-}
+// =============================================================================
+// Run — pure program + composed layers
+// =============================================================================
 
-main().catch((error) => {
-  console.error('Error:', error.message || error);
-  process.exit(1);
-});
+// Single entry point — the program has zero lifecycle code
+Effect.runPromise(program.pipe(Effect.provide(AppLayer))).then(
+  (result) => {
+    console.log(`\nDone! Counter: ${result.counter}`);
+  },
+  (error) => {
+    console.error('Error:', error instanceof Error ? error.message : error);
+    process.exit(1);
+  },
+);

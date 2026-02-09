@@ -25,7 +25,7 @@ import { Transaction, type FinalizedTransaction } from '@midnight-ntwrk/ledger-v
 import type { UnboundTransaction } from '@midnight-ntwrk/midnight-js-types';
 
 import type { NetworkConfig } from '../Config.js';
-import { hexToBytes, bytesToHex } from '../utils/hex.js';
+import { hexToBytes, bytesToHex } from '../Utils.js';
 import * as Images from './Images.js';
 
 /**

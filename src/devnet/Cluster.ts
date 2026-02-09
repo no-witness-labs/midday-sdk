@@ -36,7 +36,7 @@
  * @module
  */
 
-import { Context, Effect, Layer } from 'effect';
+import { Context, Effect, Layer, Scope } from 'effect';
 import type { NetworkConfig } from '../Config.js';
 import * as Config from './Config.js';
 import type { DevNetConfig, ResolvedDevNetConfig } from './Config.js';
@@ -547,6 +547,40 @@ export const effect = {
   make: makeEffect,
 
   /**
+   * Create a scoped cluster that starts on acquire and removes on release.
+   *
+   * The cluster is automatically cleaned up when the scope ends.
+   * Use with `Effect.scoped` or provide to a `Layer.scoped`.
+   *
+   * @example
+   * ```typescript
+   * import { Effect } from 'effect';
+   * import { Cluster } from '@no-witness-labs/midday-sdk/devnet';
+   *
+   * const program = Effect.scoped(
+   *   Effect.gen(function* () {
+   *     const cluster = yield* Cluster.effect.makeScoped();
+   *     // cluster is started and ready
+   *     return cluster.networkConfig;
+   *   })
+   * ); // cluster automatically removed when scope exits
+   *
+   * await Effect.runPromise(program);
+   * ```
+   *
+   * @since 0.3.0
+   */
+  makeScoped: (config?: DevNetConfig): Effect.Effect<Cluster, ClusterError, Scope.Scope> =>
+    Effect.acquireRelease(
+      Effect.gen(function* () {
+        const cluster = yield* makeEffect(config);
+        yield* cluster.effect.start();
+        return cluster;
+      }),
+      (cluster) => cluster.effect.remove().pipe(Effect.catchAll(() => Effect.void)),
+    ),
+
+  /**
    * Run code with an automatically managed cluster (returns raw Effect).
    *
    * @example
@@ -627,3 +661,32 @@ export const layer = (
  * @category layer
  */
 export const Live: Layer.Layer<ClusterService, ClusterError> = layer();
+
+/**
+ * Create a managed Layer that starts the cluster on creation and removes it
+ * when the layer is released. The cluster lifecycle is fully automatic.
+ *
+ * @example
+ * ```typescript
+ * import { Effect } from 'effect';
+ * import { Cluster, ClusterService } from '@no-witness-labs/midday-sdk/devnet';
+ *
+ * const program = Effect.gen(function* () {
+ *   const cluster = yield* ClusterService;
+ *   // cluster is already started and ready
+ *   return cluster.networkConfig;
+ * });
+ *
+ * await Effect.runPromise(program.pipe(
+ *   Effect.provide(Cluster.managedLayer({ clusterName: 'my-devnet' }))
+ * ));
+ * // cluster is automatically removed
+ * ```
+ *
+ * @since 0.3.0
+ * @category layer
+ */
+export const managedLayer = (
+  config?: DevNetConfig,
+): Layer.Layer<ClusterService, ClusterError> =>
+  Layer.scoped(ClusterService, effect.makeScoped(config));

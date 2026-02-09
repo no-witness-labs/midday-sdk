@@ -11,8 +11,8 @@
 import * as Midday from '@no-witness-labs/midday-sdk';
 import * as CounterContract from '../../../contracts/counter/contract/index.js';
 
-// Store connected wallet API for balance queries
-let connectedApi: Midday.BrowserWallet.ConnectedAPI | null = null;
+// Store connected wallet for balance queries
+let wallet: Midday.Wallet.ConnectedWallet | null = null;
 
 // UI Elements
 const networkSelect = document.getElementById('network-select') as HTMLSelectElement;
@@ -24,9 +24,7 @@ const counterDiv = document.getElementById('counter-value') as HTMLDivElement;
 
 // State
 let client: Midday.Client.MiddayClient | null = null;
-let contract: Midday.Client.Contract | null = null;
-let lacePublicKey: string = '';
-let laceEncryptionKey: string = '';
+let contract: Midday.Contract.DeployedContract | null = null;
 
 // Update status display
 function updateStatus(message: string, isError = false) {
@@ -50,26 +48,22 @@ async function connectWallet() {
 
     // Connect to wallet - this will prompt user to approve
     const network = networkSelect?.value || 'undeployed';
-    const connection = await Midday.BrowserWallet.connectWallet(network as 'preview' | 'undeployed');
+    wallet = await Midday.Wallet.fromBrowser(network as 'preview' | 'undeployed');
 
     updateStatus('Creating SDK client...');
 
     // Check if user wants fee relay (genesis wallet pays fees) or own dust
     const useFeeRelay = (document.getElementById('fee-relay-checkbox') as HTMLInputElement).checked;
 
-    client = await Midday.Client.fromWallet(connection, {
+    client = await Midday.Client.create({
+      wallet,
       privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
         privateStateStoreName: 'lace-example',
       }),
       ...(useFeeRelay ? { feeRelay: { url: 'http://localhost:3002' } } : {}),
     });
 
-    // Store connected API and keys for balance queries, faucet, and key comparison
-    connectedApi = connection.wallet;
-    lacePublicKey = connection.addresses.shieldedCoinPublicKey;
-    laceEncryptionKey = connection.addresses.shieldedEncryptionPublicKey;
-
-    addressDiv.textContent = `Connected: ${lacePublicKey.slice(0, 16)}...`;
+    addressDiv.textContent = `Connected: ${wallet.address.slice(0, 16)}...`;
     addressDiv.style.display = 'block';
 
     // Show action buttons
@@ -96,6 +90,8 @@ async function deployContract() {
 
   try {
     updateStatus('Loading contract...');
+    console.log('[browser-lace] Loading contract...');
+    console.time('[browser-lace] loadContract');
 
     // ZkConfig URL - served by Vite dev server middleware
     // For production, host contract artifacts on a CDN
@@ -103,14 +99,19 @@ async function deployContract() {
 
     // Load contract with module + zkConfig
     // Use HttpZkConfigProvider which expects: /{circuitId}/zkir, /{circuitId}/prover-key, /{circuitId}/verifier-key
-    contract = await client.loadContract({
+    const loaded = await client.loadContract({
       module: CounterContract,
       zkConfig: new Midday.ZkConfig.HttpZkConfigProvider(zkConfigUrl),
       privateStateId: 'browser-lace-counter',
     });
+    console.timeEnd('[browser-lace] loadContract');
 
-    updateStatus('Deploying contract...');
-    await contract.deploy();
+    updateStatus('Deploying contract (proof generation may take a while)...');
+    console.log('[browser-lace] Deploying contract...');
+    console.time('[browser-lace] deploy');
+    contract = await loaded.deploy();
+    console.timeEnd('[browser-lace] deploy');
+    console.log('[browser-lace] Deployed at:', contract.address);
 
     updateStatus(`Contract deployed at: ${contract.address}`);
     updateCounter('0');
@@ -122,16 +123,18 @@ async function deployContract() {
     const contractKeyEl = document.getElementById('contract-key');
     const keyMatchEl = document.getElementById('key-match');
     if (keyInfoDiv) keyInfoDiv.style.display = 'block';
-    if (laceKeyEl) laceKeyEl.textContent = lacePublicKey;
+    if (laceKeyEl) laceKeyEl.textContent = wallet!.coinPublicKey;
     if (contractKeyEl) contractKeyEl.textContent = contractKey;
     if (keyMatchEl) {
-      const match = lacePublicKey === contractKey;
+      const match = wallet!.coinPublicKey === contractKey;
       keyMatchEl.textContent = match ? 'Keys match - contract belongs to Lace wallet' : 'Keys DO NOT match';
       keyMatchEl.style.color = match ? '#059669' : '#dc2626';
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    updateStatus(`Deploy failed: ${message}`, true);
+    console.error('[browser-lace] Deploy failed:', error);
+    const message = error instanceof Error ? error.message : String(error);
+    const cause = error instanceof Error && error.cause ? `\nCause: ${error.cause}` : '';
+    updateStatus(`Deploy failed: ${message}${cause}`, true);
   }
 }
 
@@ -144,7 +147,7 @@ async function callAction() {
 
   try {
     updateStatus('Calling increment...');
-    const result = await contract.call('increment');
+    const result = await contract.actions.increment();
     updateStatus(`TX submitted: ${result.txHash.slice(0, 16)}...`);
 
     // Read updated state
@@ -166,7 +169,7 @@ async function readState() {
     updateStatus('Reading state...');
     const state = (await contract.ledgerState()) as { counter: bigint };
     updateCounter(state.counter.toString());
-    updateStatus('State read successfully');
+    updateStatus(`Counter value: ${state.counter}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     updateStatus(`Read failed: ${message}`, true);
@@ -183,7 +186,7 @@ function formatBalance(value: bigint): string {
 
 // Refresh and display wallet balances
 async function refreshBalance() {
-  if (!connectedApi) {
+  if (!wallet) {
     updateStatus('Not connected - connect wallet first', true);
     return;
   }
@@ -191,17 +194,13 @@ async function refreshBalance() {
   try {
     updateStatus('Fetching balances...');
 
-    const [shielded, unshielded, dust] = await Promise.all([
-      connectedApi.getShieldedBalances(),
-      connectedApi.getUnshieldedBalances(),
-      connectedApi.getDustBalance(),
-    ]);
+    const balance = await wallet.getBalance();
 
     // Get native token balance - try both empty string and first available key
-    const shieldedKeys = Object.keys(shielded);
-    const unshieldedKeys = Object.keys(unshielded);
-    const shieldedNative = shielded[''] ?? (shieldedKeys.length > 0 ? shielded[shieldedKeys[0]] : 0n);
-    const unshieldedNative = unshielded[''] ?? (unshieldedKeys.length > 0 ? unshielded[unshieldedKeys[0]] : 0n);
+    const shieldedKeys = Object.keys(balance.shielded);
+    const unshieldedKeys = Object.keys(balance.unshielded);
+    const shieldedNative = balance.shielded[''] ?? (shieldedKeys.length > 0 ? balance.shielded[shieldedKeys[0]] : 0n);
+    const unshieldedNative = balance.unshielded[''] ?? (unshieldedKeys.length > 0 ? balance.unshielded[unshieldedKeys[0]] : 0n);
 
     // Update UI
     const balanceInfo = document.getElementById('balance-info');
@@ -213,8 +212,8 @@ async function refreshBalance() {
     if (balanceInfo) balanceInfo.style.display = 'block';
     if (shieldedEl) shieldedEl.textContent = formatBalance(shieldedNative);
     if (unshieldedEl) unshieldedEl.textContent = formatBalance(unshieldedNative);
-    if (dustBalanceEl) dustBalanceEl.textContent = formatBalance(dust.balance);
-    if (dustCapEl) dustCapEl.textContent = formatBalance(dust.cap);
+    if (dustBalanceEl) dustBalanceEl.textContent = formatBalance(balance.dust.balance);
+    if (dustCapEl) dustCapEl.textContent = formatBalance(balance.dust.cap);
 
     updateStatus('Balances updated');
   } catch (error) {
@@ -225,7 +224,7 @@ async function refreshBalance() {
 
 // Fund wallet via faucet
 async function fundWallet() {
-  if (!lacePublicKey || !laceEncryptionKey) {
+  if (!wallet) {
     updateStatus('Not connected - connect wallet first', true);
     return;
   }
@@ -237,8 +236,8 @@ async function fundWallet() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        coinPublicKey: lacePublicKey,
-        encryptionPublicKey: laceEncryptionKey,
+        coinPublicKey: wallet.coinPublicKey,
+        encryptionPublicKey: wallet.encryptionPublicKey,
       }),
     });
 

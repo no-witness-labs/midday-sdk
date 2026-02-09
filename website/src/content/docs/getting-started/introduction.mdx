@@ -16,7 +16,7 @@ The official Midnight JavaScript libraries are powerful but can be complex to wo
 - **Simplified API** - High-level abstractions that reduce boilerplate
 - **Multiple Programming Styles** - Choose between Promise API, Effect API, or Effect with Dependency Injection
 - **Browser Support** - First-class support for browser environments with Lace wallet integration
-- **Type Safety** - Full TypeScript support with comprehensive type definitions
+- **Type Safety** - Full TypeScript support with typed contract actions and state
 - **Effect Integration** - Built on [Effect](https://effect.website/) for robust error handling and composability
 
 ## API Styles
@@ -27,8 +27,10 @@ Midday SDK offers three ways to interact with contracts:
 The simplest approach, ideal for quick prototypes or developers unfamiliar with Effect:
 
 ```typescript
-const contract = await Midday.ContractBuilder.deploy(builder);
-await Midday.Contract.call(contract, 'increment');
+const loaded = await client.loadContract({ module: CounterContract, zkConfig, privateStateId: 'my-id' });
+const deployed = await loaded.deploy();
+await deployed.actions.increment();
+const state = await deployed.ledgerState();
 ```
 
 ### Effect API
@@ -36,8 +38,10 @@ For developers who want functional programming benefits without dependency injec
 
 ```typescript
 const program = Effect.gen(function* () {
-  const contract = yield* Midday.ContractBuilder.effect.deploy(builder);
-  return yield* Midday.Contract.effect.call(contract, 'increment');
+  const loaded = yield* client.effect.loadContract({ module, zkConfig, privateStateId: 'my-id' });
+  const deployed = yield* loaded.effect.deploy();
+  yield* deployed.effect.actions.increment();
+  return yield* deployed.effect.ledgerState();
 });
 ```
 
@@ -46,11 +50,14 @@ For large applications that benefit from testability and modularity:
 
 ```typescript
 const program = Effect.gen(function* () {
-  const contractService = yield* Midday.ContractService;
-  return yield* contractService.call(contract, 'increment');
+  const client = yield* Midday.Client.MiddayClientService;
+  const loaded = yield* client.effect.loadContract({ module, zkConfig, privateStateId: 'my-id' });
+  const deployed = yield* loaded.effect.deploy();
+  yield* deployed.effect.actions.increment();
+  return yield* deployed.effect.ledgerState();
 });
 ```
 
 ## Next Steps
 
-Ready to get started? Head to the [Installation](/midday-sdk/getting-started/installation/) guide.
+Ready to get started? Head to the [Quick Start](/midday-sdk/getting-started/quick-start/) guide.

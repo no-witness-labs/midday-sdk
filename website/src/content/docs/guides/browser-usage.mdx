@@ -21,7 +21,7 @@ Midday SDK supports browser environments with integration for the [Lace wallet](
    ```typescript
    import * as Midday from '@no-witness-labs/midday-sdk';
 
-   const connection = await Midday.BrowserWallet.connectWallet('testnet');
+   const wallet = await Midday.Wallet.fromBrowser('preview');
    ```
 
    This will prompt the user to approve the connection in their Lace wallet.
@@ -29,22 +29,24 @@ Midday SDK supports browser environments with integration for the [Lace wallet](
 2. **Create a client from the connection**
 
    ```typescript
-   const client = await Midday.Client.fromWallet(connection, {
+   const client = await Midday.Client.create({
+     wallet,
      privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
        privateStateStoreName: 'my-app'
      }),
    });
    ```
 
-3. **Load a contract (zkConfig loaded per-contract)**
+3. **Load and deploy a contract**
 
    ```typescript
-   const contract = await client.loadContract({
-     moduleUrl: 'https://cdn.example.com/contracts/counter/index.js',
-     zkConfigBaseUrl: 'https://cdn.example.com/contracts/counter',
+   const loaded = await client.loadContract({
+     module: CounterContract,
+     zkConfig: new Midday.ZkConfig.HttpZkConfigProvider('https://cdn.example.com/zk'),
+     privateStateId: 'my-counter',
    });
-   await contract.deploy();
-   await contract.call('increment');
+   const deployed = await loaded.deploy();
+   await deployed.actions.increment();
    ```
 
 </Steps>
@@ -53,32 +55,49 @@ Midday SDK supports browser environments with integration for the [Lace wallet](
 
 ```typescript
 import * as Midday from '@no-witness-labs/midday-sdk';
+import * as CounterContract from './contracts/counter/contract/index.js';
 
 async function main() {
   // Connect to Lace wallet
-  const connection = await Midday.BrowserWallet.connectWallet('testnet');
+  const wallet = await Midday.Wallet.fromBrowser('preview');
 
-  // Create client from wallet connection (no zkConfig at client level)
-  const client = await Midday.Client.fromWallet(connection, {
+  // Create client with connected wallet
+  const client = await Midday.Client.create({
+    wallet,
     privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
       privateStateStoreName: 'my-app'
     }),
   });
 
-  // Load contract with zkConfig (each contract has its own zk circuits)
-  const contract = await client.loadContract({
-    moduleUrl: 'https://cdn.example.com/contracts/counter/index.js',
-    zkConfigBaseUrl: 'https://cdn.example.com/contracts/counter',
+  // Load contract with zkConfig
+  const loaded = await client.loadContract({
+    module: CounterContract,
+    zkConfig: new Midday.ZkConfig.HttpZkConfigProvider('/zk-config'),
+    privateStateId: 'my-counter',
   });
 
   // Deploy and interact
-  await contract.deploy();
-  await contract.call('increment');
+  const deployed = await loaded.deploy();
+  await deployed.actions.increment();
 
   // Read state
-  const state = await contract.ledgerState();
+  const state = await deployed.ledgerState();
   console.log('Counter:', state.counter);
 }
+```
+
+## Fee Relay (Optional)
+
+For apps where users don't need to hold dust tokens, enable fee relay:
+
+```typescript
+const client = await Midday.Client.create({
+  wallet,
+  privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
+    privateStateStoreName: 'my-app',
+  }),
+  feeRelay: { url: 'http://localhost:3002' },
+});
 ```
 
 ## Browser-Specific Considerations
@@ -99,12 +118,13 @@ Use a unique store name per application to avoid conflicts.
 
 ### ZK Configuration
 
-In browser environments, zkConfig is loaded per-contract from a URL:
+In browser environments, use `HttpZkConfigProvider` to load zk artifacts from a URL:
 
 ```typescript
-const contract = await client.loadContract({
-  moduleUrl: 'https://cdn.example.com/contracts/counter/index.js',
-  zkConfigBaseUrl: 'https://cdn.example.com/contracts/counter',
+const loaded = await client.loadContract({
+  module: CounterContract,
+  zkConfig: new Midday.ZkConfig.HttpZkConfigProvider('https://cdn.example.com/zk'),
+  privateStateId: 'my-counter',
 });
 ```
 
@@ -117,30 +137,33 @@ Ensure your ZK config server has proper CORS headers configured. The server shou
 Match the network to the wallet's current network:
 
 ```typescript
-// Connect to testnet
-const connection = await Midday.BrowserWallet.connectWallet('testnet');
+// Connect to preview network
+const wallet = await Midday.Wallet.fromBrowser('preview');
 
 // Or connect to mainnet (when available)
-const connection = await Midday.BrowserWallet.connectWallet('mainnet');
+const wallet = await Midday.Wallet.fromBrowser('mainnet');
 ```
 
-## Handling Wallet Events
+## Wallet Connection Details
 
-The wallet connection provides events for state changes:
+The wallet connection provides keys and configuration:
 
 ```typescript
-const connection = await Midday.BrowserWallet.connectWallet('testnet');
+const wallet = await Midday.Wallet.fromBrowser('preview');
 
-// The connection includes the wallet state
-console.log('Connected address:', connection.address);
-console.log('Balance:', connection.balance);
+// Access wallet info
+console.log('Address:', wallet.address);
+
+// Get balance
+const balance = await wallet.getBalance();
+console.log('Balance:', balance);
 ```
 
 ## Troubleshooting
 
 ### Wallet Not Found
 
-If `connectWallet` throws an error, ensure:
+If `fromBrowser` throws an error, ensure:
 
 1. Lace wallet extension is installed
 2. The wallet is unlocked

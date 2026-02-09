@@ -22,6 +22,8 @@ const COUNTER_CONTRACT_DIR = join(__dirname, '../../../contracts/counter');
 async function main() {
   console.log('=== Counter Example (Promise API) ===\n');
 
+  let client: Midday.Client.MiddayClient | null = null;
+
   // Step 1: Create and start devnet
   console.log('1. Starting local devnet...');
   const cluster = await Cluster.make({
@@ -36,7 +38,7 @@ async function main() {
 
     // Step 2: Create client
     console.log('2. Creating Midday client...');
-    const client = await Midday.Client.create({
+    client = await Midday.Client.create({
       seed: Midday.Config.DEV_WALLET_SEED,
       networkConfig: cluster.networkConfig,
       privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
@@ -50,39 +52,41 @@ async function main() {
       zkConfig: Midday.ZkConfig.fromPath(COUNTER_CONTRACT_DIR),
       privateStateId: 'counter-example',
     });
-    console.log(`   Contract loaded (state: ${contract.state})\n`);
+    console.log(`   Contract loaded\n`);
 
-    // Step 4: Deploy contract
+    // Step 4: Deploy contract (returns a DeployedContract handle)
     console.log('4. Deploying contract...');
-    await contract.deploy();
+    const deployed = await contract.deploy();
     console.log(`   Contract deployed!`);
-    console.log(`   Address: ${contract.address}\n`);
+    console.log(`   Address: ${deployed.address}\n`);
 
-    // Step 5: Call increment
+    // Step 5: Call increment (using typed actions)
     console.log('5. Calling increment()...');
-    const result1 = await contract.call('increment');
+    const result1 = await deployed.actions.increment();
     console.log(`   TX Hash: ${result1.txHash}`);
     console.log(`   Block: ${result1.blockHeight}\n`);
 
     // Step 6: Read state
     console.log('6. Reading ledger state...');
-    const state1 = await contract.ledgerState();
+    const state1 = await deployed.ledgerState();
     console.log(`   Counter value: ${state1.counter}\n`);
 
     // Step 7: Call increment again
     console.log('7. Calling increment() again...');
-    const result2 = await contract.call('increment');
+    const result2 = await deployed.actions.increment();
     console.log(`   TX Hash: ${result2.txHash}\n`);
 
     // Step 8: Read state again
     console.log('8. Reading ledger state...');
-    const state2 = await contract.ledgerState();
+    const state2 = await deployed.ledgerState();
     console.log(`   Counter value: ${state2.counter}\n`);
 
     console.log('=== Example complete ===');
   } finally {
-    // Cleanup
-    console.log('\nCleaning up devnet...');
+    // Cleanup: close client first (stops wallet sync), then remove containers
+    console.log('\nCleaning up...');
+    if (client) await client.close();
+    console.log('Removing devnet...');
     await cluster.remove();
     console.log('Done!');
   }

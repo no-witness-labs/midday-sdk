@@ -171,19 +171,20 @@ No external Midnight imports needed - everything comes from the SDK.
 ## Step 6: Deploy and Initialize
 
 ```typescript
-// Load the contract with witnesses (zkConfig loaded from path)
-const contract = await client.loadContract({
-  path: './contracts/secret-counter',
+// Load the contract with witnesses
+const loaded = await client.loadContract({
+  module: SecretCounterContract,
+  zkConfig: Midday.ZkConfig.fromPath('./contracts/secret-counter'),
   privateStateId: 'my-secret-counter',
   witnesses: createWitnesses(SECRET_PASSWORD),
 });
 
-// Deploy
-await contract.deploy();
-console.log(`Deployed at: ${contract.address}`);
+// Deploy (returns a DeployedContract handle)
+const deployed = await loaded.deploy();
+console.log(`Deployed at: ${deployed.address}`);
 
 // Initialize with the password hash
-await contract.call('init', PASSWORD_HASH);
+await deployed.call('init', PASSWORD_HASH);
 ```
 
 <Aside type="caution">
@@ -197,18 +198,18 @@ The `PASSWORD_HASH` is stored on-chain. The actual password (`SECRET_PASSWORD`) 
 ### Increment (with correct password)
 
 ```typescript
-await contract.call('increment', 5n);
+await deployed.call('increment', 5n);
 
-const state = await contract.ledgerState();
+const state = await deployed.ledgerState();
 console.log(`Counter: ${state.counter}`); // 5n
 ```
 
 ### Decrement (with correct password)
 
 ```typescript
-await contract.call('decrement', 2n);
+await deployed.call('decrement', 2n);
 
-const state = await contract.ledgerState();
+const state = await deployed.ledgerState();
 console.log(`Counter: ${state.counter}`); // 3n
 ```
 
@@ -216,17 +217,19 @@ console.log(`Counter: ${state.counter}`); // 3n
 
 ```typescript
 // Another user tries with wrong password
-const wrongWitnesses = createWitnesses(stringToBytes32('wrong-password'));
+const wrongWitnesses = createWitnesses(Midday.Hash.stringToBytes32('wrong-password'));
 
-const attackerContract = await otherClient.loadContract({
-  path: './contracts/secret-counter',
+const attackerLoaded = await otherClient.loadContract({
+  module: SecretCounterContract,
+  zkConfig: Midday.ZkConfig.fromPath('./contracts/secret-counter'),
+  privateStateId: 'attacker-counter',
   witnesses: wrongWitnesses,
 });
 
-await attackerContract.join(contract.address);
+const attackerDeployed = await attackerLoaded.join(deployed.address);
 
 // This throws: "invalid password"
-await attackerContract.call('increment', 1n);
+await attackerDeployed.call('increment', 1n);
 ```
 
 ---

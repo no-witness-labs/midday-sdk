@@ -30,7 +30,7 @@ import {
 } from '@midnight-ntwrk/wallet-sdk-address-format';
 
 import type { NetworkConfig } from '../Config.js';
-import { hexToBytes } from '../utils/hex.js';
+import { hexToBytes } from '../Utils.js';
 import { FaucetError } from './errors.js';
 import * as Images from './Images.js';
 

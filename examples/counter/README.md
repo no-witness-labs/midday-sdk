@@ -61,7 +61,8 @@ DOCKER_HOST=unix:///var/run/docker.sock pnpm start
 
 === Example complete ===
 
-Cleaning up devnet...
+Cleaning up...
+Removing devnet...
 Done!
 ```
 
@@ -87,19 +88,29 @@ const client = await Midday.Client.create({
 ### 3. Load & Deploy Contract
 
 ```typescript
-const contract = await client.loadContract({
+const loaded = await client.loadContract({
   module: CounterContract,
   zkConfig: Midday.ZkConfig.fromPath(COUNTER_CONTRACT_DIR),
+  privateStateId: 'counter-example',
 });
-await contract.deploy();
+const deployed = await loaded.deploy();
 ```
 
 ### 4. Call Actions & Read State
 
 ```typescript
-await contract.call('increment');
-const state = await contract.ledgerState();
+await deployed.actions.increment();
+const state = await deployed.ledgerState();
 console.log(state.counter);
+```
+
+### 5. Cleanup
+
+Always close the client before removing the cluster to avoid WebSocket noise:
+
+```typescript
+if (client) await client.close();
+await cluster.remove();
 ```
 
 ## Next Steps

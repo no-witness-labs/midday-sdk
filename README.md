@@ -14,24 +14,32 @@ pnpm add @no-witness-labs/midday-sdk
 
 ```typescript
 import * as Midday from '@no-witness-labs/midday-sdk';
+import * as CounterContract from './contracts/counter/contract/index.js';
 
 // Create client
 const client = await Midday.Client.create({
+  seed: 'your-64-char-hex-seed',
   networkConfig: Midday.Config.NETWORKS.local,
-  zkConfigProvider: zkConfig,
   privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
 });
 
-// Load and deploy a contract
-const contract = await client.loadContract({ module });
-await contract.deploy();
-console.log(`Deployed at: ${contract.address}`);
+// Load and deploy a contract (deploy returns a DeployedContract handle)
+const loaded = await client.loadContract({
+  module: CounterContract,
+  zkConfig: Midday.ZkConfig.fromPath('./contracts/counter'),
+  privateStateId: 'my-counter',
+});
+const deployed = await loaded.deploy();
+console.log(`Deployed at: ${deployed.address}`);
 
-// Call contract actions
-await contract.call('increment');
+// Call contract actions (typed)
+await deployed.actions.increment();
+
+// Or untyped fallback
+await deployed.call('increment');
 
 // Read state
-const state = await contract.ledgerState();
+const state = await deployed.ledgerState();
 console.log(state.counter);
 ```
 
@@ -39,19 +47,24 @@ console.log(state.counter);
 
 ```typescript
 import * as Midday from '@no-witness-labs/midday-sdk';
+import * as CounterContract from './contracts/counter/contract/index.js';
 import { Effect } from 'effect';
 
 const program = Effect.gen(function* () {
   const client = yield* Midday.Client.effect.create({
+    seed: 'your-64-char-hex-seed',
     networkConfig: Midday.Config.NETWORKS.local,
-    zkConfigProvider: zkConfig,
     privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
   });
 
-  const contract = yield* client.effect.loadContract({ module });
-  yield* contract.effect.deploy();
-  yield* contract.effect.call('increment');
-  const state = yield* contract.effect.ledgerState();
+  const loaded = yield* client.effect.loadContract({
+    module: CounterContract,
+    zkConfig: Midday.ZkConfig.fromPath('./contracts/counter'),
+    privateStateId: 'my-counter',
+  });
+  const deployed = yield* loaded.effect.deploy();
+  yield* deployed.effect.actions.increment();
+  const state = yield* deployed.effect.ledgerState();
 
   return state;
 });
@@ -63,20 +76,45 @@ const result = await Midday.Runtime.runEffectPromise(program);
 
 ```typescript
 import * as Midday from '@no-witness-labs/midday-sdk';
+import { Cluster, ClusterService } from '@no-witness-labs/midday-sdk/devnet';
 import { Effect, Layer } from 'effect';
 
-const ClientLayer = Midday.Client.layer({
-  networkConfig: Midday.Config.NETWORKS.local,
-  zkConfigProvider: zkConfig,
-  privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
-});
+// Layer composition — all lifecycle is automatic
+const ClusterLayer = Cluster.managedLayer({ clusterName: 'my-app' });
+
+const ClientFromCluster = Layer.scoped(
+  Midday.Client.MiddayClientService,
+  Effect.gen(function* () {
+    const cluster = yield* ClusterService;
+    return yield* Midday.Client.effect.createScoped({
+      seed: 'your-64-char-hex-seed',
+      networkConfig: cluster.networkConfig,
+      privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
+    });
+  }),
+);
+
+const AppLayer = ClientFromCluster.pipe(Layer.provide(ClusterLayer));
 
 const program = Effect.gen(function* () {
-  const client = yield* Midday.MiddayClientService;
-  const contract = yield* client.effect.loadContract({ module });
-  yield* contract.effect.deploy();
-  yield* contract.effect.call('increment');
-  return yield* contract.effect.ledgerState();
+  const client = yield* Midday.Client.MiddayClientService;
+  const loaded = yield* client.effect.loadContract({ module: CounterContract });
+  const deployed = yield* loaded.effect.deploy();
+  yield* deployed.effect.actions.increment();
+  return yield* deployed.effect.ledgerState();
+});
+
+// Zero lifecycle code — cleanup is automatic (LIFO: client closes → cluster removes)
+const result = await Effect.runPromise(program.pipe(Effect.provide(AppLayer)));
+```
+
+For simpler cases without devnet management, use `Client.layer()` directly:
+
+```typescript
+const ClientLayer = Midday.Client.layer({
+  seed: 'your-64-char-hex-seed',
+  networkConfig: Midday.Config.NETWORKS.local,
+  privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
 });
 
 const result = await Effect.runPromise(program.pipe(Effect.provide(ClientLayer)));
@@ -88,18 +126,53 @@ const result = await Effect.runPromise(program.pipe(Effect.provide(ClientLayer))
 import * as Midday from '@no-witness-labs/midday-sdk';
 
 // Connect to Lace wallet
-const connection = await Midday.BrowserWallet.connectWallet('testnet');
+const wallet = await Midday.Wallet.fromBrowser('preview');
 
-// Create client from wallet connection
-const client = await Midday.Client.fromWallet(connection, {
-  zkConfigProvider: new Midday.Providers.HttpZkConfigProvider('https://cdn.example.com/zk'),
-  privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({ privateStateStoreName: 'my-app' }),
+// Create client with connected wallet
+const client = await Midday.Client.create({
+  wallet,
+  privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
+    privateStateStoreName: 'my-app',
+  }),
 });
 
-// Load and deploy contract
-const contract = await client.loadContract({ module });
-await contract.deploy();
-await contract.call('increment');
+// Load and deploy contract (zkConfig goes in loadContract, not in client)
+const loaded = await client.loadContract({
+  module: CounterContract,
+  zkConfig: new Midday.ZkConfig.HttpZkConfigProvider('https://cdn.example.com/zk'),
+  privateStateId: 'my-counter',
+});
+const deployed = await loaded.deploy();
+await deployed.actions.increment();
+```
+
+## Wallet Factories
+
+```typescript
+// From seed (Node.js) — positional args
+const wallet = await Midday.Wallet.fromSeed(seed, networkConfig);
+const balance = await wallet.getBalance();
+
+// From browser (Lace extension)
+const wallet = await Midday.Wallet.fromBrowser('preview');
+const balance = await wallet.getBalance();
+
+// Read-only (address only, no signing)
+const wallet = Midday.Wallet.fromAddress('0x...');
+console.log(wallet.address);
+```
+
+## Read-Only Client
+
+```typescript
+// No wallet, seed, or proof server required
+const reader = Midday.Client.createReadonly({
+  networkConfig: Midday.Config.NETWORKS.preview,
+});
+
+const counter = reader.loadContract({ module: CounterContract });
+const state = await counter.readState(contractAddress);
+console.log(state.counter); // 42n
 ```
 
 ## Configuration
@@ -113,9 +186,9 @@ const client = await Midday.Client.create({
   // ...
 });
 
-// Testnet
+// Preview network
 const client = await Midday.Client.create({
-  networkConfig: Midday.Config.NETWORKS.testnet,
+  networkConfig: Midday.Config.NETWORKS.preview,
   seed: 'your-64-char-hex-seed',
   // ...
 });
@@ -139,34 +212,47 @@ const client = await Midday.Client.create({
 ### Deploy a New Contract
 
 ```typescript
-const contract = await client.loadContract({ module });
-await contract.deploy();
-console.log(`Deployed at: ${contract.address}`);
+const loaded = await client.loadContract({ module, zkConfig, privateStateId: 'my-id' });
+const deployed = await loaded.deploy();
+console.log(`Deployed at: ${deployed.address}`);
+
+// With timeout
+const deployed = await loaded.deploy({ timeout: 60_000 });
 ```
 
 ### Join an Existing Contract
 
 ```typescript
-const contract = await client.loadContract({ module });
-await contract.join(contractAddress);
+const loaded = await client.loadContract({ module, zkConfig, privateStateId: 'my-id' });
+const deployed = await loaded.join(contractAddress);
+
+// With timeout
+const deployed = await loaded.join(contractAddress, { timeout: 60_000 });
 ```
 
 ### With Witnesses
 
 ```typescript
-const contract = await client.loadContract({
+const loaded = await client.loadContract({
   module,
+  zkConfig,
+  privateStateId: 'my-id',
   witnesses: {
     my_witness_function: myImplementation,
   },
 });
-await contract.deploy();
+const deployed = await loaded.deploy();
 ```
 
 ### Call Actions
 
 ```typescript
-const result = await contract.call('increment');
+// Typed — preferred
+await deployed.actions.increment();
+await deployed.actions.transfer(receiverAddress, 100n);
+
+// Untyped fallback
+const result = await deployed.call('increment');
 console.log(`TX Hash: ${result.txHash}`);
 console.log(`Block: ${result.blockHeight}`);
 ```
@@ -175,56 +261,113 @@ console.log(`Block: ${result.blockHeight}`);
 
 ```typescript
 // Parsed state via ledger
-const state = await contract.ledgerState();
+const state = await deployed.ledgerState();
 
 // State at specific block
-const historicalState = await contract.ledgerStateAt(blockHeight);
+const historicalState = await deployed.ledgerStateAt(blockHeight);
+
+// Raw state
+const raw = await deployed.getState();
+```
+
+### Watch State Changes
+
+```typescript
+// Callback style
+const unsub = deployed.onStateChange((state) => {
+  console.log('Counter:', state.counter);
+});
+// later: unsub();
+
+// Async iterator
+for await (const state of deployed.watchState()) {
+  console.log('Counter:', state.counter);
+  if (state.counter > 10n) break;
+}
+
+// Effect Stream
+const stream = deployed.effect.watchState();
+```
+
+### Transaction Lifecycle
+
+```typescript
+// Wait for a transaction with timeout
+await client.waitForTx(txHash, { timeout: 30_000 });
+
+// Deploy and join support timeout
+const deployed = await loaded.deploy({ timeout: 60_000 });
 ```
 
 ## API Reference
 
 ### Namespaces
 
-- `Midday.Client` - Client creation and contract loading
-  - `Midday.Client.create(config)` - Create a new client (Promise)
-  - `Midday.Client.effect.create(config)` - Create a new client (Effect)
-  - `Midday.Client.fromWallet(connection, config)` - Create client from wallet (browser)
-- `Midday.Config` - Network configuration utilities
-- `Midday.Wallet` - Wallet initialization and management
-- `Midday.BrowserWallet` - Browser wallet connection (Lace)
-- `Midday.Providers` - Low-level provider setup
-- `Midday.PrivateState` - Private state providers
-- `Midday.Hash` - Cryptographic hash utilities
-- `Midday.Runtime` - Effect runtime utilities
+- `Midday.Client` — Client creation, contract loading, read-only client, fee relay
+- `Midday.Contract` — Contract types (`LoadedContract`, `DeployedContract`, `ReadonlyContract`)
+- `Midday.Config` — Network configuration presets and constants
+- `Midday.Wallet` — Wallet factories (`fromSeed`, `fromBrowser`, `fromAddress`)
+- `Midday.PrivateState` — Private state providers (in-memory, IndexedDB)
+- `Midday.ZkConfig` — ZK configuration providers (`fromPath`, `HttpZkConfigProvider`)
+- `Midday.Hash` — Cryptographic hash utilities
+- `Midday.Runtime` — Effect runtime utilities (`runEffectPromise`, `runEffectWithLogging`)
+- `Midday.Utils` — Hex encoding, address formatting, coin utilities
 
 ### Services (Effect DI)
 
 | Service | Layer | Description |
 |---------|-------|-------------|
-| `MiddayClientService` | `Client.layer(config)` | Pre-initialized client |
-| `ClientService` | `ClientLive` | Client factory |
-| `WalletService` | `WalletLive` | Wallet initialization |
-| `ProvidersService` | `ProvidersLive` | Provider setup |
-| `ZkConfigService` | `ZkConfigLive` | ZK configuration loading |
-| `PrivateStateService` | `PrivateStateLive` | Private state management |
-| `WalletConnectorService` | `WalletConnectorLive` | Browser wallet connection |
-| `WalletProviderService` | `WalletProviderLive` | Wallet provider operations |
+| `Client.MiddayClientService` | `Client.layer(config)` | Pre-initialized client (scoped — auto-closes) |
+| `Client.ClientService` | `Client.ClientLive` | Client factory |
+| `ClusterService` | `Cluster.managedLayer(config?)` | Managed devnet cluster (auto-starts/removes) |
 
-### Types
+### Key Types
 
 ```typescript
 import type {
+  // Client
   ClientConfig,
   MiddayClient,
-  Contract,
-  ContractState,
+  ReadonlyClient,
+  ReadonlyClientConfig,
+  WaitForTxOptions,
+
+  // Contract
+  LoadedContract,
+  DeployedContract,
+  ReadonlyContract,
+  DeployOptions,
+  JoinOptions,
   CallResult,
-  NetworkConfig,
-  WalletContext,
   ContractProviders,
-  StorageConfig,
+
+  // Wallet
+  ConnectedWallet,
+  ReadonlyWallet,
+  WalletConnection,
+  WalletBalance,
+  DustBalance,
+  WalletProviders,
+
+  // Config
+  NetworkConfig,
+
+  // Errors
+  ClientError,
+  ContractError,
+  WalletError,
 } from '@no-witness-labs/midday-sdk';
 ```
+
+### Error Types
+
+| Error | Module | Description |
+|-------|--------|-------------|
+| `ClientError` | `Client` | Client creation/operation failures |
+| `Client.TxTimeoutError` | `Client` | Transaction timeout (has `txHash`) |
+| `ContractError` | `Contract` | Contract deployment/call failures |
+| `Contract.TxTimeoutError` | `Contract` | Deploy/join timeout (has `operation`) |
+| `WalletError` | `Wallet` | Wallet connection/operation failures |
 
 ## License
 
