@@ -190,10 +190,10 @@ describe('Contract E2E Tests', () => {
           privateStateId: 'fee-relay-user',
         });
 
-        await userContract.join(contractAddress);
+        const deployed = await userContract.join(contractAddress);
 
         // THE TEST: user wallet calls increment, genesis pays the fee
-        const result = await userContract.call('increment');
+        const result = await deployed.call('increment');
 
         expect(result.txHash).toBeDefined();
         expect(result.blockHeight).toBeGreaterThan(0);
