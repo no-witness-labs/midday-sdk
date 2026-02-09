@@ -103,13 +103,14 @@ const result = await Midday.Runtime.runEffectPromise(program);
 
 ## Effect with Dependency Injection
 
-For larger applications that benefit from testability, use the Layer-based approach:
+For larger applications that benefit from testability, use the Layer-based approach.
+`Client.layer()` creates a scoped layer — the client is automatically closed when the Effect completes:
 
 ```typescript
 import * as Midday from '@no-witness-labs/midday-sdk';
 import { Effect } from 'effect';
 
-// Create a client layer with your configuration
+// Create a scoped client layer (auto-closes when done)
 const ClientLayer = Midday.Client.layer({
   seed: 'your-64-char-hex-seed',
   networkConfig: Midday.Config.NETWORKS.local,
@@ -135,11 +136,14 @@ const program = Effect.gen(function* () {
   return state;
 });
 
-// Run with the layer
+// Run with the layer — no manual cleanup needed
 const result = await Effect.runPromise(
   program.pipe(Effect.provide(ClientLayer))
 );
 ```
+
+For advanced use with devnet management, see the [Effect API guide](/midday-sdk/guides/effect-api/) which covers
+`Cluster.managedLayer()` and full layer composition.
 
 ## API Pattern
 

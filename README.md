@@ -76,13 +76,25 @@ const result = await Midday.Runtime.runEffectPromise(program);
 
 ```typescript
 import * as Midday from '@no-witness-labs/midday-sdk';
-import { Effect } from 'effect';
+import { Cluster, ClusterService } from '@no-witness-labs/midday-sdk/devnet';
+import { Effect, Layer } from 'effect';
 
-const ClientLayer = Midday.Client.layer({
-  seed: 'your-64-char-hex-seed',
-  networkConfig: Midday.Config.NETWORKS.local,
-  privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
-});
+// Layer composition — all lifecycle is automatic
+const ClusterLayer = Cluster.managedLayer({ clusterName: 'my-app' });
+
+const ClientFromCluster = Layer.scoped(
+  Midday.Client.MiddayClientService,
+  Effect.gen(function* () {
+    const cluster = yield* ClusterService;
+    return yield* Midday.Client.effect.createScoped({
+      seed: 'your-64-char-hex-seed',
+      networkConfig: cluster.networkConfig,
+      privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
+    });
+  }),
+);
+
+const AppLayer = ClientFromCluster.pipe(Layer.provide(ClusterLayer));
 
 const program = Effect.gen(function* () {
   const client = yield* Midday.Client.MiddayClientService;
@@ -90,6 +102,19 @@ const program = Effect.gen(function* () {
   const deployed = yield* loaded.effect.deploy();
   yield* deployed.effect.actions.increment();
   return yield* deployed.effect.ledgerState();
+});
+
+// Zero lifecycle code — cleanup is automatic (LIFO: client closes → cluster removes)
+const result = await Effect.runPromise(program.pipe(Effect.provide(AppLayer)));
+```
+
+For simpler cases without devnet management, use `Client.layer()` directly:
+
+```typescript
+const ClientLayer = Midday.Client.layer({
+  seed: 'your-64-char-hex-seed',
+  networkConfig: Midday.Config.NETWORKS.local,
+  privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
 });
 
 const result = await Effect.runPromise(program.pipe(Effect.provide(ClientLayer)));
@@ -292,8 +317,9 @@ const deployed = await loaded.deploy({ timeout: 60_000 });
 
 | Service | Layer | Description |
 |---------|-------|-------------|
-| `Client.MiddayClientService` | `Client.layer(config)` | Pre-initialized client |
+| `Client.MiddayClientService` | `Client.layer(config)` | Pre-initialized client (scoped — auto-closes) |
 | `Client.ClientService` | `Client.ClientLive` | Client factory |
+| `ClusterService` | `Cluster.managedLayer(config?)` | Managed devnet cluster (auto-starts/removes) |
 
 ### Key Types
 

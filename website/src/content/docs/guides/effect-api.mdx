@@ -44,9 +44,26 @@ Effect provides:
     ```
   </TabItem>
   <TabItem label="Effect DI">
-    Full dependency injection with pre-configured client:
+    Full dependency injection with layer composition and automatic resource management:
     ```typescript
-    const ClientLayer = Midday.Client.layer(config);
+    import { Cluster, ClusterService } from '@no-witness-labs/midday-sdk/devnet';
+
+    // Layer composition — all lifecycle is automatic
+    const ClusterLayer = Cluster.managedLayer({ clusterName: 'my-app' });
+
+    const ClientFromCluster = Layer.scoped(
+      Midday.Client.MiddayClientService,
+      Effect.gen(function* () {
+        const cluster = yield* ClusterService;
+        return yield* Midday.Client.effect.createScoped({
+          seed: 'your-seed',
+          networkConfig: cluster.networkConfig,
+          privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
+        });
+      }),
+    );
+
+    const AppLayer = ClientFromCluster.pipe(Layer.provide(ClusterLayer));
 
     const program = Effect.gen(function* () {
       const client = yield* Midday.Client.MiddayClientService;
@@ -56,7 +73,8 @@ Effect provides:
       return yield* deployed.effect.ledgerState();
     });
 
-    await Effect.runPromise(program.pipe(Effect.provide(ClientLayer)));
+    // Zero lifecycle code — cleanup is automatic (LIFO order)
+    await Effect.runPromise(program.pipe(Effect.provide(AppLayer)));
     ```
   </TabItem>
 </Tabs>
@@ -137,20 +155,22 @@ const result = await Effect.runPromise(
 
 | Service | Layer Factory | Description |
 |---------|---------------|-------------|
-| `Client.MiddayClientService` | `Client.layer(config)` | Pre-initialized client instance |
+| `Client.MiddayClientService` | `Client.layer(config)` | Pre-initialized client (scoped — auto-closes) |
 | `Client.ClientService` | `Client.ClientLive` | Client factory service |
+| `ClusterService` | `Cluster.managedLayer(config?)` | Managed devnet cluster (auto-starts/removes) |
 
 ## Using Layers
 
 ### Pre-configured Client Layer (Recommended)
 
-For most applications, use `Client.layer()` to create a pre-configured client:
+For most applications, use `Client.layer()` to create a scoped client layer.
+The client is automatically closed when the scope ends:
 
 ```typescript
 import * as Midday from '@no-witness-labs/midday-sdk';
 import { Effect } from 'effect';
 
-// Create client layer with configuration
+// Create scoped client layer — auto-closes when done
 const ClientLayer = Midday.Client.layer({
   seed: 'your-64-char-hex-seed',
   networkConfig: Midday.Config.NETWORKS.local,
@@ -158,21 +178,49 @@ const ClientLayer = Midday.Client.layer({
 });
 
 const program = Effect.gen(function* () {
-  // Get pre-configured client from context
   const client = yield* Midday.Client.MiddayClientService;
-
-  // Load and deploy
   const loaded = yield* client.effect.loadContract({
     module: CounterContract,
     zkConfig: Midday.ZkConfig.fromPath('./contracts/counter'),
     privateStateId: 'my-counter',
   });
   const deployed = yield* loaded.effect.deploy();
-
   return deployed;
 });
 
 await Effect.runPromise(program.pipe(Effect.provide(ClientLayer)));
+```
+
+### Layer Composition with Devnet
+
+For applications that also manage a local devnet cluster, compose layers
+so cleanup happens automatically in LIFO order:
+
+```typescript
+import { Cluster, ClusterService } from '@no-witness-labs/midday-sdk/devnet';
+import { Layer } from 'effect';
+
+// Managed cluster — auto-starts on creation, auto-removes on release
+const ClusterLayer = Cluster.managedLayer({ clusterName: 'my-app' });
+
+// Derives a client from the cluster service
+const ClientFromCluster = Layer.scoped(
+  Midday.Client.MiddayClientService,
+  Effect.gen(function* () {
+    const cluster = yield* ClusterService;
+    return yield* Midday.Client.effect.createScoped({
+      seed: Midday.Config.DEV_WALLET_SEED,
+      networkConfig: cluster.networkConfig,
+      privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
+    });
+  }),
+);
+
+// Compose: Cluster feeds into Client
+const AppLayer = ClientFromCluster.pipe(Layer.provide(ClusterLayer));
+
+// Run — zero lifecycle code
+await Effect.runPromise(program.pipe(Effect.provide(AppLayer)));
 ```
 
 ### Client Factory Service
@@ -293,18 +341,45 @@ const program = Effect.gen(function* () {
 
 ## Resource Management
 
-Effect handles cleanup automatically:
+Effect handles cleanup automatically with scoped resources:
+
+### Scoped Layers (Recommended)
+
+When using `Client.layer()` or `Cluster.managedLayer()`, resources are cleaned up
+automatically when the Effect scope ends — no manual `close()` needed:
 
 ```typescript
-const program = Effect.gen(function* () {
-  const client = yield* Midday.Client.effect.create(config);
-  const loaded = yield* client.effect.loadContract({ module, zkConfig, privateStateId: 'my-id' });
-  const deployed = yield* loaded.effect.deploy();
+const ClientLayer = Midday.Client.layer(config);
 
-  // Use the contract...
-  yield* deployed.effect.actions.increment();
+// Client is auto-closed when runPromise completes
+await Effect.runPromise(program.pipe(Effect.provide(ClientLayer)));
+```
 
-  // Clean up when done
-  yield* client.effect.close();
-});
+### Scoped Resources
+
+For fine-grained control, use `createScoped()` and `makeScoped()` directly:
+
+```typescript
+const program = Effect.scoped(
+  Effect.gen(function* () {
+    const client = yield* Midday.Client.effect.createScoped(config);
+    // client is auto-closed when this scope exits
+    const loaded = yield* client.effect.loadContract({ module, zkConfig, privateStateId: 'my-id' });
+    const deployed = yield* loaded.effect.deploy();
+    yield* deployed.effect.actions.increment();
+  }),
+);
+```
+
+### Manual Close (Promise API)
+
+When using the Promise API, always close the client explicitly:
+
+```typescript
+const client = await Midday.Client.create(config);
+try {
+  // ...
+} finally {
+  await client.close();
+}
 ```

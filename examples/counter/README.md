@@ -61,7 +61,8 @@ DOCKER_HOST=unix:///var/run/docker.sock pnpm start
 
 === Example complete ===
 
-Cleaning up devnet...
+Cleaning up...
+Removing devnet...
 Done!
 ```
 
@@ -101,6 +102,15 @@ const deployed = await loaded.deploy();
 await deployed.actions.increment();
 const state = await deployed.ledgerState();
 console.log(state.counter);
+```
+
+### 5. Cleanup
+
+Always close the client before removing the cluster to avoid WebSocket noise:
+
+```typescript
+if (client) await client.close();
+await cluster.remove();
 ```
 
 ## Next Steps
