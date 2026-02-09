@@ -3,7 +3,10 @@
  *
  * Complete working example demonstrating Effect DI pattern with contract operations.
  * This example spins up a local devnet, deploys the counter contract using Effect,
- * and demonstrates dependency injection patterns.
+ * and demonstrates dependency injection, scoped resource management, and Effect logging.
+ *
+ * Everything is a single Effect program — cluster and client are both managed
+ * resources with automatic LIFO cleanup (client closes before cluster removes).
  *
  * Prerequisites:
  * - Docker installed and running
@@ -26,86 +29,84 @@ const COUNTER_CONTRACT_DIR = join(__dirname, '../../../contracts/counter');
 
 /**
  * Main program using Effect DI pattern.
- * The ClientLayer is provided at runtime, making this testable and composable.
+ *
+ * This is a pure Effect with a single service dependency (MiddayClientService).
+ * The layer is provided at the call site, making this testable and composable.
  */
 const program = Effect.gen(function* () {
-  console.log('=== Effect DI Example ===\n');
+  yield* Effect.log('=== Effect DI Example ===');
 
   // Access the injected client via MiddayClientService
   const client = yield* Midday.Client.MiddayClientService;
-  console.log('1. Client accessed via MiddayClientService');
-  console.log(`   Network: ${client.networkConfig.networkId}\n`);
+  yield* Effect.log(`Client accessed via MiddayClientService (network: ${client.networkConfig.networkId})`);
 
   // Load contract using Effect API
-  console.log('2. Loading counter contract (Effect API)...');
+  yield* Effect.log('Loading counter contract...');
   const contract = yield* client.effect.loadContract({
     module: CounterContract,
     zkConfig: Midday.ZkConfig.fromPath(COUNTER_CONTRACT_DIR),
     privateStateId: 'effect-di-example',
   });
-  console.log(`   Contract loaded\n`);
+  yield* Effect.log('Contract loaded');
 
   // Deploy using Effect API (returns a DeployedContract handle)
-  console.log('3. Deploying contract (Effect API)...');
+  yield* Effect.log('Deploying contract...');
   const deployed = yield* contract.effect.deploy();
-  console.log(`   Contract deployed!`);
-  console.log(`   Address: ${deployed.address}\n`);
+  yield* Effect.log(`Contract deployed at: ${deployed.address}`);
 
   // Call increment using typed actions (Effect API)
-  console.log('4. Calling increment() (Effect API)...');
+  yield* Effect.log('Calling increment()...');
   const result = yield* deployed.effect.actions.increment();
-  console.log(`   TX Hash: ${result.txHash}`);
-  console.log(`   Block: ${result.blockHeight}\n`);
+  yield* Effect.log(`TX Hash: ${result.txHash} (block: ${result.blockHeight})`);
 
   // Read state using Effect API
-  console.log('5. Reading ledger state (Effect API)...');
+  yield* Effect.log('Reading ledger state...');
   const state = yield* deployed.effect.ledgerState();
-  console.log(`   Counter value: ${state.counter}\n`);
+  yield* Effect.log(`Counter value: ${state.counter}`);
 
-  // Close the client to stop wallet sync before containers are removed
-  yield* client.effect.close();
-
-  console.log('=== Effect DI Example complete ===');
+  yield* Effect.log('=== Effect DI Example complete ===');
   return { address: deployed.address, counter: state.counter };
 });
 
 // =============================================================================
-// Main Entry Point
+// Main Entry Point — fully Effect-managed
 // =============================================================================
 
-async function main() {
-  // Step 1: Create and start devnet
-  console.log('Starting local devnet...\n');
-  const cluster = await Cluster.make({
-    clusterName: 'effect-di-example',
+/**
+ * The entire lifecycle is a single Effect program:
+ *
+ * 1. Cluster is a scoped resource via makeScoped (create+start / remove)
+ * 2. Client layer is scoped (auto-closes when scope ends)
+ * 3. Cleanup order is guaranteed: client closes → cluster removes (LIFO)
+ */
+const main = Effect.gen(function* () {
+  yield* Effect.log('Starting local devnet...');
+
+  // Cluster as a scoped resource — automatically started and removed on scope exit
+  const cluster = yield* Cluster.effect.makeScoped({ clusterName: 'effect-di-example' });
+  yield* Effect.log(`Devnet ready: ${cluster.networkConfig.node}`);
+
+  // Build the client layer using the cluster's network config
+  const ClientLayer = Midday.Client.layer({
+    seed: Midday.Config.DEV_WALLET_SEED,
+    networkConfig: cluster.networkConfig,
+    privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
   });
 
-  try {
-    await cluster.start();
-    console.log(`Devnet ready: ${cluster.networkConfig.node}\n`);
+  // Run the program with the client layer provided
+  const result = yield* program.pipe(Effect.provide(ClientLayer));
 
-    // Step 2: Create the Client Layer for DI
-    const ClientLayer = Midday.Client.layer({
-      seed: Midday.Config.DEV_WALLET_SEED,
-      networkConfig: cluster.networkConfig,
-      privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
-    });
+  yield* Effect.log(`Final result: contract=${result.address}, counter=${result.counter}`);
+  return result;
+}).pipe(Effect.scoped); // Scope manages both cluster and client lifecycle
 
-    // Step 3: Run the Effect program with the provided layer
-    const result = await Effect.runPromise(program.pipe(Effect.provide(ClientLayer)));
-
-    console.log(`\nFinal result:`);
-    console.log(`  Contract: ${result.address}`);
-    console.log(`  Counter: ${result.counter}`);
-  } finally {
-    // Cleanup
-    console.log('\nCleaning up devnet...');
-    await cluster.remove();
-    console.log('Done!');
-  }
-}
-
-main().catch((error) => {
-  console.error('Error:', error.message || error);
-  process.exit(1);
-});
+// Single entry point — run the entire Effect program
+Effect.runPromise(main).then(
+  (result) => {
+    console.log(`\nDone! Counter: ${result.counter}`);
+  },
+  (error) => {
+    console.error('Error:', error instanceof Error ? error.message : error);
+    process.exit(1);
+  },
+);

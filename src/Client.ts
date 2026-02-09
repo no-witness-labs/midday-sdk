@@ -1009,12 +1009,13 @@ export class MiddayClientService extends Context.Tag('MiddayClientService')<
 
 /**
  * Create a Layer that provides a pre-initialized MiddayClient.
+ * The client is automatically closed when the layer's scope ends.
  *
  * @since 0.3.0
  * @category layer
  */
 export function layer(config: ClientConfig): Layer.Layer<MiddayClientService, ClientError> {
-  return Layer.effect(MiddayClientService, effect.create(config));
+  return Layer.scoped(MiddayClientService, effect.createScoped(config));
 }
 
 /**
@@ -1032,7 +1033,13 @@ export function layerFromWallet(
     feeRelay?: { seed: string } | { url: string };
   },
 ): Layer.Layer<MiddayClientService, ClientError> {
-  return Layer.effect(MiddayClientService, effect.fromWallet(connection, config));
+  return Layer.scoped(
+    MiddayClientService,
+    Effect.acquireRelease(
+      effect.fromWallet(connection, config),
+      (client) => client.effect.close().pipe(Effect.catchAll(() => Effect.void)),
+    ),
+  );
 }
 
 /**
