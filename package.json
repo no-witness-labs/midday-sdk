@@ -1,6 +1,6 @@
 {
   "name": "@no-witness-labs/midday-sdk",
-  "version": "0.2.9",
+  "version": "0.2.13",
   "description": "Developer-friendly SDK for building dapps on Midnight Network",
   "type": "module",
   "main": "dist/index.js",
@@ -17,6 +17,7 @@
   },
   "files": [
     "dist",
+    "docker",
     "README.md"
   ],
   "scripts": {
@@ -52,6 +53,7 @@
     "@midnight-ntwrk/midnight-js-network-id": "3.0.0",
     "@midnight-ntwrk/midnight-js-node-zk-config-provider": "3.0.0",
     "@midnight-ntwrk/midnight-js-types": "3.0.0",
+    "@midnight-ntwrk/wallet-sdk-address-format": "3.0.0",
     "@midnight-ntwrk/wallet-sdk-dust-wallet": "1.0.0",
     "@midnight-ntwrk/wallet-sdk-facade": "1.0.0",
     "@midnight-ntwrk/wallet-sdk-hd": "3.0.0",

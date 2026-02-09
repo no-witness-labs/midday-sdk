@@ -51,3 +51,25 @@ export class HealthCheckError extends Data.TaggedError('HealthCheckError')<{
 export class DockerNotRunningError extends Data.TaggedError('DockerNotRunningError')<{
   readonly cause: unknown;
 }> {}
+
+/**
+ * Error thrown when faucet operations fail.
+ *
+ * @since 0.2.0
+ * @category errors
+ */
+export class FaucetError extends Data.TaggedError('FaucetError')<{
+  readonly message: string;
+  readonly cause: unknown;
+}> {}
+
+/**
+ * Error thrown when fee relay operations fail.
+ *
+ * @since 0.2.0
+ * @category errors
+ */
+export class FeeRelayError extends Data.TaggedError('FeeRelayError')<{
+  readonly message: string;
+  readonly cause: unknown;
+}> {}

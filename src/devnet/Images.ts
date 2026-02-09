@@ -6,6 +6,7 @@
  */
 
 import Docker from 'dockerode';
+import { execSync } from 'child_process';
 
 /**
  * Error thrown when image operations fail.
@@ -93,6 +94,18 @@ export async function pull(imageName: string): Promise<void> {
   });
 
   console.log(`[Devnet] ✓ Image ready: ${imageName}`);
+}
+
+/**
+ * Build a Docker image from a local directory.
+ *
+ * @since 0.3.0
+ * @category management
+ */
+export function build(imageName: string, contextPath: string): void {
+  console.log(`[Devnet] Building ${imageName} Docker image (first time only)...`);
+  execSync(`docker build -t ${imageName} .`, { cwd: contextPath, stdio: 'pipe' });
+  console.log(`[Devnet] ✓ Image built: ${imageName}`);
 }
 
 /**

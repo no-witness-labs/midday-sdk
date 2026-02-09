@@ -1,0 +1,18 @@
+{
+  "name": "@examples/effect-di",
+  "version": "0.0.3",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@no-witness-labs/midday-sdk": "workspace:*",
+    "effect": "^3.0.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  }
+}

@@ -1,5 +1,48 @@
 # @no-witness-labs/midday-sdk
 
+## 0.2.13
+
+### Patch Changes
+
+- d6712f6: fix: replace require() with await import() in Client.ts to prevent bundlers from statically following import chains into WASM/Node.js packages
+
+## 0.2.12
+
+### Patch Changes
+
+- 336dbbe: Auto-build faucet/fee-relay Docker images inside SDK
+
+  - Add `Images.build()` for building Docker images from local context
+  - Auto-build in `Faucet.startDocker()` and `FeeRelay.startDocker()` when image is missing
+  - Ship `docker/` build contexts in npm package
+  - Remove `ensureDockerImage()` boilerplate from examples and template
+
+- a9b0411: fix: replace require() with await import() in Client.ts to prevent bundlers from statically following import chains into WASM/Node.js packages
+
+## 0.2.11
+
+### Patch Changes
+
+- 42cc7e7: Add example projects, dockerized faucet/fee-relay, and devnet infrastructure
+
+  - Add example projects: counter, browser-lace, effect-di, devnet-testing
+  - Add dockerized faucet server for funding wallets on local devnet
+  - Add dockerized fee relay server with browser-lace toggle
+  - Add HTTP ZK config provider
+  - Update CI to build example projects
+
+## 0.2.10
+
+### Patch Changes
+
+- 9925369: Add example projects, dockerized faucet/fee-relay, and devnet infrastructure
+
+  - Add example projects: counter, browser-lace, effect-di, devnet-testing
+  - Add dockerized faucet server for funding wallets on local devnet
+  - Add dockerized fee relay server with browser-lace toggle
+  - Add HTTP ZK config provider
+  - Update CI to build example projects
+
 ## 0.2.9
 
 ### Patch Changes

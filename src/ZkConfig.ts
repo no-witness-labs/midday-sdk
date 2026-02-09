@@ -238,9 +238,11 @@ function getVerifierKeyEffect(
  * @category constructors
  */
 export function makeHttp(baseUrl: string, fetchFn?: typeof fetch): HttpZkConfigProviderData {
+  // Wrap global fetch to preserve 'this' context in browsers
+  const defaultFetch: typeof fetch = (input, init) => fetch(input, init);
   return {
     baseUrl: baseUrl.replace(/\/$/, ''),
-    fetchFn: fetchFn ?? fetch,
+    fetchFn: fetchFn ?? defaultFetch,
     cache: new Map(),
   };
 }

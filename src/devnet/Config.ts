@@ -46,6 +46,32 @@ export interface ProofServerConfig {
 }
 
 /**
+ * Configuration for the fee relay container.
+ *
+ * @since 0.2.0
+ * @category model
+ */
+export interface FeeRelayConfig {
+  readonly image?: string;
+  readonly port?: number;
+  /** Enable fee relay server (default: true) */
+  readonly enabled?: boolean;
+}
+
+/**
+ * Configuration for the faucet container.
+ *
+ * @since 0.2.0
+ * @category model
+ */
+export interface FaucetConfig {
+  readonly image?: string;
+  readonly port?: number;
+  /** Enable faucet server (default: true) */
+  readonly enabled?: boolean;
+}
+
+/**
  * Configuration interface for Midnight DevNet setup.
  * All properties are optional, with sensible defaults provided.
  *
@@ -61,6 +87,10 @@ export interface DevNetConfig {
   readonly indexer?: IndexerConfig;
   /** Proof server configuration */
   readonly proofServer?: ProofServerConfig;
+  /** Faucet configuration */
+  readonly faucet?: FaucetConfig;
+  /** Fee relay configuration */
+  readonly feeRelay?: FeeRelayConfig;
 }
 
 /**
@@ -74,6 +104,8 @@ export interface ResolvedDevNetConfig {
   readonly node: Required<NodeConfig>;
   readonly indexer: Required<IndexerConfig>;
   readonly proofServer: Required<ProofServerConfig>;
+  readonly faucet: Required<FaucetConfig>;
+  readonly feeRelay: Required<FeeRelayConfig>;
 }
 
 /**
@@ -113,6 +145,30 @@ export const DEFAULT_PROOF_SERVER_CONFIG: Required<ProofServerConfig> = {
 } as const;
 
 /**
+ * Default faucet configuration.
+ *
+ * @since 0.2.0
+ * @category constants
+ */
+export const DEFAULT_FAUCET_CONFIG: Required<FaucetConfig> = {
+  image: 'midday-faucet:latest',
+  port: 3001,
+  enabled: true,
+} as const;
+
+/**
+ * Default fee relay configuration.
+ *
+ * @since 0.2.0
+ * @category constants
+ */
+export const DEFAULT_FEE_RELAY_CONFIG: Required<FeeRelayConfig> = {
+  image: 'midday-fee-relay:latest',
+  port: 3002,
+  enabled: true,
+} as const;
+
+/**
  * Default DevNet configuration.
  *
  * @since 0.2.0
@@ -123,6 +179,8 @@ export const DEFAULT_DEVNET_CONFIG: Required<DevNetConfig> = {
   node: DEFAULT_NODE_CONFIG,
   indexer: DEFAULT_INDEXER_CONFIG,
   proofServer: DEFAULT_PROOF_SERVER_CONFIG,
+  faucet: DEFAULT_FAUCET_CONFIG,
+  feeRelay: DEFAULT_FEE_RELAY_CONFIG,
 } as const;
 
 /**
