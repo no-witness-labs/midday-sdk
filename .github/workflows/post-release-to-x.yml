@@ -134,13 +134,29 @@ jobs:
 
       - name: Post to X without image
         if: steps.release.outputs.found == 'true' && steps.extract.outputs.has_code == 'false'
-        uses: nearform-actions/github-action-notify-twitter@v1
-        with:
-          message: |
-            Midday SDK ${{ steps.release.outputs.tag }} out now
-            ${{ steps.release.outputs.url }}
-            Happy building!
-          twitter-app-key: ${{ secrets.TWITTER_API_KEY }}
-          twitter-app-secret: ${{ secrets.TWITTER_API_SECRET }}
-          twitter-access-token: ${{ secrets.TWITTER_ACCESS_TOKEN }}
-          twitter-access-token-secret: ${{ secrets.TWITTER_ACCESS_TOKEN_SECRET }}
+        run: |
+          npm install twitter-api-v2@1
+          node -e "
+            const { TwitterApi } = require('twitter-api-v2');
+            const client = new TwitterApi({
+              appKey: process.env.TWITTER_API_KEY,
+              appSecret: process.env.TWITTER_API_SECRET,
+              accessToken: process.env.TWITTER_ACCESS_TOKEN,
+              accessSecret: process.env.TWITTER_ACCESS_TOKEN_SECRET,
+            });
+            (async () => {
+              await client.v2.tweet({
+                text: 'Midday SDK ${{ steps.release.outputs.tag }} out now\n${{ steps.release.outputs.url }}\nHappy building!'
+              });
+            })()
+              .then(() => process.exit(0))
+              .catch(err => {
+                console.error(err);
+                process.exit(1);
+              });
+          "
+        env:
+          TWITTER_API_KEY: ${{ secrets.TWITTER_API_KEY }}
+          TWITTER_API_SECRET: ${{ secrets.TWITTER_API_SECRET }}
+          TWITTER_ACCESS_TOKEN: ${{ secrets.TWITTER_ACCESS_TOKEN }}
+          TWITTER_ACCESS_TOKEN_SECRET: ${{ secrets.TWITTER_ACCESS_TOKEN_SECRET }}
