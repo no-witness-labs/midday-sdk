@@ -19,7 +19,7 @@ jobs:
         id: release
         run: |
           # Get the latest release with actual changes (not just dependency updates)
-          RELEASES=$(gh api /repos/${{ github.repository }}/releases --jq '[.[] | select(.tag_name | startswith("v"))]')
+          RELEASES=$(gh api /repos/${{ github.repository }}/releases --jq '[.[] | select(.tag_name | startswith("@no-witness-labs/midday-sdk@"))]')
 
           TAG=""
           URL=""
@@ -48,8 +48,9 @@ jobs:
               if [ -n "$REAL_CHANGES" ]; then
                 TAG=$RELEASE_TAG
                 URL=$RELEASE_URL
-                # Extract version number (remove 'v' prefix)
-                echo "version=${TAG#v}" >> $GITHUB_OUTPUT
+                # Extract version number (remove scoped package prefix)
+                VERSION=${TAG##*@}
+                echo "version=$VERSION" >> $GITHUB_OUTPUT
                 break
               fi
             fi
@@ -116,7 +117,7 @@ jobs:
             (async () => {
               const mediaId = await client.v1.uploadMedia('./release-snippet.png');
               await client.v2.tweet({
-                text: 'Midday SDK ${{ steps.release.outputs.tag }} out now\n${{ steps.release.outputs.url }}\nHappy building!',
+                text: 'Midday SDK v${{ steps.release.outputs.version }} out now\n${{ steps.release.outputs.url }}\nHappy building!',
                 media: { media_ids: [mediaId] }
               });
             })()
@@ -146,7 +147,7 @@ jobs:
             });
             (async () => {
               await client.v2.tweet({
-                text: 'Midday SDK ${{ steps.release.outputs.tag }} out now\n${{ steps.release.outputs.url }}\nHappy building!'
+                text: 'Midday SDK v${{ steps.release.outputs.version }} out now\n${{ steps.release.outputs.url }}\nHappy building!'
               });
             })()
               .then(() => process.exit(0))
