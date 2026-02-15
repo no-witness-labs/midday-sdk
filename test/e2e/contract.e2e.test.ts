@@ -58,7 +58,7 @@ describe('Contract E2E Tests', () => {
 
   describe('Counter Contract Lifecycle', () => {
     let client: Midday.Client.MiddayClient;
-    let contract: Midday.Contract.DeployedContract;
+    let contract: Midday.Contract.DeployedContractFor<typeof CounterContract>;
     let contractAddress: string;
     let setupFailed = false;
 
@@ -113,11 +113,10 @@ describe('Contract E2E Tests', () => {
       expect(state).toBeDefined();
     });
 
-    it('should call increment() again and verify state increased', { timeout: 120_000 }, async () => {
+    it('should increment again and verify state increased', { timeout: 120_000 }, async () => {
       if (setupFailed) return;
 
-      // Untyped fallback still works
-      const result = await contract.call('increment');
+      const result = await contract.actions.increment();
 
       expect(result).toBeDefined();
       expect(result.txHash).toBeDefined();
@@ -193,7 +192,7 @@ describe('Contract E2E Tests', () => {
         const deployed = await userContract.join(contractAddress);
 
         // THE TEST: user wallet calls increment, genesis pays the fee
-        const result = await deployed.call('increment');
+        const result = await deployed.actions.increment();
 
         expect(result.txHash).toBeDefined();
         expect(result.blockHeight).toBeGreaterThan(0);

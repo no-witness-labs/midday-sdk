@@ -24,7 +24,7 @@ import * as Rx from 'rxjs';
 import { Transaction, type FinalizedTransaction } from '@midnight-ntwrk/ledger-v7';
 import type { UnboundTransaction } from '@midnight-ntwrk/midnight-js-types';
 
-import type { NetworkConfig } from '../Config.js';
+import { DEFAULT_TX_TTL_MS, type NetworkConfig } from '../Config.js';
 import { hexToBytes, bytesToHex } from '../Utils.js';
 import * as Images from './Images.js';
 
@@ -116,6 +116,8 @@ async function createWallet(keys: DerivedKeys, networkConfig: NetworkConfig): Pr
 export interface ServerOptions {
   /** Port to listen on (default: 3002) */
   port?: number;
+  /** Transaction TTL in milliseconds (default: 30 minutes) */
+  txTtlMs?: number;
 }
 
 /**
@@ -149,7 +151,7 @@ export interface ServerOptions {
  * ```
  */
 export function startServer(networkConfig: NetworkConfig, options: ServerOptions = {}): Server {
-  const { port = 3002 } = options;
+  const { port = 3002, txTtlMs = DEFAULT_TX_TTL_MS } = options;
 
   // Genesis wallet — initialized lazily on first request, then kept alive
   let walletPromise: Promise<{ wallet: WalletFacade; keys: DerivedKeys }> | null = null;
@@ -210,7 +212,7 @@ export function startServer(networkConfig: NetworkConfig, options: ServerOptions
           ) as unknown as UnboundTransaction;
 
           // Balance and finalize using genesis wallet
-          const ttl = new Date(Date.now() + 30 * 60 * 1000);
+          const ttl = new Date(Date.now() + txTtlMs);
           const recipe = await wallet.balanceUnboundTransaction(
             unboundTx,
             {

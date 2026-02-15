@@ -11,7 +11,7 @@
  * const client = await Midday.Client.create(config);
  * const contract = await client.loadContract({ path: './contracts/counter' });
  * await contract.deploy();
- * await contract.call('increment');
+ * await contract.actions.increment();
  *
  * // Effect user — compositional
  * const program = Effect.gen(function* () {
@@ -27,37 +27,18 @@
  */
 
 import { Context, Data, Duration, Effect, Layer, Scope } from 'effect';
-import { Transaction } from '@midnight-ntwrk/ledger-v7';
 import { setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
-import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
 import type {
   WalletProvider,
   MidnightProvider,
-  ZKConfigProvider,
   PrivateStateProvider,
 } from '@midnight-ntwrk/midnight-js-types';
 
 import * as Config from './Config.js';
+import * as Contract from './Contract.js';
+import * as FeeRelay from './FeeRelay.js';
+import * as Runtime from './Runtime.js';
 import * as Wallet from './Wallet.js';
-import type { NetworkConfig } from './Config.js';
-import type { WalletContext } from './Wallet.js';
-import type { WalletConnection, WalletProviders, ConnectedWallet } from './Wallet.js';
-import type {
-  LoadedContract,
-  ContractModule,
-  InferLedger,
-  InferCircuits,
-  InferActions,
-  LoadContractOptions,
-  LoadedContractData,
-  FinalizedTxData,
-  PublicDataProvider,
-  LedgerParser,
-  ReadonlyContract,
-} from './Contract.js';
-import { loadContractModuleEffect, createLoadedContractHandle, createReadonlyContractHandle } from './Contract.js';
-import { runEffectWithLogging } from './Runtime.js';
-import { bytesToHex, hexToBytes } from './Utils.js';
 
 // =============================================================================
 // Errors
@@ -126,10 +107,10 @@ export interface StorageConfig {
 export interface BaseProviders {
   walletProvider: WalletProvider;
   midnightProvider: MidnightProvider;
-  publicDataProvider: ReturnType<typeof indexerPublicDataProvider>;
+  publicDataProvider: Contract.PublicDataProvider;
   privateStateProvider: PrivateStateProvider;
   /** Network configuration for creating per-contract proof providers */
-  networkConfig: NetworkConfig;
+  networkConfig: Config.NetworkConfig;
 }
 
 /**
@@ -140,13 +121,15 @@ export interface BaseProviders {
  */
 export interface CreateBaseProvidersOptions {
   /** Network configuration */
-  networkConfig: NetworkConfig;
+  networkConfig: Config.NetworkConfig;
   /** Private state provider */
   privateStateProvider: PrivateStateProvider;
   /** Storage configuration */
   storageConfig?: StorageConfig;
   /** Optional fee relay wallet — uses this wallet for balanceTx/submitTx while keeping the primary wallet for ZK proofs */
-  feeRelayWallet?: WalletContext;
+  feeRelayWallet?: Wallet.WalletContext;
+  /** Transaction TTL in milliseconds (default: 30 minutes) */
+  txTtlMs?: number;
 }
 
 // =============================================================================
@@ -156,6 +139,10 @@ export interface CreateBaseProvidersOptions {
 /**
  * Configuration for creating a client.
  *
+ * **Constraint:** Only one network ID is supported per process. The Midnight SDK
+ * uses a global `setNetworkId` call internally, so creating two clients targeting
+ * different networks in the same process will cause undefined behaviour.
+ *
  * @since 0.2.0
  * @category model
  */
@@ -163,9 +150,9 @@ export interface ClientConfig {
   /** Network to connect to (default: 'local') */
   network?: string;
   /** Custom network configuration (overrides network preset) */
-  networkConfig?: NetworkConfig;
+  networkConfig?: Config.NetworkConfig;
   /** Pre-created wallet (from Wallet.fromSeed or Wallet.fromBrowser) */
-  wallet?: ConnectedWallet;
+  wallet?: Wallet.ConnectedWallet;
   /** Wallet seed (required for non-local networks). Ignored if `wallet` is provided. */
   seed?: string;
   /** Private state provider (required) */
@@ -175,10 +162,20 @@ export interface ClientConfig {
   /** Enable logging (default: true) */
   logging?: boolean;
   /** Fee relay — delegate fee payment to a funded wallet so non-funded wallets can transact.
-   * - `{ seed }` — Node.js: initialize a local wallet from seed
-   * - `{ url }` — Browser: proxy to a fee relay HTTP server
+   *
+   * Which variant is valid depends on the wallet mode:
+   * - **`{ seed }`** — Node.js only. Initialises a local relay wallet from seed.
+   *   Valid with seed-based init (`Client.create({ seed })`).
+   *   **Not valid** with a pre-created `wallet` (ConnectedWallet).
+   * - **`{ url }`** — Browser or Node.js. Proxies `balanceTx`/`submitTx` to a remote HTTP fee relay server.
+   *   Valid with a pre-created `wallet` (ConnectedWallet).
+   *   **Not valid** with seed-based init (`Client.create({ seed })`).
+   *
+   * Both variants are accepted by `Client.fromWallet()`.
    */
   feeRelay?: { seed: string } | { url: string };
+  /** Transaction TTL in milliseconds (default: 30 minutes). Used as the fallback when no per-call TTL is provided to `balanceTx`. */
+  txTtlMs?: number;
 }
 
 /**
@@ -193,7 +190,7 @@ export interface ReadonlyClientConfig {
   /** Network to connect to (default: 'local') */
   network?: string;
   /** Custom network configuration (overrides network preset) */
-  networkConfig?: NetworkConfig;
+  networkConfig?: Config.NetworkConfig;
   /** Enable logging (default: false) */
   logging?: boolean;
 }
@@ -203,16 +200,20 @@ export interface ReadonlyClientConfig {
 // =============================================================================
 
 /**
- * Internal client data (plain object).
- * @internal
+ * Configuration for creating a client from a wallet connection.
+ *
+ * @since 0.11.0
+ * @category model
  */
-interface ClientData {
-  readonly wallet: WalletContext | null;
-  readonly connectedWallet: ConnectedWallet | null;
-  readonly relayerWallet: WalletContext | null;
-  readonly networkConfig: NetworkConfig;
-  readonly providers: BaseProviders;
-  readonly logging: boolean;
+export interface FromWalletConfig {
+  /** Private state provider (required) */
+  privateStateProvider: PrivateStateProvider;
+  /** Enable logging (default: true) */
+  logging?: boolean;
+  /** Fee relay config. Both `{ seed }` and `{ url }` are valid for `fromWallet`. */
+  feeRelay?: { seed: string } | { url: string };
+  /** Transaction TTL in milliseconds (default: 30 minutes). */
+  txTtlMs?: number;
 }
 
 // =============================================================================
@@ -231,9 +232,9 @@ interface ClientData {
  */
 export interface ReadonlyClient {
   /** Network configuration */
-  readonly networkConfig: NetworkConfig;
+  readonly networkConfig: Config.NetworkConfig;
   /** Public data provider (for advanced use) */
-  readonly provider: PublicDataProvider;
+  readonly provider: Contract.PublicDataProvider;
 
   /**
    * Load a contract module for read-only state queries.
@@ -252,9 +253,9 @@ export interface ReadonlyClient {
    * console.log(state.counter); // 42n
    * ```
    */
-  loadContract<M extends ContractModule>(
+  loadContract<M extends Contract.ContractModule>(
     options: { module: M },
-  ): ReadonlyContract<InferLedger<M>>;
+  ): Contract.ReadonlyContract<Contract.InferLedger<M>>;
 }
 
 /**
@@ -265,13 +266,9 @@ export interface ReadonlyClient {
  */
 export interface MiddayClient {
   /** Network configuration */
-  readonly networkConfig: NetworkConfig;
+  readonly networkConfig: Config.NetworkConfig;
   /** Base providers (for advanced use — no zkConfig) */
   readonly providers: BaseProviders;
-  /** Raw wallet context (null if using wallet connector) */
-  readonly wallet: WalletContext | null;
-  /** Fee relay wallet context (null if fee relay not configured) */
-  readonly relayerWallet: WalletContext | null;
 
   /**
    * Load a contract module. Returns a `LoadedContract` —
@@ -279,9 +276,9 @@ export interface MiddayClient {
    *
    * @typeParam M - Contract module type (inferred from options.module)
    */
-  loadContract<M extends ContractModule>(
-    options: LoadContractOptions<M>,
-  ): Promise<LoadedContract<InferLedger<M>, InferCircuits<M>, InferActions<M>>>;
+  loadContract<M extends Contract.ContractModule>(
+    options: Contract.LoadContractOptions<M>,
+  ): Promise<Contract.LoadedContract<Contract.InferLedger<M>, Contract.InferCircuits<M>, Contract.InferActions<M>>>;
 
   /** Wait for a transaction to be finalized.
    *
@@ -289,7 +286,7 @@ export interface MiddayClient {
    * @param options - Optional settings (e.g., timeout)
    * @throws {TxTimeoutError} When the timeout is exceeded
    */
-  waitForTx(txHash: string, options?: WaitForTxOptions): Promise<FinalizedTxData>;
+  waitForTx(txHash: string, options?: WaitForTxOptions): Promise<Contract.FinalizedTxData>;
 
   /**
    * Close the client and release all resources.
@@ -307,10 +304,10 @@ export interface MiddayClient {
 
   /** Effect versions of client methods */
   readonly effect: {
-    loadContract<M extends ContractModule>(
-      options: LoadContractOptions<M>,
-    ): Effect.Effect<LoadedContract<InferLedger<M>, InferCircuits<M>, InferActions<M>>, ClientError>;
-    waitForTx(txHash: string, options?: WaitForTxOptions): Effect.Effect<FinalizedTxData, ClientError | TxTimeoutError>;
+    loadContract<M extends Contract.ContractModule>(
+      options: Contract.LoadContractOptions<M>,
+    ): Effect.Effect<Contract.LoadedContract<Contract.InferLedger<M>, Contract.InferCircuits<M>, Contract.InferActions<M>>, ClientError>;
+    waitForTx(txHash: string, options?: WaitForTxOptions): Effect.Effect<Contract.FinalizedTxData, ClientError | TxTimeoutError>;
     close(): Effect.Effect<void, ClientError>;
   };
 }
@@ -324,12 +321,12 @@ export interface MiddayClient {
 // =============================================================================
 
 function createBaseProvidersEffect(
-  walletContext: WalletContext,
+  walletContext: Wallet.WalletContext,
   options: CreateBaseProvidersOptions,
 ): Effect.Effect<BaseProviders, ClientError> {
-  return Wallet.effect.providers(walletContext).pipe(
+  return Wallet.effect.providers(walletContext, { txTtlMs: options.txTtlMs }).pipe(
     Effect.map(({ walletProvider, midnightProvider }) => {
-      const { networkConfig, privateStateProvider, feeRelayWallet } = options;
+      const { networkConfig, privateStateProvider, feeRelayWallet, txTtlMs } = options;
 
       setNetworkId(networkConfig.networkId as 'undeployed');
 
@@ -338,27 +335,9 @@ function createBaseProvidersEffect(
 
       const publicDataProvider = Config.publicDataProvider(networkConfig);
 
-      const effectiveWalletProvider: WalletProvider = feeRelayWallet
-        ? {
-            ...walletProvider,
-            balanceTx: async (tx, ttl) => {
-              const txTtl = ttl ?? new Date(Date.now() + 30 * 60 * 1000);
-              const recipe = await feeWalletCtx.wallet.balanceUnboundTransaction(
-                tx,
-                {
-                  shieldedSecretKeys: feeWalletCtx.shieldedSecretKeys,
-                  dustSecretKey: feeWalletCtx.dustSecretKey,
-                },
-                { ttl: txTtl },
-              );
-              return await feeWalletCtx.wallet.finalizeRecipe(recipe);
-            },
-          }
-        : walletProvider;
-
-      const effectiveMidnightProvider: MidnightProvider = feeRelayWallet
-        ? { submitTx: async (tx) => await feeWalletCtx.wallet.submitTransaction(tx) }
-        : midnightProvider;
+      const { walletProvider: effectiveWalletProvider, midnightProvider: effectiveMidnightProvider } = feeRelayWallet
+        ? FeeRelay.applySeedRelay(feeWalletCtx, walletProvider, { txTtlMs })
+        : { walletProvider, midnightProvider };
 
       return {
         walletProvider: effectiveWalletProvider,
@@ -379,10 +358,114 @@ function createBaseProvidersEffect(
 }
 
 // =============================================================================
+// Wallet Acquisition Helpers
+// =============================================================================
+
+/**
+ * Init + sync a wallet.
+ * On success, caller owns the WalletContext and is responsible for closing it.
+ * On failure, no cleanup is performed — use the Scoped variant if you want
+ * automatic resource management.
+ */
+function initWalletEffect(
+  seed: string,
+  networkConfig: Config.NetworkConfig,
+  label: string,
+): Effect.Effect<Wallet.WalletContext, ClientError> {
+  return Effect.gen(function* () {
+    yield* Effect.logDebug(`Initializing ${label}...`);
+    const ctx = yield* Wallet.effect.init(seed, networkConfig).pipe(
+      Effect.mapError(
+        (e) =>
+          new ClientError({
+            cause: e,
+            message: `Failed to initialize ${label}: ${e.message}`,
+          }),
+      ),
+    );
+
+    yield* Wallet.effect.waitForSync(ctx).pipe(
+      Effect.mapError(
+        (e) =>
+          new ClientError({
+            cause: e,
+            message: `Failed to sync ${label}: ${e.message}`,
+          }),
+      ),
+    );
+    yield* Effect.logDebug(`${label} synced`);
+    return ctx;
+  });
+}
+
+// =============================================================================
+// Shared Helpers
+// =============================================================================
+
+/**
+ * ConnectedWallet path — builds providers from a pre-created wallet.
+ * No owned resources.
+ */
+function createConnectedWalletProviders(
+  connectedWallet: Wallet.ConnectedWallet,
+  networkConfig: Config.NetworkConfig,
+  privateStateProvider: PrivateStateProvider,
+  feeRelay?: { seed: string } | { url: string },
+): Effect.Effect<BaseProviders, ClientError> {
+  return Effect.gen(function* () {
+    yield* Effect.logDebug('Using pre-created wallet...');
+
+    let { walletProvider, midnightProvider } = yield* connectedWallet.effect.providers().pipe(
+      Effect.mapError(
+        (e) =>
+          new ClientError({
+            cause: e,
+            message: `Failed to get wallet providers: ${e.message}`,
+          }),
+      ),
+    );
+
+    if (feeRelay && 'url' in feeRelay) {
+      yield* Effect.logDebug(`Using fee relay server at ${feeRelay.url}`);
+      ({ walletProvider, midnightProvider } = FeeRelay.applyHttpRelay(feeRelay.url, walletProvider));
+    } else if (feeRelay && 'seed' in feeRelay) {
+      return yield* Effect.fail(
+        new ClientError({
+          cause: new Error('Seed-based fee relay not supported with ConnectedWallet'),
+          message: 'Seed-based fee relay ({ seed }) is not supported with a pre-created wallet. Use { url } for browser wallets.',
+        }),
+      );
+    }
+
+    setNetworkId(networkConfig.networkId as 'undeployed');
+    const publicDataProvider = Config.publicDataProvider(networkConfig);
+
+    return {
+      walletProvider,
+      midnightProvider,
+      publicDataProvider,
+      privateStateProvider,
+      networkConfig,
+    };
+  });
+}
+
+/** Extract NetworkConfig from a WalletConnection. */
+function connectionNetworkConfig(connection: Wallet.WalletConnection): Config.NetworkConfig {
+  return {
+    networkId: connection.config.networkId,
+    indexer: connection.config.indexerUri,
+    indexerWS: connection.config.indexerWsUri,
+    node: connection.config.substrateNodeUri,
+    proofServer: connection.config.proverServerUri ?? '',
+  };
+}
+
+// =============================================================================
 // Client Effect Implementations
 // =============================================================================
 
-function createClientDataEffect(config: ClientConfig): Effect.Effect<ClientData, ClientError> {
+function createEffect(config: ClientConfig): Effect.Effect<MiddayClient, ClientError> {
   return Effect.gen(function* () {
     const {
       network = 'local',
@@ -393,119 +476,20 @@ function createClientDataEffect(config: ClientConfig): Effect.Effect<ClientData,
       storage,
       logging = true,
       feeRelay,
+      txTtlMs,
     } = config;
 
     const networkConfig = customNetworkConfig ?? Config.getNetworkConfig(network);
 
-    // Path 1: Pre-created ConnectedWallet
+    // Path 1: Pre-created ConnectedWallet (no owned resources)
     if (connectedWallet) {
-      yield* Effect.logDebug('Using pre-created wallet...');
-
-      let { walletProvider, midnightProvider } = yield* connectedWallet.effect.providers().pipe(
-        Effect.mapError(
-          (e) =>
-            new ClientError({
-              cause: e,
-              message: `Failed to get wallet providers: ${e.message}`,
-            }),
-        ),
+      const providers = yield* createConnectedWalletProviders(
+        connectedWallet, networkConfig, privateStateProvider, feeRelay,
       );
-
-      // Apply fee relay override if configured
-      if (feeRelay && 'url' in feeRelay) {
-        const relayUrl = feeRelay.url.replace(/\/$/, '');
-        yield* Effect.logDebug(`Using fee relay server at ${relayUrl}`);
-
-        walletProvider = {
-          ...walletProvider,
-          balanceTx: async (tx) => {
-            // Serialize the UnboundTransaction to hex for the fee relay
-            // The browser WASM and fee relay WASM must use compatible serialization
-            let txHex: string;
-            try {
-              const txBytes = tx.serialize();
-              txHex = bytesToHex(txBytes);
-            } catch (serializeErr) {
-              throw new Error(
-                `Failed to serialize transaction for fee relay: ${serializeErr instanceof Error ? serializeErr.message : String(serializeErr)}`,
-              );
-            }
-
-            const response = await fetch(`${relayUrl}/balance-tx`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ tx: txHex }),
-            });
-            if (!response.ok) {
-              const err = await response.json().catch(() => ({ error: response.statusText }));
-              throw new Error(`Fee relay balance-tx failed: ${err.error}`);
-            }
-
-            const data = await response.json();
-            if (!data.tx) {
-              throw new Error('Fee relay returned empty tx');
-            }
-
-            const finalizedBytes = hexToBytes(data.tx);
-            // Use the same deserialize pattern as the Docker fee relay server
-            return Transaction.deserialize(
-              'signature' as import('@midnight-ntwrk/ledger-v7').SignatureEnabled['instance'],
-              'proof' as import('@midnight-ntwrk/ledger-v7').Proof['instance'],
-              'binding' as import('@midnight-ntwrk/ledger-v7').Binding['instance'],
-              finalizedBytes,
-            ) as unknown as import('@midnight-ntwrk/ledger-v7').FinalizedTransaction;
-          },
-        };
-        midnightProvider = {
-          submitTx: async (tx) => {
-            const txBytes = tx.serialize();
-            const txHex = bytesToHex(txBytes);
-
-            const response = await fetch(`${relayUrl}/submit-tx`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ tx: txHex }),
-            });
-            if (!response.ok) {
-              const err = await response.json().catch(() => ({ error: response.statusText }));
-              throw new Error(`Fee relay submit-tx failed: ${err.error}`);
-            }
-
-            const { txId } = await response.json();
-            return txId;
-          },
-        };
-      } else if (feeRelay && 'seed' in feeRelay) {
-        return yield* Effect.fail(
-          new ClientError({
-            cause: new Error('Seed-based fee relay not supported with ConnectedWallet'),
-            message: 'Seed-based fee relay ({ seed }) is not supported with a pre-created wallet. Use { url } for browser wallets.',
-          }),
-        );
-      }
-
-      setNetworkId(networkConfig.networkId as 'undeployed');
-      const publicDataProvider = Config.publicDataProvider(networkConfig);
-
-      const providers: BaseProviders = {
-        walletProvider,
-        midnightProvider,
-        publicDataProvider,
-        privateStateProvider,
-        networkConfig,
-      };
-
-      return {
-        wallet: null,
-        connectedWallet,
-        relayerWallet: null,
-        networkConfig,
-        providers,
-        logging,
-      };
+      return buildClient({ networkConfig, providers, logging });
     }
 
-    // Path 2: Legacy seed-based initialization
+    // Path 2: Seed-based initialization
     const walletSeed = seed ?? (network === 'local' ? Config.DEV_WALLET_SEED : undefined);
     if (!walletSeed) {
       return yield* Effect.fail(
@@ -516,53 +500,7 @@ function createClientDataEffect(config: ClientConfig): Effect.Effect<ClientData,
       );
     }
 
-    yield* Effect.logDebug('Initializing wallet...');
-    const walletContext = yield* Wallet.effect.init(walletSeed, networkConfig).pipe(
-      Effect.mapError(
-        (e) =>
-          new ClientError({
-            cause: e,
-            message: `Failed to initialize wallet: ${e.message}`,
-          }),
-      ),
-    );
-
-    yield* Wallet.effect.waitForSync(walletContext).pipe(
-      Effect.mapError(
-        (e) =>
-          new ClientError({
-            cause: e,
-            message: `Failed to sync wallet: ${e.message}`,
-          }),
-      ),
-    );
-    yield* Effect.logDebug('Wallet synced');
-
-    // Initialize fee relay wallet if configured (seed-based only for Client.create)
-    let relayerWallet: WalletContext | null = null;
-    if (feeRelay && 'seed' in feeRelay) {
-      yield* Effect.logDebug('Initializing fee relay wallet...');
-      relayerWallet = yield* Wallet.effect.init(feeRelay.seed, networkConfig).pipe(
-        Effect.mapError(
-          (e) =>
-            new ClientError({
-              cause: e,
-              message: `Failed to initialize fee relay wallet: ${e.message}`,
-            }),
-        ),
-      );
-
-      yield* Wallet.effect.waitForSync(relayerWallet).pipe(
-        Effect.mapError(
-          (e) =>
-            new ClientError({
-              cause: e,
-              message: `Failed to sync fee relay wallet: ${e.message}`,
-            }),
-        ),
-      );
-      yield* Effect.logDebug('Fee relay wallet synced');
-    } else if (feeRelay && 'url' in feeRelay) {
+    if (feeRelay && 'url' in feeRelay) {
       return yield* Effect.fail(
         new ClientError({
           cause: new Error('URL-based fee relay not supported with Client.create'),
@@ -571,149 +509,63 @@ function createClientDataEffect(config: ClientConfig): Effect.Effect<ClientData,
       );
     }
 
-    const providerOptions: CreateBaseProvidersOptions = {
+    const walletContext = yield* initWalletEffect(walletSeed, networkConfig, 'wallet');
+
+    let relayerWallet: Wallet.WalletContext | null = null;
+    if (feeRelay && 'seed' in feeRelay) {
+      relayerWallet = yield* initWalletEffect(feeRelay.seed, networkConfig, 'fee relay wallet');
+    }
+
+    const providers = yield* createBaseProvidersEffect(walletContext, {
       networkConfig,
       privateStateProvider,
       storageConfig: storage,
       feeRelayWallet: relayerWallet ?? undefined,
-    };
+      txTtlMs,
+    });
 
-    const providers = yield* createBaseProvidersEffect(walletContext, providerOptions);
-
-    return {
-      wallet: walletContext,
-      connectedWallet: null,
-      relayerWallet,
+    return buildClient({
       networkConfig,
       providers,
       logging,
-    };
+      close: Effect.gen(function* () {
+        if (relayerWallet) yield* Wallet.effect.close(relayerWallet);
+        yield* Wallet.effect.close(walletContext);
+      }).pipe(
+        Effect.mapError(
+          (e) => new ClientError({ cause: e, message: `Failed to close client: ${e.message}` }),
+        ),
+      ),
+    });
   });
 }
 
-function fromWalletDataEffect(
-  connection: WalletConnection,
-  config: {
-    privateStateProvider: PrivateStateProvider;
-    logging?: boolean;
-    feeRelay?: { seed: string } | { url: string };
-  },
-): Effect.Effect<ClientData, ClientError> {
+function fromWalletEffect(
+  connection: Wallet.WalletConnection,
+  config: FromWalletConfig,
+): Effect.Effect<MiddayClient, ClientError> {
   return Effect.gen(function* () {
-    const { privateStateProvider, logging = true, feeRelay } = config;
+    const { privateStateProvider, logging = true, feeRelay, txTtlMs } = config;
+    const networkConfig = connectionNetworkConfig(connection);
 
-    const networkConfig: NetworkConfig = {
-      networkId: connection.config.networkId,
-      indexer: connection.config.indexerUri,
-      indexerWS: connection.config.indexerWsUri,
-      node: connection.config.substrateNodeUri,
-      proofServer: connection.config.proverServerUri ?? '',
-    };
+    let relayerWallet: Wallet.WalletContext | null = null;
+    if (feeRelay && 'seed' in feeRelay) {
+      relayerWallet = yield* initWalletEffect(feeRelay.seed, networkConfig, 'fee relay wallet');
+    }
 
-    // Create wallet providers from connection
     let { walletProvider, midnightProvider } = Wallet.createWalletProviders(connection.wallet, connection.addresses);
 
-    // Initialize fee relay if configured
-    let relayerWallet: WalletContext | null = null;
-    if (feeRelay && 'seed' in feeRelay) {
-      // Seed-based: initialize a local wallet (Node.js)
-      yield* Effect.logDebug('Initializing fee relay wallet...');
-      relayerWallet = yield* Wallet.effect.init(feeRelay.seed, networkConfig).pipe(
-        Effect.mapError(
-          (e) =>
-            new ClientError({
-              cause: e,
-              message: `Failed to initialize fee relay wallet: ${e.message}`,
-            }),
-        ),
-      );
-
-      yield* Wallet.effect.waitForSync(relayerWallet).pipe(
-        Effect.mapError(
-          (e) =>
-            new ClientError({
-              cause: e,
-              message: `Failed to sync fee relay wallet: ${e.message}`,
-            }),
-        ),
-      );
-      yield* Effect.logDebug('Fee relay wallet synced');
-
-      // Override balanceTx/submitTx to use relay wallet, keep Lace's ZK keys
-      const relayCtx = relayerWallet;
-      walletProvider = {
-        ...walletProvider,
-        balanceTx: async (tx, ttl) => {
-          const txTtl = ttl ?? new Date(Date.now() + 30 * 60 * 1000);
-          const recipe = await relayCtx.wallet.balanceUnboundTransaction(
-            tx,
-            {
-              shieldedSecretKeys: relayCtx.shieldedSecretKeys,
-              dustSecretKey: relayCtx.dustSecretKey,
-            },
-            { ttl: txTtl },
-          );
-          return await relayCtx.wallet.finalizeRecipe(recipe);
-        },
-      };
-      midnightProvider = {
-        submitTx: async (tx) => await relayCtx.wallet.submitTransaction(tx),
-      };
+    if (relayerWallet && feeRelay && 'seed' in feeRelay) {
+      ({ walletProvider, midnightProvider } = FeeRelay.applySeedRelay(relayerWallet, walletProvider, { txTtlMs }));
     } else if (feeRelay && 'url' in feeRelay) {
-      // URL-based: proxy to a remote fee relay server (browser)
-      const relayUrl = feeRelay.url.replace(/\/$/, '');
-      yield* Effect.logDebug(`Using fee relay server at ${relayUrl}`);
-
-      walletProvider = {
-        ...walletProvider,
-        balanceTx: async (tx) => {
-          const txBytes = tx.serialize();
-          const txHex = bytesToHex(txBytes);
-
-          const response = await fetch(`${relayUrl}/balance-tx`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ tx: txHex }),
-          });
-          if (!response.ok) {
-            const err = await response.json().catch(() => ({ error: response.statusText }));
-            throw new Error(`Fee relay balance-tx failed: ${err.error}`);
-          }
-
-          const { tx: finalizedHex } = await response.json();
-          const finalizedBytes = hexToBytes(finalizedHex);
-          return Transaction.deserialize(
-            'signature' as import('@midnight-ntwrk/ledger-v7').SignatureEnabled['instance'],
-            'proof' as import('@midnight-ntwrk/ledger-v7').Proof['instance'],
-            'binding' as import('@midnight-ntwrk/ledger-v7').Binding['instance'],
-            finalizedBytes,
-          ) as unknown as import('@midnight-ntwrk/ledger-v7').FinalizedTransaction;
-        },
-      };
-      midnightProvider = {
-        submitTx: async (tx) => {
-          const txBytes = tx.serialize();
-          const txHex = bytesToHex(txBytes);
-
-          const response = await fetch(`${relayUrl}/submit-tx`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ tx: txHex }),
-          });
-          if (!response.ok) {
-            const err = await response.json().catch(() => ({ error: response.statusText }));
-            throw new Error(`Fee relay submit-tx failed: ${err.error}`);
-          }
-
-          const { txId } = await response.json();
-          return txId;
-        },
-      };
+      yield* Effect.logDebug(`Using fee relay server at ${feeRelay.url}`);
+      ({ walletProvider, midnightProvider } = FeeRelay.applyHttpRelay(feeRelay.url, walletProvider));
     }
 
     setNetworkId(networkConfig.networkId as 'undeployed');
-
     const publicDataProvider = Config.publicDataProvider(networkConfig);
+
+    yield* Effect.logDebug('Connected to wallet');
 
     const providers: BaseProviders = {
       walletProvider,
@@ -723,16 +575,18 @@ function fromWalletDataEffect(
       networkConfig,
     };
 
-    yield* Effect.logDebug('Connected to wallet');
-
-    return {
-      wallet: null,
-      connectedWallet: null,
-      relayerWallet,
+    return buildClient({
       networkConfig,
       providers,
       logging,
-    };
+      close: relayerWallet
+        ? Wallet.effect.close(relayerWallet).pipe(
+            Effect.mapError(
+              (e) => new ClientError({ cause: e, message: `Failed to close client: ${e.message}` }),
+            ),
+          )
+        : undefined,
+    });
   }).pipe(
     Effect.catchAllDefect((defect) =>
       Effect.fail(
@@ -745,147 +599,85 @@ function fromWalletDataEffect(
   );
 }
 
-function loadContractEffect(
-  clientData: ClientData,
-  options: LoadContractOptions,
-): Effect.Effect<LoadedContractData, ClientError> {
-  return loadContractModuleEffect(
-    options,
-    clientData.providers.networkConfig,
-    clientData.providers,
-    clientData.logging,
-  ).pipe(
-    Effect.mapError(
-      (e) =>
-        new ClientError({
-          cause: e,
-          message: e.message,
-        }),
-    ),
-  );
-}
-
-function waitForTxEffect(
-  clientData: ClientData,
-  txHash: string,
-  options?: WaitForTxOptions,
-): Effect.Effect<FinalizedTxData, ClientError | TxTimeoutError> {
-  const base = Effect.tryPromise({
-    try: async () => {
-      const data = await clientData.providers.publicDataProvider.watchForTxData(txHash);
-      return {
-        txHash: data.txHash,
-        blockHeight: data.blockHeight,
-        blockHash: data.blockHash,
-      };
-    },
-    catch: (cause) =>
-      new ClientError({
-        cause,
-        message: `Failed to wait for transaction: ${cause instanceof Error ? cause.message : String(cause)}`,
-      }),
-  });
-
-  if (options?.timeout != null) {
-    return Effect.timeoutFail(base, {
-      duration: Duration.millis(options.timeout),
-      onTimeout: () =>
-        new TxTimeoutError({
-          txHash,
-          timeout: options.timeout!,
-          message: `Transaction ${txHash} was not finalized within ${options.timeout}ms`,
-        }),
-    });
-  }
-
-  return base;
-}
-
-function closeClientEffect(data: ClientData): Effect.Effect<void, ClientError> {
-  return Effect.gen(function* () {
-    if (data.relayerWallet) {
-      yield* Wallet.effect.close(data.relayerWallet).pipe(
-        Effect.mapError(
-          (e) =>
-            new ClientError({
-              cause: e,
-              message: `Failed to close fee relay wallet: ${e.message}`,
-            }),
-        ),
-      );
-    }
-    if (data.wallet) {
-      yield* Wallet.effect.close(data.wallet).pipe(
-        Effect.mapError(
-          (e) =>
-            new ClientError({
-              cause: e,
-              message: `Failed to close wallet: ${e.message}`,
-            }),
-        ),
-      );
-    }
-    if (data.connectedWallet) {
-      yield* data.connectedWallet.effect.close().pipe(
-        Effect.mapError(
-          (e) =>
-            new ClientError({
-              cause: e,
-              message: `Failed to close wallet: ${e.message}`,
-            }),
-        ),
-      );
-    }
-  });
-}
-
 // =============================================================================
 // Handle Factory
 // =============================================================================
 
-function createClientHandle(data: ClientData): MiddayClient {
-  return {
-    networkConfig: data.networkConfig,
-    providers: data.providers,
-    wallet: data.wallet,
-    relayerWallet: data.relayerWallet,
+function buildClient(args: {
+  networkConfig: Config.NetworkConfig;
+  providers: BaseProviders;
+  logging: boolean;
+  close?: Effect.Effect<void, ClientError>;
+}): MiddayClient {
+  const { networkConfig, providers, logging, close: closeEff = Effect.void } = args;
 
-    loadContract: async <M extends ContractModule>(options: LoadContractOptions<M>) => {
-      const contractData = await runEffectWithLogging(
-        loadContractEffect(data, options),
-        data.logging,
-      );
-      return createLoadedContractHandle(contractData) as LoadedContract<InferLedger<M>, InferCircuits<M>, InferActions<M>>;
+  const loadContractEff = (options: Contract.LoadContractOptions) =>
+    Contract.loadContractModuleEffect(options, networkConfig, providers, logging).pipe(
+      Effect.mapError((e) => new ClientError({ cause: e, message: e.message })),
+    );
+
+  const waitForTxEff = (txHash: string, options?: WaitForTxOptions) => {
+    const base = Effect.tryPromise({
+      try: async () => {
+        const data = await providers.publicDataProvider.watchForTxData(txHash);
+        return { txHash: data.txHash, blockHeight: data.blockHeight, blockHash: data.blockHash };
+      },
+      catch: (cause) =>
+        new ClientError({
+          cause,
+          message: `Failed to wait for transaction: ${cause instanceof Error ? cause.message : String(cause)}`,
+        }),
+    });
+
+    if (options?.timeout != null) {
+      return Effect.timeoutFail(base, {
+        duration: Duration.millis(options.timeout),
+        onTimeout: () =>
+          new TxTimeoutError({
+            txHash,
+            timeout: options.timeout!,
+            message: `Transaction ${txHash} was not finalized within ${options.timeout}ms`,
+          }),
+      });
+    }
+
+    return base;
+  };
+
+  return {
+    networkConfig,
+    providers,
+
+    loadContract: async <M extends Contract.ContractModule>(options: Contract.LoadContractOptions<M>) => {
+      const contractData = await Runtime.runEffectWithLogging(loadContractEff(options), logging);
+      return Contract.createLoadedContractHandle(contractData) as Contract.LoadedContract<Contract.InferLedger<M>, Contract.InferCircuits<M>, Contract.InferActions<M>>;
     },
     waitForTx: (txHash, options?) =>
-      runEffectWithLogging(waitForTxEffect(data, txHash, options), data.logging),
-    close: () =>
-      runEffectWithLogging(closeClientEffect(data), data.logging),
-
-    [Symbol.asyncDispose]: () =>
-      runEffectWithLogging(closeClientEffect(data), data.logging),
+      Runtime.runEffectWithLogging(waitForTxEff(txHash, options), logging),
+    close: () => Runtime.runEffectWithLogging(closeEff, logging),
+    [Symbol.asyncDispose]: () => Runtime.runEffectWithLogging(closeEff, logging),
 
     effect: {
-      loadContract: <M extends ContractModule>(options: LoadContractOptions<M>) =>
-        loadContractEffect(data, options).pipe(
-          Effect.map((contractData) => createLoadedContractHandle(contractData) as LoadedContract<InferLedger<M>, InferCircuits<M>, InferActions<M>>),
+      loadContract: <M extends Contract.ContractModule>(options: Contract.LoadContractOptions<M>) =>
+        loadContractEff(options).pipe(
+          Effect.map((contractData) => Contract.createLoadedContractHandle(contractData) as Contract.LoadedContract<Contract.InferLedger<M>, Contract.InferCircuits<M>, Contract.InferActions<M>>),
         ),
-      waitForTx: (txHash, options?) => waitForTxEffect(data, txHash, options),
-      close: () => closeClientEffect(data),
+      waitForTx: (txHash, options?) => waitForTxEff(txHash, options),
+      close: () => closeEff,
     },
   };
 }
 
-function createReadonlyClientHandle(
-  networkConfig: NetworkConfig,
-  provider: PublicDataProvider,
+function createReadonlyHandle(
+  networkConfig: Config.NetworkConfig,
+  provider: Contract.PublicDataProvider,
 ): ReadonlyClient {
   return {
     networkConfig,
     provider,
 
-    loadContract: <M extends ContractModule>(options: { module: M }) =>
-      createReadonlyContractHandle(options.module.ledger, provider) as ReadonlyContract<InferLedger<M>>,
+    loadContract: <M extends Contract.ContractModule>(options: { module: M }) =>
+      Contract.createReadonlyContractHandle(options.module.ledger, provider) as Contract.ReadonlyContract<Contract.InferLedger<M>>,
   };
 }
 
@@ -914,13 +706,14 @@ function createReadonlyClientHandle(
  * const state = await deployed.ledgerState();
  * ```
  *
+ * **Constraint:** Only one network ID is supported per process — see {@link ClientConfig}.
+ *
  * @since 0.2.0
  * @category constructors
  */
 export async function create(config: ClientConfig): Promise<MiddayClient> {
   const logging = config.logging ?? true;
-  const data = await runEffectWithLogging(createClientDataEffect(config), logging);
-  return createClientHandle(data);
+  return Runtime.runEffectWithLogging(createEffect(config), logging);
 }
 
 /**
@@ -947,7 +740,7 @@ export async function create(config: ClientConfig): Promise<MiddayClient> {
 export function createReadonly(config: ReadonlyClientConfig = {}): ReadonlyClient {
   const networkConfig = config.networkConfig ?? Config.getNetworkConfig(config.network ?? 'local');
   const provider = Config.publicDataProvider(networkConfig);
-  return createReadonlyClientHandle(networkConfig, provider);
+  return createReadonlyHandle(networkConfig, provider);
 }
 
 /**
@@ -971,20 +764,19 @@ export async function withClient<A>(
 /**
  * Create a Midnight client from a connected wallet (browser).
  *
+ * Both fee relay variants are supported here:
+ * - `{ seed }` — initialises a local relay wallet (Node.js integration tests)
+ * - `{ url }` — proxies to a remote HTTP fee relay server (browser)
+ *
  * @since 0.2.0
  * @category constructors
  */
 export async function fromWallet(
-  connection: WalletConnection,
-  config: {
-    privateStateProvider: PrivateStateProvider;
-    logging?: boolean;
-    feeRelay?: { seed: string } | { url: string };
-  },
+  connection: Wallet.WalletConnection,
+  config: FromWalletConfig,
 ): Promise<MiddayClient> {
   const logging = config.logging ?? true;
-  const data = await runEffectWithLogging(fromWalletDataEffect(connection, config), logging);
-  return createClientHandle(data);
+  return Runtime.runEffectWithLogging(fromWalletEffect(connection, config), logging);
 }
 
 /**
@@ -995,12 +787,12 @@ export async function fromWallet(
  */
 export const effect = {
   create: (config: ClientConfig): Effect.Effect<MiddayClient, ClientError> =>
-    createClientDataEffect(config).pipe(Effect.map(createClientHandle)),
+    createEffect(config),
 
   createScoped: (config: ClientConfig): Effect.Effect<MiddayClient, ClientError, Scope.Scope> =>
     Effect.acquireRelease(
-      createClientDataEffect(config).pipe(Effect.map(createClientHandle)),
-      (client) => client.effect.close().pipe(Effect.catchAll(() => Effect.void)),
+      createEffect(config),
+      (client) => client.effect.close().pipe(Effect.orDie),
     ),
 
   withClient: <A, E>(
@@ -1009,20 +801,25 @@ export const effect = {
   ): Effect.Effect<A, E | ClientError> =>
     Effect.scoped(
       Effect.acquireRelease(
-        createClientDataEffect(config).pipe(Effect.map(createClientHandle)),
-        (client) => client.effect.close().pipe(Effect.catchAll(() => Effect.void)),
+        createEffect(config),
+        (client) => client.effect.close().pipe(Effect.orDie),
       ).pipe(Effect.flatMap(body)),
     ),
 
   fromWallet: (
-    connection: WalletConnection,
-    config: {
-      privateStateProvider: PrivateStateProvider;
-      logging?: boolean;
-      feeRelay?: { seed: string } | { url: string };
-    },
+    connection: Wallet.WalletConnection,
+    config: FromWalletConfig,
   ): Effect.Effect<MiddayClient, ClientError> =>
-    fromWalletDataEffect(connection, config).pipe(Effect.map(createClientHandle)),
+    fromWalletEffect(connection, config),
+
+  fromWalletScoped: (
+    connection: Wallet.WalletConnection,
+    config: FromWalletConfig,
+  ): Effect.Effect<MiddayClient, ClientError, Scope.Scope> =>
+    Effect.acquireRelease(
+      fromWalletEffect(connection, config),
+      (client) => client.effect.close().pipe(Effect.orDie),
+    ),
 
   createReadonly: (config: ReadonlyClientConfig = {}): ReadonlyClient =>
     createReadonly(config),
@@ -1031,43 +828,6 @@ export const effect = {
 // =============================================================================
 // Effect DI
 // =============================================================================
-
-/**
- * Service interface for Client operations.
- *
- * @since 0.2.0
- * @category service
- */
-export interface ClientServiceImpl {
-  readonly create: (config: ClientConfig) => Effect.Effect<MiddayClient, ClientError>;
-  readonly fromWallet: (
-    connection: WalletConnection,
-    config: {
-      privateStateProvider: PrivateStateProvider;
-      logging?: boolean;
-      feeRelay?: { seed: string } | { url: string };
-    },
-  ) => Effect.Effect<MiddayClient, ClientError>;
-}
-
-/**
- * Context.Tag for ClientService dependency injection.
- *
- * @since 0.2.0
- * @category service
- */
-export class ClientService extends Context.Tag('ClientService')<ClientService, ClientServiceImpl>() {}
-
-/**
- * Live Layer for ClientService.
- *
- * @since 0.2.0
- * @category layer
- */
-export const ClientLive: Layer.Layer<ClientService> = Layer.succeed(ClientService, {
-  create: effect.create,
-  fromWallet: effect.fromWallet,
-});
 
 /**
  * Context.Tag for a pre-initialized MiddayClient.
@@ -1098,29 +858,8 @@ export function layer(config: ClientConfig): Layer.Layer<MiddayClientService, Cl
  * @category layer
  */
 export function layerFromWallet(
-  connection: WalletConnection,
-  config: {
-    zkConfigProvider: ZKConfigProvider<string>;
-    privateStateProvider: PrivateStateProvider;
-    logging?: boolean;
-    feeRelay?: { seed: string } | { url: string };
-  },
+  connection: Wallet.WalletConnection,
+  config: FromWalletConfig,
 ): Layer.Layer<MiddayClientService, ClientError> {
-  return Layer.scoped(
-    MiddayClientService,
-    Effect.acquireRelease(
-      effect.fromWallet(connection, config),
-      (client) => client.effect.close().pipe(Effect.catchAll(() => Effect.void)),
-    ),
-  );
-}
-
-/**
- * Create a Layer providing all Client-related services.
- *
- * @since 0.3.0
- * @category layer
- */
-export function services(): Layer.Layer<ClientService> {
-  return ClientLive;
+  return Layer.scoped(MiddayClientService, effect.fromWalletScoped(connection, config));
 }
