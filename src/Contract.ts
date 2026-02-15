@@ -10,13 +10,13 @@
  * // Promise user
  * const contract = await client.loadContract({ path: './contracts/counter' });
  * await contract.deploy();
- * await contract.call('increment');
+ * await contract.actions.increment();
  * const state = await contract.ledgerState();
  *
  * // Effect user
  * const contract = yield* client.effect.loadContract({ path: './contracts/counter' });
  * yield* contract.effect.deploy();
- * yield* contract.effect.call('increment');
+ * yield* contract.effect.actions.increment();
  * ```
  *
  * @since 0.3.0
@@ -126,7 +126,7 @@ export type InferCircuits<M> = M extends {
  * @since 0.8.0
  * @category type
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+ 
 export type InferActions<M> = M extends {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   Contract: new (...args: any[]) => { impureCircuits: infer IC };
@@ -136,6 +136,37 @@ export type InferActions<M> = M extends {
     ? (...args: A) => Promise<CallResult>
     : (...args: unknown[]) => Promise<CallResult>;
 } : Record<string, (...args: unknown[]) => Promise<CallResult>>;
+
+/**
+ * Shorthand for `LoadedContract<InferLedger<M>, InferCircuits<M>, InferActions<M>>`.
+ *
+ * @example
+ * ```typescript
+ * import * as CounterContract from './contracts/counter/contract/index.js';
+ * let loaded: LoadedContractFor<typeof CounterContract>;
+ * ```
+ *
+ * @since 0.12.0
+ * @category type
+ */
+export type LoadedContractFor<M extends ContractModule> =
+  LoadedContract<InferLedger<M>, InferCircuits<M>, InferActions<M>>;
+
+/**
+ * Shorthand for `DeployedContract<InferLedger<M>, InferCircuits<M>, InferActions<M>>`.
+ *
+ * @example
+ * ```typescript
+ * import * as CounterContract from './contracts/counter/contract/index.js';
+ * let contract: DeployedContractFor<typeof CounterContract>;
+ * // contract.ledgerState() returns Promise<{ counter: bigint }>
+ * ```
+ *
+ * @since 0.12.0
+ * @category type
+ */
+export type DeployedContractFor<M extends ContractModule> =
+  DeployedContract<InferLedger<M>, InferCircuits<M>, InferActions<M>>;
 
 /**
  * Convert Promise-based actions to Effect-based actions.
@@ -264,15 +295,6 @@ export interface CallResult {
 }
 
 /**
- * Contract state: either "loaded" (pre-deploy) or "deployed" (connected to network).
- *
- * @deprecated Use `LoadedContract` and `DeployedContract` types instead.
- * @since 0.6.0
- * @category model
- */
-export type ContractState = 'loaded' | 'deployed';
-
-/**
  * Full providers for a contract (includes zkConfig and proofProvider).
  *
  * @since 0.3.0
@@ -369,7 +391,6 @@ export interface DeployedContract<
    *
    * @example
    * ```typescript
-   * // Instead of: await contract.call('increment', 5n)
    * await contract.actions.increment(5n);
    * ```
    *
@@ -499,20 +520,6 @@ export interface ReadonlyContract<TLedger = unknown> {
   };
 }
 
-/**
- * Legacy unified contract type.
- *
- * @deprecated Use `LoadedContract` and `DeployedContract` separately.
- * @since 0.2.6
- * @category model
- */
-export type Contract<
-  TLedger = unknown,
-  TCircuits extends string = string,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  TActions extends Record<string, (...args: any[]) => Promise<CallResult>> = Record<string, (...args: unknown[]) => Promise<CallResult>>,
-> = LoadedContract<TLedger, TCircuits, TActions> | DeployedContract<TLedger, TCircuits, TActions>;
-
 // =============================================================================
 // Internal Data
 // =============================================================================
@@ -535,16 +542,6 @@ export interface DeployedContractData extends LoadedContractData {
   readonly address: string;
   readonly instance: DeployedContractInstance;
 }
-
-/**
- * Legacy alias.
- * @deprecated Use `LoadedContractData` or `DeployedContractData`.
- * @internal
- */
-export type ContractData = LoadedContractData & {
-  readonly address: string | undefined;
-  readonly instance: unknown | undefined;
-};
 
 /**
  * Internal interface for deployed contract instance with callable transaction methods.
@@ -1274,7 +1271,7 @@ export interface CreateContractOptions<M extends ContractModule = ContractModule
  */
 function createContractEffect<M extends ContractModule>(
   options: CreateContractOptions<M>,
-): Effect.Effect<LoadedContract<InferLedger<M>, InferCircuits<M>, InferActions<M>>, ContractError> {
+): Effect.Effect<LoadedContractFor<M>, ContractError> {
   const {
     walletProvider,
     midnightProvider,
@@ -1298,7 +1295,7 @@ function createContractEffect<M extends ContractModule>(
     { proofServer: proofServerUrl },
     baseProviders,
     logging,
-  ).pipe(Effect.map((data) => createLoadedContractHandle(data) as LoadedContract<InferLedger<M>, InferCircuits<M>, InferActions<M>>));
+  ).pipe(Effect.map((data) => createLoadedContractHandle(data) as LoadedContractFor<M>));
 }
 
 /**
@@ -1314,9 +1311,8 @@ function createContractEffect<M extends ContractModule>(
  * import * as Contract from '@no-witness-labs/midday-sdk/Contract';
  * import * as PrivateState from '@no-witness-labs/midday-sdk/PrivateState';
  *
- * const ctx = await Wallet.init(seed, networkConfig);
- * await Wallet.waitForSync(ctx);
- * const { walletProvider, midnightProvider } = Wallet.providers(ctx);
+ * const wallet = await Wallet.fromSeed(seed, networkConfig);
+ * const { walletProvider, midnightProvider } = wallet.providers();
  * const publicDataProvider = Config.publicDataProvider(networkConfig);
  * const privateStateProvider = PrivateState.inMemoryProvider();
  *
@@ -1330,7 +1326,7 @@ function createContractEffect<M extends ContractModule>(
  * });
  *
  * await contract.deploy();
- * await contract.call('increment');
+ * await contract.actions.increment();
  * ```
  *
  * @since 0.6.0
@@ -1338,7 +1334,7 @@ function createContractEffect<M extends ContractModule>(
  */
 export async function create<M extends ContractModule>(
   options: CreateContractOptions<M>,
-): Promise<LoadedContract<InferLedger<M>, InferCircuits<M>, InferActions<M>>> {
+): Promise<LoadedContractFor<M>> {
   const logging = options.logging ?? true;
   return runEffectWithLogging(createContractEffect(options), logging);
 }
@@ -1439,12 +1435,6 @@ export function createDeployedContractHandle(data: DeployedContractData): Deploy
     },
   };
 }
-
-/**
- * @deprecated Use `createLoadedContractHandle` instead.
- * @internal
- */
-export const createContractHandle = createLoadedContractHandle;
 
 /**
  * Create a ReadonlyContract handle from a ledger parser and provider.

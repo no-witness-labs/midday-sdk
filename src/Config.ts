@@ -60,6 +60,17 @@ export function getNetworkConfig(network: string = 'local'): NetworkConfig {
  */
 export const DEV_WALLET_SEED = '0000000000000000000000000000000000000000000000000000000000000001';
 
+/**
+ * Default transaction TTL in milliseconds (30 minutes).
+ *
+ * Used as the fallback when no per-call `ttl` is provided to `balanceTx`.
+ * Configurable via `txTtlMs` on `ClientConfig`.
+ *
+ * @since 0.12.0
+ * @category constants
+ */
+export const DEFAULT_TX_TTL_MS = 30 * 60 * 1000;
+
 // =============================================================================
 // Provider Factories
 // =============================================================================

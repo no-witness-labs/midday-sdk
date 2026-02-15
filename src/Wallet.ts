@@ -5,16 +5,12 @@
  * into a single module. Both share WalletError and the same domain.
  *
  * **Seed Wallet** (server-side):
- * - `Wallet.init(seed, config)` — initialize from HD seed
- * - `Wallet.waitForSync(ctx)` — wait for wallet to sync
+ * - `Wallet.fromSeed(seed, config)` — create and sync a connected wallet
  * - `Wallet.deriveAddress(seed, networkId)` — derive address without connecting
- * - `Wallet.close(ctx)` — release resources
  *
  * **Browser Wallet** (Lace extension):
- * - `Wallet.connectWallet(networkId)` — connect to Lace browser extension
+ * - `Wallet.fromBrowser(networkId)` — connect to Lace browser extension
  * - `Wallet.isWalletAvailable()` — check if extension is installed
- * - `Wallet.disconnectWallet()` — disconnect from wallet
- * - `Wallet.createWalletProviders(wallet, addresses)` — create tx providers
  *
  * @since 0.3.0
  * @module
@@ -37,7 +33,7 @@ import {
 import type { WalletProvider, MidnightProvider, UnboundTransaction } from '@midnight-ntwrk/midnight-js-types';
 import { getNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 
-import type { NetworkConfig } from './Config.js';
+import { DEFAULT_TX_TTL_MS, type NetworkConfig } from './Config.js';
 import { hexToBytes, bytesToHex } from './Utils.js';
 import { runEffect, runEffectPromise } from './Runtime.js';
 
@@ -353,7 +349,11 @@ export interface FromSeedOptions {
  *
  * @internal Effect source of truth
  */
-function providersEffect(walletContext: WalletContext): Effect.Effect<WalletProviders, WalletError> {
+function providersEffect(
+  walletContext: WalletContext,
+  options?: { txTtlMs?: number },
+): Effect.Effect<WalletProviders, WalletError> {
+  const defaultTtlMs = options?.txTtlMs ?? DEFAULT_TX_TTL_MS;
   return Effect.try({
     try: () => {
       const walletProvider: WalletProvider = {
@@ -362,7 +362,7 @@ function providersEffect(walletContext: WalletContext): Effect.Effect<WalletProv
         getEncryptionPublicKey: () =>
           walletContext.shieldedSecretKeys.encryptionPublicKey as unknown as ledger.EncPublicKey,
         balanceTx: async (tx: UnboundTransaction, ttl?: Date): Promise<ledger.FinalizedTransaction> => {
-          const txTtl = ttl ?? new Date(Date.now() + 30 * 60 * 1000);
+          const txTtl = ttl ?? new Date(Date.now() + defaultTtlMs);
           const recipe = await walletContext.wallet.balanceUnboundTransaction(
             tx,
             {
@@ -890,32 +890,6 @@ export function fromAddress(address: string): ReadonlyWallet {
 // =============================================================================
 
 /**
- * Initialize wallet from HD seed.
- *
- * @deprecated Use `Wallet.fromSeed(seed, networkConfig)` instead.
- * @throws {WalletError} When initialization fails
- *
- * @since 0.2.0
- * @category constructors
- */
-export async function init(seed: string, networkConfig: NetworkConfig): Promise<WalletContext> {
-  return runEffectPromise(initEffect(seed, networkConfig));
-}
-
-/**
- * Wait for wallet to sync with the network.
- *
- * @deprecated Use `Wallet.fromSeed(seed, networkConfig)` which syncs automatically.
- * @throws {WalletError} When sync fails
- *
- * @since 0.2.0
- * @category operations
- */
-export async function waitForSync(walletContext: WalletContext): Promise<void> {
-  return runEffectPromise(waitForSyncEffect(walletContext));
-}
-
-/**
  * Derive wallet address from seed without starting wallet connection.
  *
  * @throws {WalletError} When derivation fails
@@ -925,31 +899,6 @@ export async function waitForSync(walletContext: WalletContext): Promise<void> {
  */
 export function deriveAddress(seed: string, networkId: string): string {
   return runEffect(deriveAddressEffect(seed, networkId));
-}
-
-/**
- * Stop wallet sync and release WebSocket connections.
- *
- * @deprecated Use `wallet.close()` on the `ConnectedWallet` handle instead.
- * @throws {WalletError} When close fails
- *
- * @since 0.2.9
- * @category operations
- */
-export async function close(walletContext: WalletContext): Promise<void> {
-  return runEffectPromise(closeEffect(walletContext));
-}
-
-/**
- * Create WalletProvider and MidnightProvider from a seed wallet context.
- *
- * @deprecated Use `wallet.providers()` on the `ConnectedWallet` handle instead.
- *
- * @since 0.6.0
- * @category constructors
- */
-export function providers(walletContext: WalletContext): WalletProviders {
-  return runEffect(providersEffect(walletContext));
 }
 
 // =============================================================================
@@ -964,19 +913,6 @@ export function providers(walletContext: WalletContext): WalletProviders {
  */
 export function isWalletAvailable(): boolean {
   return runEffect(isAvailableEffect());
-}
-
-/**
- * Connect to the Lace wallet in browser.
- *
- * @deprecated Use `Wallet.fromBrowser(networkId)` instead.
- * @throws {WalletError} When connection fails
- *
- * @since 0.2.0
- * @category browser
- */
-export async function connectWallet(networkId: string = 'testnet'): Promise<WalletConnection> {
-  return runEffectPromise(connectEffect(networkId));
 }
 
 /**
@@ -995,21 +931,7 @@ export async function getWalletProvingProvider(
 }
 
 /**
- * Disconnect from the wallet (if supported).
- *
- * @deprecated Use `wallet.close()` on the `ConnectedWallet` handle instead.
- *
- * @since 0.2.0
- * @category browser
- */
-export async function disconnectWallet(): Promise<void> {
-  return runEffectPromise(disconnectEffect());
-}
-
-/**
  * Create providers from a connected wallet (v4 API).
- *
- * @deprecated Use `wallet.providers()` on the `ConnectedWallet` handle instead.
  *
  * @since 0.2.0
  * @category browser
@@ -1048,13 +970,13 @@ export const effect = {
   // Unified wallet factories
   fromSeed: fromSeedEffect,
   fromBrowser: fromBrowserEffect,
-  // Seed wallet (legacy — prefer fromSeed)
+  // Seed wallet lifecycle
   init: initEffect,
   waitForSync: waitForSyncEffect,
   deriveAddress: deriveAddressEffect,
   close: closeEffect,
   providers: providersEffect,
-  // Browser wallet connector (legacy — prefer fromBrowser)
+  // Browser wallet connector
   connect: connectEffect,
   isAvailable: isAvailableEffect,
   disconnect: disconnectEffect,

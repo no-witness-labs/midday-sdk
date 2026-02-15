@@ -197,7 +197,7 @@ describe('Witness Contract E2E Tests', () => {
         expect(contract.address).toBeDefined();
 
         // Initialize
-        await contract.call('init', PASSWORD_HASH);
+        await contract.actions.init(PASSWORD_HASH);
 
         const attackerLoaded = await wrongClient.loadContract({
           module: SecretCounterContract,
@@ -211,7 +211,7 @@ describe('Witness Contract E2E Tests', () => {
 
         // Should fail because password doesn't match
         await expect(
-          joinedContract.call('increment', 1n)
+          joinedContract.actions.increment(1n)
         ).rejects.toThrow('invalid password');
       } finally {
         await correctClient.close();

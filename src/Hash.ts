@@ -132,7 +132,7 @@ export function field(value: bigint): Hash32 {
  * ```typescript
  * const passwordHash = Midday.Hash.password('my-secret-password');
  * // Use as initial ledger value in contract init
- * await Midday.Contract.call(contract, 'init', passwordHash);
+ * await contract.actions.init(passwordHash);
  * ```
  *
  * @since 0.3.0
