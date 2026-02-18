@@ -14,16 +14,25 @@ This example shows:
 ## Prerequisites
 
 - [Lace Wallet](https://www.lace.io/) browser extension installed
+- [pnpm](https://pnpm.io/) package manager
 - Docker installed and running (for local devnet)
 - Node.js 18+
 
 ## Quick Start (Local Devnet)
 
-### 1. Start the devnet (includes fee relay server)
+### 1. Install dependencies
+
+From the **monorepo root** (`midday-sdk/`):
+
+```bash
+pnpm install
+```
+
+### 3. Start the devnet (includes fee relay server)
 
 ```bash
 # Terminal 1
-DOCKER_HOST=unix:///var/run/docker.sock pnpm --filter @examples/devnet-testing start
+pnpm --filter @examples/devnet-testing start
 ```
 
 Wait until you see:
@@ -32,19 +41,20 @@ Wait until you see:
 Fee relay available at http://localhost:3002
 ```
 
-### 2. Start the browser app
+### 3. Start the browser app
 
 ```bash
 # Terminal 2
 pnpm --filter @examples/browser-lace dev
 ```
 
-### 3. Use the app
+### 4. Use the app
 
 1. Open http://localhost:5173
 2. Select "Local Devnet" from dropdown
 3. Click "Connect Wallet" - approve in Lace
 4. Click "Deploy Contract" - deploy counter contract (fees paid by genesis via fee relay)
+   - Deploy takes ~20 seconds on local devnet (proof generation + block confirmation)
 5. Click "Increment" / "Read State" - interact with contract
 
 ### 4. Cleanup
@@ -54,136 +64,46 @@ pnpm --filter @examples/browser-lace dev
 # Stop the devnet (Ctrl+C in Terminal 1)
 
 # Or force cleanup all containers:
-DOCKER_HOST=unix:///var/run/docker.sock pnpm --filter @examples/devnet-testing cleanup
+pnpm --filter @examples/devnet-testing cleanup
 ```
 
 ## Network Options
 
-| Network | Description |
-|---------|-------------|
-| Local Devnet | Local Docker containers, fee relay pays tx fees from genesis |
-| Preview | Midnight testnet, need testnet tokens |
+| Network | Fee Relay | Description |
+|---------|-----------|-------------|
+| Local Devnet | Yes (auto-enabled) | Local Docker containers, genesis wallet pays tx fees |
+| Preview | No | Midnight testnet, Lace wallet pays fees with own dust |
+| Preprod | No | Midnight testnet, Lace wallet pays fees with own dust |
 
-## Architecture
+> **Note:** The fee relay checkbox is automatically disabled when selecting a testnet — it only works with local devnet.
+
+### Using Testnets (Preview / Preprod)
+
+1. Make sure Lace is configured for the **matching network** in its settings
+2. Your Lace wallet needs **dust (tDUST)** to pay transaction fees
+3. Select the network from the dropdown and connect — no devnet or fee relay needed
+4. Optionally run a local proof server for faster proving (otherwise Lace proves in-browser via WASM):
+   ```bash
+   docker run -d --name proof-server -p 6300:6300 bricktowers/proof-server:7.0.0
+   ```
+   Then set `http://localhost:6300` as the proof server URL in Lace settings.
+
+## Architecture (Local Devnet)
 
 ```
-┌─────────────────┐     ┌─────────────────┐
-│  Browser App    │     │  Devnet         │
-│  (Vite :5173)   │     │  (Docker)       │
-│                 │     │                 │
-│  - Lace Wallet  │────▶│  - Node :9944   │
-│  - Midday SDK   │     │  - Indexer :8088│
-│  - Counter UI   │     │  - Prover :6300 │
-└────────┬────────┘     └─────────────────┘
-         │
-         │ POST /balance-tx, /submit-tx
+Browser (Vite :5173)          Devnet (Docker)
+┌───────────────────┐         ┌──────────────────┐
+│ Lace Wallet       │────────▶│ Node :9944       │
+│ Midday SDK        │         │ Indexer :8088    │
+│ Counter UI        │         │ Proof Server :6300│
+└────────┬──────────┘         └──────────────────┘
+         │ POST /balance-tx
          ▼
-┌─────────────────┐
-│  Fee Relay      │
-│  (:3002)        │
-│                 │
-│  Pays tx fees   │
-│  from genesis   │
-└─────────────────┘
+   Fee Relay :3002
+   (genesis pays fees)
 ```
 
-## Fee Relay (Devnet Feature)
-
-On local devnet, only the genesis wallet has dust (tDUST) to pay transaction fees. Browser wallets like Lace start with zero balance. The **fee relay** solves this by letting the genesis wallet pay fees on behalf of browser wallets.
-
-### How it works
-
-A transaction in Midnight has two independent layers:
-
-| Layer | Who | What |
-|-------|-----|------|
-| **ZK layer** | Lace wallet | Circuit execution, ZK proofs, coin ownership |
-| **Fee layer** | Genesis wallet (via fee relay) | Dust for tx fees, submission to node |
-
-The transaction flow for `deploy` or `increment`:
-
-```
-1. Circuit executes with Lace's coinPublicKey     ← Lace owns the state
-2. ZK proof generated (proof server :6300)         ← proves Lace authorized it
-3. UnboundTransaction created                      ← locked to Lace, needs fees
-4. Fee relay: genesis wallet adds dust via         ← can't alter the ZK proof
-   POST /balance-tx → FinalizedTransaction
-5. Fee relay: genesis wallet submits via           ← just sends bytes to node
-   POST /submit-tx → TransactionId
-```
-
-The genesis wallet **cannot** modify contract state or change ownership — the ZK proof from step 2 locks the transaction to the Lace wallet's keys. Genesis only adds fee inputs/outputs in step 4, which is independent of the ZK layer.
-
-### Key separation
-
-```typescript
-// These come from Lace — contract ownership
-walletProvider.getCoinPublicKey()       // → Lace's shielded coin key
-walletProvider.getEncryptionPublicKey() // → Lace's encryption key
-
-// These are overridden by fee relay — fee payment only
-walletProvider.balanceTx()  // → genesis wallet pays dust
-midnightProvider.submitTx() // → genesis wallet submits
-```
-
-### Usage
-
-```typescript
-// Server-side: start fee relay alongside devnet
-import { Cluster, FeeRelay } from '@no-witness-labs/midday-sdk/devnet';
-
-const cluster = await Cluster.make();
-await cluster.start();
-FeeRelay.startServer(cluster.networkConfig, { port: 3002 });
-
-// Browser: point feeRelay to the server URL
-const wallet = await Midday.Wallet.fromBrowser('undeployed');
-const client = await Midday.Client.create({
-  wallet,
-  privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
-    privateStateStoreName: 'my-app',
-  }),
-  feeRelay: { url: 'http://localhost:3002' },
-});
-```
-
-## Code Walkthrough
-
-### 1. Connect to Lace Wallet
-
-```typescript
-const wallet = await Midday.Wallet.fromBrowser('undeployed');
-```
-
-### 2. Create Client from Wallet (with fee relay)
-
-```typescript
-const client = await Midday.Client.create({
-  wallet,
-  privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
-    privateStateStoreName: 'my-app',
-  }),
-  feeRelay: { url: 'http://localhost:3002' },
-});
-```
-
-### 3. Load and Deploy Contract
-
-```typescript
-const loaded = await client.loadContract({
-  module: CounterContract,
-  zkConfig: new Midday.ZkConfig.HttpZkConfigProvider('/zk-config'),
-  privateStateId: 'my-counter',
-});
-const deployed = await loaded.deploy();
-```
-
-### 4. Call Actions
-
-```typescript
-const result = await deployed.call('increment');
-console.log(`TX: ${result.txHash}`);
-```
+See [`src/main.ts`](src/main.ts) for the full implementation.
 
 ## Troubleshooting
 
@@ -191,11 +111,26 @@ console.log(`TX: ${result.txHash}`);
 - Ensure Lace extension is installed and enabled
 - Refresh the page after installing
 
-**Deploy failed:**
+**Deploy failed (Local Devnet):**
 - Ensure devnet is running with fee relay server
 - Check that http://localhost:3002/health returns `{"status":"ok"}`
 - Check browser console for detailed errors
 
+**"Failed to balance transaction" (Testnets):**
+- Your Lace wallet has **no dust** — dust is required to pay transaction fees
+- Failed transactions can desync Lace's wallet state, making it think dust is spent when it isn't
+- Fix: disconnect and reconnect Lace to force a resync
+- Check dust balance in Lace before retrying
+
+**Lace network mismatch:**
+- Lace must be configured for the same network selected in the dropdown
+- E.g., selecting "Preprod" in the app but having Lace on "Preview" will fail silently
+
+**Deploy seems stuck:**
+- Local devnet: ~20 seconds is normal (proof generation + block confirmation)
+- Testnets: can take 1-2 minutes (real block times + network latency)
+- If using in-browser proving (no local proof server), proving alone can take 30-60s
+
 **Docker issues:**
-- Set `DOCKER_HOST=unix:///var/run/docker.sock` before commands
+- If Docker commands fail with connection errors, set `DOCKER_HOST=unix:///var/run/docker.sock` (needed for some Docker runtimes like Colima)
 - Run cleanup: `pnpm --filter @examples/devnet-testing cleanup`
