@@ -18,7 +18,7 @@
  *   const client = yield* Midday.Client.effect.create(config);
  *   const contract = yield* client.effect.loadContract({ path: './contracts/counter' });
  *   yield* contract.effect.deploy();
- *   yield* contract.effect.call('increment');
+ *   yield* contract.effect.actions.increment();
  * });
  * ```
  *
