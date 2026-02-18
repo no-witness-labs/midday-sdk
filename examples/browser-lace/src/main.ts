@@ -48,7 +48,7 @@ async function connectWallet() {
 
     // Connect to wallet - this will prompt user to approve
     const network = networkSelect?.value || 'undeployed';
-    wallet = await Midday.Wallet.fromBrowser(network as 'preview' | 'undeployed');
+    wallet = await Midday.Wallet.fromBrowser(network);
 
     updateStatus('Creating SDK client...');
 
@@ -264,6 +264,16 @@ connectBtn.addEventListener('click', connectWallet);
 (window as unknown as { readState: typeof readState }).readState = readState;
 (window as unknown as { refreshBalance: typeof refreshBalance }).refreshBalance = refreshBalance;
 (window as unknown as { fundWallet: typeof fundWallet }).fundWallet = fundWallet;
+
+// Auto-disable fee relay for non-local networks
+networkSelect.addEventListener('change', () => {
+  const feeRelayCheckbox = document.getElementById('fee-relay-checkbox') as HTMLInputElement;
+  const isLocal = networkSelect.value === 'undeployed';
+  feeRelayCheckbox.checked = isLocal;
+  feeRelayCheckbox.disabled = !isLocal;
+  const label = document.getElementById('fee-relay-toggle') as HTMLLabelElement;
+  if (label) label.style.opacity = isLocal ? '1' : '0.5';
+});
 
 // Initial status
 updateStatus('Select network and click "Connect Wallet" to begin');

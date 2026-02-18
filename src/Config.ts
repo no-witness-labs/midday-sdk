@@ -35,6 +35,13 @@ export const NETWORKS: Record<string, NetworkConfig> = {
     node: 'wss://rpc.preview.midnight.network',
     proofServer: 'http://localhost:6300',
   },
+  preprod: {
+    networkId: 'preprod',
+    indexer: 'https://indexer.preprod.midnight.network/api/v3/graphql',
+    indexerWS: 'wss://indexer.preprod.midnight.network/api/v3/graphql/ws',
+    node: 'wss://rpc.preprod.midnight.network',
+    proofServer: 'http://localhost:6300',
+  },
 } as const;
 
 /**
@@ -43,7 +50,7 @@ export const NETWORKS: Record<string, NetworkConfig> = {
  * Note: Environment variable overrides have been removed for browser compatibility.
  * Use explicit configuration via Client.create() options instead.
  *
- * @param network - Network name ('local' or 'preview')
+ * @param network - Network name ('local', 'preview', or 'preprod')
  * @returns Network configuration
  */
 export function getNetworkConfig(network: string = 'local'): NetworkConfig {
