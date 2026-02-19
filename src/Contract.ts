@@ -578,17 +578,15 @@ export function loadContractModuleEffect(
       let zkConfig: ZKConfigProvider<string>;
 
       if (options.path) {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const { join } = require('path');
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const { NodeZkConfigProvider } = require('@midnight-ntwrk/midnight-js-node-zk-config-provider');
+        const { join } = await import('path');
+        const { NodeZkConfigProvider } = await import('@midnight-ntwrk/midnight-js-node-zk-config-provider');
 
         const modulePath = join(options.path, 'contract', 'index.js');
-        module = await import(modulePath);
+        module = await import(/* @vite-ignore */ modulePath);
         zkConfig = new NodeZkConfigProvider(options.path);
       } else if (options.moduleUrl && options.zkConfigBaseUrl) {
         const { HttpZkConfigProvider } = await import('./ZkConfig.js');
-        module = await import(/* webpackIgnore: true */ options.moduleUrl);
+        module = await import(/* @vite-ignore */ options.moduleUrl);
         zkConfig = new HttpZkConfigProvider(options.zkConfigBaseUrl);
       } else if (options.module && options.zkConfig) {
         module = options.module;
@@ -1534,13 +1532,11 @@ export async function loadContractModule<T = ContractModule>(
 ): Promise<ContractLoadResult<T>> {
   const { moduleSubdir = 'contract', moduleEntry = 'index.js' } = options;
 
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { join } = require('path');
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { NodeZkConfigProvider } = require('@midnight-ntwrk/midnight-js-node-zk-config-provider');
+  const { join } = await import('path');
+  const { NodeZkConfigProvider } = await import('@midnight-ntwrk/midnight-js-node-zk-config-provider');
 
   const modulePath = join(contractPath, moduleSubdir, moduleEntry);
-  const module = (await import(modulePath)) as T;
+  const module = (await import(/* @vite-ignore */ modulePath)) as T;
   const zkConfig = new NodeZkConfigProvider(contractPath) as ZKConfigProvider<string>;
 
   return { module, zkConfig };
@@ -1562,7 +1558,7 @@ export async function loadContractModuleFromUrl<T = ContractModule>(
 ): Promise<ContractLoadResult<T>> {
   const { HttpZkConfigProvider } = await import('./ZkConfig.js');
 
-  const module = (await import(/* webpackIgnore: true */ moduleUrl)) as T;
+  const module = (await import(/* @vite-ignore */ moduleUrl)) as T;
   const zkConfig = new HttpZkConfigProvider(zkConfigBaseUrl) as ZKConfigProvider<string>;
 
   return { module, zkConfig };
