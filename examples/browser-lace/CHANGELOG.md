@@ -1,5 +1,12 @@
 # @examples/browser-lace
 
+## 0.0.6
+
+### Patch Changes
+
+- Updated dependencies [fa345fb]
+  - @no-witness-labs/midday-sdk@0.3.1
+
 ## 0.0.5
 
 ### Patch Changes

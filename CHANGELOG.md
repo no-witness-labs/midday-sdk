@@ -1,5 +1,11 @@
 # @no-witness-labs/midday-sdk
 
+## 0.3.1
+
+### Patch Changes
+
+- fa345fb: fix: use dynamic import instead of require for browser compatibility
+
 ## 0.3.0
 
 ### Minor Changes
