@@ -338,6 +338,91 @@ export interface FromSeedOptions {
 }
 
 // =============================================================================
+// Internal — Intent Signing Workaround
+// =============================================================================
+
+/**
+ * Workaround for wallet-sdk-unshielded-wallet v1.0.0 bug.
+ *
+ * `TransactionOps.addSignature()` hard-codes `'pre-proof'` when cloning intents,
+ * but after proving the base transaction, intents carry `'proof'`. The WASM
+ * deserializer fails with "Failed to clone intent".
+ *
+ * This helper manually signs intents with the correct proof marker and writes
+ * them back, bypassing the buggy `signRecipe` path inside `finalizeRecipe`.
+ *
+ * @see https://github.com/midnightntwrk/example-counter/blob/main/MIGRATION_GUIDE.md
+ * @internal
+ */
+export function signTransactionIntents(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  tx: { intents?: Map<number, any> },
+  signFn: (payload: Uint8Array) => ledger.Signature,
+  proofMarker: 'proof' | 'pre-proof',
+): void {
+  if (!tx.intents || tx.intents.size === 0) return;
+
+  for (const segment of tx.intents.keys()) {
+    const intent = tx.intents.get(segment);
+    if (!intent) continue;
+
+    const cloned = ledger.Intent.deserialize(
+      'signature' as ledger.SignatureEnabled['instance'],
+      proofMarker as ledger.Proof['instance'],
+      'pre-binding' as ledger.PreBinding['instance'],
+      intent.serialize(),
+    );
+
+    const sigData = cloned.signatureData(segment);
+    const signature = signFn(sigData);
+
+    if (cloned.fallibleUnshieldedOffer) {
+      const sigs = cloned.fallibleUnshieldedOffer.inputs.map(
+        (_: unknown, i: number) => cloned.fallibleUnshieldedOffer!.signatures.at(i) ?? signature,
+      );
+      cloned.fallibleUnshieldedOffer = cloned.fallibleUnshieldedOffer.addSignatures(sigs);
+    }
+
+    if (cloned.guaranteedUnshieldedOffer) {
+      const sigs = cloned.guaranteedUnshieldedOffer.inputs.map(
+        (_: unknown, i: number) => cloned.guaranteedUnshieldedOffer!.signatures.at(i) ?? signature,
+      );
+      cloned.guaranteedUnshieldedOffer = cloned.guaranteedUnshieldedOffer.addSignatures(sigs);
+    }
+
+    tx.intents.set(segment, cloned);
+  }
+}
+
+/**
+ * Balance, sign (with workaround), and finalize a transaction using a seed wallet.
+ *
+ * @internal
+ */
+export async function balanceAndFinalize(
+  walletContext: WalletContext,
+  tx: UnboundTransaction,
+  ttl: Date,
+): Promise<ledger.FinalizedTransaction> {
+  const recipe = await walletContext.wallet.balanceUnboundTransaction(
+    tx,
+    {
+      shieldedSecretKeys: walletContext.shieldedSecretKeys,
+      dustSecretKey: walletContext.dustSecretKey,
+    },
+    { ttl },
+  );
+
+  const signFn = (payload: Uint8Array) => walletContext.unshieldedKeystore.signData(payload);
+  signTransactionIntents(recipe.baseTransaction, signFn, 'proof');
+  if (recipe.balancingTransaction) {
+    signTransactionIntents(recipe.balancingTransaction, signFn, 'pre-proof');
+  }
+
+  return walletContext.wallet.finalizeRecipe(recipe);
+}
+
+// =============================================================================
 // Internal Effects — Seed Wallet
 // =============================================================================
 
@@ -363,15 +448,7 @@ function providersEffect(
           walletContext.shieldedSecretKeys.encryptionPublicKey as unknown as ledger.EncPublicKey,
         balanceTx: async (tx: UnboundTransaction, ttl?: Date): Promise<ledger.FinalizedTransaction> => {
           const txTtl = ttl ?? new Date(Date.now() + defaultTtlMs);
-          const recipe = await walletContext.wallet.balanceUnboundTransaction(
-            tx,
-            {
-              shieldedSecretKeys: walletContext.shieldedSecretKeys,
-              dustSecretKey: walletContext.dustSecretKey,
-            },
-            { ttl: txTtl },
-          );
-          return walletContext.wallet.finalizeRecipe(recipe);
+          return balanceAndFinalize(walletContext, tx, txTtl);
         },
       };
 

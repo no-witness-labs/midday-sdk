@@ -16,7 +16,7 @@ import type {
   MidnightProvider,
 } from '@midnight-ntwrk/midnight-js-types';
 
-import type { WalletContext } from './Wallet.js';
+import { type WalletContext, balanceAndFinalize } from './Wallet.js';
 import { bytesToHex, hexToBytes } from './Utils.js';
 import { DEFAULT_TX_TTL_MS } from './Config.js';
 
@@ -60,15 +60,7 @@ export function applySeedRelay(
     ...baseWalletProvider,
     balanceTx: async (tx, ttl) => {
       const txTtl = ttl ?? new Date(Date.now() + defaultTtlMs);
-      const recipe = await relayCtx.wallet.balanceUnboundTransaction(
-        tx,
-        {
-          shieldedSecretKeys: relayCtx.shieldedSecretKeys,
-          dustSecretKey: relayCtx.dustSecretKey,
-        },
-        { ttl: txTtl },
-      );
-      return await relayCtx.wallet.finalizeRecipe(recipe);
+      return balanceAndFinalize(relayCtx, tx, txTtl);
     },
   };
 
