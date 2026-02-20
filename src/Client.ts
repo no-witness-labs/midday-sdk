@@ -481,12 +481,16 @@ function createEffect(config: ClientConfig): Effect.Effect<MiddayClient, ClientE
 
     const networkConfig = customNetworkConfig ?? Config.getNetworkConfig(network);
 
-    // Path 1: Pre-created ConnectedWallet (no owned resources)
+    // Path 1: Pre-created ConnectedWallet
     if (connectedWallet) {
       const providers = yield* createConnectedWalletProviders(
         connectedWallet, networkConfig, privateStateProvider, feeRelay,
       );
-      return buildClient({ networkConfig, providers, logging });
+      return buildClient({
+        networkConfig,
+        providers,
+        logging,
+      });
     }
 
     // Path 2: Seed-based initialization

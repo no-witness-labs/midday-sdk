@@ -26,6 +26,7 @@ import type { UnboundTransaction } from '@midnight-ntwrk/midnight-js-types';
 
 import { DEFAULT_TX_TTL_MS, type NetworkConfig } from '../Config.js';
 import { hexToBytes, bytesToHex } from '../Utils.js';
+import { signTransactionIntents } from '../Wallet.js';
 import * as Images from './Images.js';
 
 /**
@@ -116,6 +117,8 @@ async function createWallet(keys: DerivedKeys, networkConfig: NetworkConfig): Pr
 export interface ServerOptions {
   /** Port to listen on (default: 3002) */
   port?: number;
+  /** Hex seed for the relay wallet (default: genesis wallet seed) */
+  seed?: string;
   /** Transaction TTL in milliseconds (default: 30 minutes) */
   txTtlMs?: number;
 }
@@ -151,16 +154,18 @@ export interface ServerOptions {
  * ```
  */
 export function startServer(networkConfig: NetworkConfig, options: ServerOptions = {}): Server {
-  const { port = 3002, txTtlMs = DEFAULT_TX_TTL_MS } = options;
+  const { port = 3002, seed = GENESIS_WALLET_SEED, txTtlMs = DEFAULT_TX_TTL_MS } = options;
 
-  // Genesis wallet — initialized lazily on first request, then kept alive
+  // Relay wallet — initialized lazily on first request, then kept alive
   let walletPromise: Promise<{ wallet: WalletFacade; keys: DerivedKeys }> | null = null;
 
   function getWallet(): Promise<{ wallet: WalletFacade; keys: DerivedKeys }> {
     if (!walletPromise) {
       walletPromise = (async () => {
-        const keys = deriveKeys(GENESIS_WALLET_SEED, networkConfig.networkId);
+        console.log('[fee-relay] Initializing relay wallet...');
+        const keys = deriveKeys(seed, networkConfig.networkId);
         const wallet = await createWallet(keys, networkConfig);
+        console.log('[fee-relay] Relay wallet synced and ready');
         return { wallet, keys };
       })();
     }
@@ -221,6 +226,15 @@ export function startServer(networkConfig: NetworkConfig, options: ServerOptions
             },
             { ttl },
           );
+
+          // Workaround: wallet-sdk-unshielded-wallet v1.0.0 bug —
+          // signRecipe uses 'pre-proof' but proven intents need 'proof'
+          const signFn = (payload: Uint8Array) => keys.unshieldedKeystore.signData(payload);
+          signTransactionIntents(recipe.baseTransaction, signFn, 'proof');
+          if (recipe.balancingTransaction) {
+            signTransactionIntents(recipe.balancingTransaction, signFn, 'pre-proof');
+          }
+
           const finalized = await wallet.finalizeRecipe(recipe);
 
           // Serialize back to hex
@@ -230,6 +244,7 @@ export function startServer(networkConfig: NetworkConfig, options: ServerOptions
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ tx: finalizedHex }));
         } catch (error) {
+          console.error('[fee-relay] /balance-tx error:', error);
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }));
         }
@@ -268,6 +283,7 @@ export function startServer(networkConfig: NetworkConfig, options: ServerOptions
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ txId }));
         } catch (error) {
+          console.error('[fee-relay] /submit-tx error:', error);
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }));
         }
