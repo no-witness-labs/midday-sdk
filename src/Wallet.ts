@@ -141,8 +141,8 @@ export interface ConnectedAPI {
   }>;
   getUnshieldedAddress(): Promise<{ unshieldedAddress: string }>;
   getDustAddress(): Promise<{ dustAddress: string }>;
-  balanceUnsealedTransaction(tx: string): Promise<{ tx: string }>;
-  balanceSealedTransaction(tx: string): Promise<{ tx: string }>;
+  balanceUnsealedTransaction(tx: string, options?: { payFees?: boolean }): Promise<{ tx: string }>;
+  balanceSealedTransaction(tx: string, options?: { payFees?: boolean }): Promise<{ tx: string }>;
   submitTransaction(tx: string): Promise<string>;
   getProvingProvider(keyMaterialProvider: KeyMaterialProvider): Promise<ProvingProvider>;
   getConfiguration(): Promise<Configuration>;
@@ -495,6 +495,7 @@ function initEffect(seed: string, networkConfig: NetworkConfig): Effect.Effect<W
           indexerWsUrl: networkConfig.indexerWS,
         },
         indexerUrl: networkConfig.indexerWS,
+        txHistoryStorage: new InMemoryTransactionHistoryStorage(),
       };
 
       const hdWallet = HDWallet.fromSeed(seedBytes);
@@ -512,17 +513,19 @@ function initEffect(seed: string, networkConfig: NetworkConfig): Effect.Effect<W
       const dustSecretKey = ledger.DustSecretKey.fromSeed(derivationResult.keys[Roles.Dust]);
       const unshieldedKeystore = createKeystore(derivationResult.keys[Roles.NightExternal], configuration.networkId);
 
-      const shieldedWallet = ShieldedWallet(configuration).startWithSecretKeys(shieldedSecretKeys);
-      const dustWallet = DustWallet(configuration).startWithSecretKey(
-        dustSecretKey,
-        ledger.LedgerParameters.initialParameters().dust,
-      );
-      const unshieldedWallet = UnshieldedWallet({
-        ...configuration,
-        txHistoryStorage: new InMemoryTransactionHistoryStorage(),
-      }).startWithPublicKey(UnshieldedPublicKey.fromKeyStore(unshieldedKeystore));
-
-      const wallet = new WalletFacade(shieldedWallet, unshieldedWallet, dustWallet);
+      const wallet = await WalletFacade.init({
+        configuration,
+        shielded: () => ShieldedWallet(configuration).startWithSecretKeys(shieldedSecretKeys),
+        unshielded: () =>
+          UnshieldedWallet(configuration).startWithPublicKey(
+            UnshieldedPublicKey.fromKeyStore(unshieldedKeystore),
+          ),
+        dust: () =>
+          DustWallet(configuration).startWithSecretKey(
+            dustSecretKey,
+            ledger.LedgerParameters.initialParameters().dust,
+          ),
+      });
       await wallet.start(shieldedSecretKeys, dustSecretKey);
 
       return { wallet, shieldedSecretKeys, dustSecretKey, unshieldedKeystore };
@@ -720,6 +723,33 @@ function balanceTxEffect(
         message: `Failed to balance transaction: ${cause instanceof Error ? cause.message : String(cause)}`,
       }),
   });
+}
+
+/**
+ * Balance a transaction via Lace with `{ payFees: false }`.
+ *
+ * Lace adds shielded + unshielded inputs and signs, but does NOT add dust (fees).
+ * The caller is expected to send the resulting FinalizedTransaction to a fee relay
+ * that adds dust-only balancing.
+ *
+ * @internal
+ */
+export async function balanceWithoutFees(
+  wallet: ConnectedAPI,
+  tx: UnboundTransaction,
+): Promise<FinalizedTransaction> {
+  const txHex = bytesToHex(tx.serialize());
+  const result = await wallet.balanceUnsealedTransaction(txHex, { payFees: false });
+  const resultBytes = hexToBytes(result.tx);
+  const networkId = getNetworkId();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (Transaction as any).deserialize(
+    { SignatureEnabled: true },
+    { Proof: true },
+    { Binding: true },
+    resultBytes,
+    networkId,
+  ) as FinalizedTransaction;
 }
 
 function submitTxEffect(

@@ -126,8 +126,6 @@ export interface CreateBaseProvidersOptions {
   privateStateProvider: PrivateStateProvider;
   /** Storage configuration */
   storageConfig?: StorageConfig;
-  /** Optional fee relay wallet — uses this wallet for balanceTx/submitTx while keeping the primary wallet for ZK proofs */
-  feeRelayWallet?: Wallet.WalletContext;
   /** Transaction TTL in milliseconds (default: 30 minutes) */
   txTtlMs?: number;
 }
@@ -161,19 +159,12 @@ export interface ClientConfig {
   storage?: StorageConfig;
   /** Enable logging (default: true) */
   logging?: boolean;
-  /** Fee relay — delegate fee payment to a funded wallet so non-funded wallets can transact.
+  /** Fee relay — delegate fee payment to a remote HTTP relay server.
    *
-   * Which variant is valid depends on the wallet mode:
-   * - **`{ seed }`** — Node.js only. Initialises a local relay wallet from seed.
-   *   Valid with seed-based init (`Client.create({ seed })`).
-   *   **Not valid** with a pre-created `wallet` (ConnectedWallet).
-   * - **`{ url }`** — Browser or Node.js. Proxies `balanceTx`/`submitTx` to a remote HTTP fee relay server.
-   *   Valid with a pre-created `wallet` (ConnectedWallet).
-   *   **Not valid** with seed-based init (`Client.create({ seed })`).
-   *
-   * Both variants are accepted by `Client.fromWallet()`.
+   * The relay pays dust (tx fees) while the user's wallet provides value inputs.
+   * User's wallet balances with `{ payFees: false }`, relay adds dust only.
    */
-  feeRelay?: { seed: string } | { url: string };
+  feeRelay?: { url: string };
   /** Transaction TTL in milliseconds (default: 30 minutes). Used as the fallback when no per-call TTL is provided to `balanceTx`. */
   txTtlMs?: number;
 }
@@ -210,8 +201,8 @@ export interface FromWalletConfig {
   privateStateProvider: PrivateStateProvider;
   /** Enable logging (default: true) */
   logging?: boolean;
-  /** Fee relay config. Both `{ seed }` and `{ url }` are valid for `fromWallet`. */
-  feeRelay?: { seed: string } | { url: string };
+  /** Fee relay — delegate fee payment to a remote HTTP relay server. */
+  feeRelay?: { url: string };
   /** Transaction TTL in milliseconds (default: 30 minutes). */
   txTtlMs?: number;
 }
@@ -326,22 +317,15 @@ function createBaseProvidersEffect(
 ): Effect.Effect<BaseProviders, ClientError> {
   return Wallet.effect.providers(walletContext, { txTtlMs: options.txTtlMs }).pipe(
     Effect.map(({ walletProvider, midnightProvider }) => {
-      const { networkConfig, privateStateProvider, feeRelayWallet, txTtlMs } = options;
+      const { networkConfig, privateStateProvider } = options;
 
       setNetworkId(networkConfig.networkId as 'undeployed');
 
-      // Fee relay: use relay wallet for balancing/submitting, user wallet for ZK proofs
-      const feeWalletCtx = feeRelayWallet ?? walletContext;
-
       const publicDataProvider = Config.publicDataProvider(networkConfig);
 
-      const { walletProvider: effectiveWalletProvider, midnightProvider: effectiveMidnightProvider } = feeRelayWallet
-        ? FeeRelay.applySeedRelay(feeWalletCtx, walletProvider, { txTtlMs })
-        : { walletProvider, midnightProvider };
-
       return {
-        walletProvider: effectiveWalletProvider,
-        midnightProvider: effectiveMidnightProvider,
+        walletProvider,
+        midnightProvider,
         publicDataProvider,
         privateStateProvider,
         networkConfig,
@@ -410,12 +394,11 @@ function createConnectedWalletProviders(
   connectedWallet: Wallet.ConnectedWallet,
   networkConfig: Config.NetworkConfig,
   privateStateProvider: PrivateStateProvider,
-  feeRelay?: { seed: string } | { url: string },
 ): Effect.Effect<BaseProviders, ClientError> {
   return Effect.gen(function* () {
     yield* Effect.logDebug('Using pre-created wallet...');
 
-    let { walletProvider, midnightProvider } = yield* connectedWallet.effect.providers().pipe(
+    const { walletProvider, midnightProvider } = yield* connectedWallet.effect.providers().pipe(
       Effect.mapError(
         (e) =>
           new ClientError({
@@ -424,18 +407,6 @@ function createConnectedWalletProviders(
           }),
       ),
     );
-
-    if (feeRelay && 'url' in feeRelay) {
-      yield* Effect.logDebug(`Using fee relay server at ${feeRelay.url}`);
-      ({ walletProvider, midnightProvider } = FeeRelay.applyHttpRelay(feeRelay.url, walletProvider));
-    } else if (feeRelay && 'seed' in feeRelay) {
-      return yield* Effect.fail(
-        new ClientError({
-          cause: new Error('Seed-based fee relay not supported with ConnectedWallet'),
-          message: 'Seed-based fee relay ({ seed }) is not supported with a pre-created wallet. Use { url } for browser wallets.',
-        }),
-      );
-    }
 
     setNetworkId(networkConfig.networkId as 'undeployed');
     const publicDataProvider = Config.publicDataProvider(networkConfig);
@@ -475,7 +446,6 @@ function createEffect(config: ClientConfig): Effect.Effect<MiddayClient, ClientE
       privateStateProvider,
       storage,
       logging = true,
-      feeRelay,
       txTtlMs,
     } = config;
 
@@ -484,7 +454,7 @@ function createEffect(config: ClientConfig): Effect.Effect<MiddayClient, ClientE
     // Path 1: Pre-created ConnectedWallet
     if (connectedWallet) {
       const providers = yield* createConnectedWalletProviders(
-        connectedWallet, networkConfig, privateStateProvider, feeRelay,
+        connectedWallet, networkConfig, privateStateProvider,
       );
       return buildClient({
         networkConfig,
@@ -504,27 +474,12 @@ function createEffect(config: ClientConfig): Effect.Effect<MiddayClient, ClientE
       );
     }
 
-    if (feeRelay && 'url' in feeRelay) {
-      return yield* Effect.fail(
-        new ClientError({
-          cause: new Error('URL-based fee relay not supported with Client.create'),
-          message: 'URL-based fee relay ({ url }) is only supported with Client.fromWallet. Use { seed } for Client.create.',
-        }),
-      );
-    }
-
     const walletContext = yield* initWalletEffect(walletSeed, networkConfig, 'wallet');
-
-    let relayerWallet: Wallet.WalletContext | null = null;
-    if (feeRelay && 'seed' in feeRelay) {
-      relayerWallet = yield* initWalletEffect(feeRelay.seed, networkConfig, 'fee relay wallet');
-    }
 
     const providers = yield* createBaseProvidersEffect(walletContext, {
       networkConfig,
       privateStateProvider,
       storageConfig: storage,
-      feeRelayWallet: relayerWallet ?? undefined,
       txTtlMs,
     });
 
@@ -532,10 +487,7 @@ function createEffect(config: ClientConfig): Effect.Effect<MiddayClient, ClientE
       networkConfig,
       providers,
       logging,
-      close: Effect.gen(function* () {
-        if (relayerWallet) yield* Wallet.effect.close(relayerWallet);
-        yield* Wallet.effect.close(walletContext);
-      }).pipe(
+      close: Wallet.effect.close(walletContext).pipe(
         Effect.mapError(
           (e) => new ClientError({ cause: e, message: `Failed to close client: ${e.message}` }),
         ),
@@ -549,21 +501,20 @@ function fromWalletEffect(
   config: FromWalletConfig,
 ): Effect.Effect<MiddayClient, ClientError> {
   return Effect.gen(function* () {
-    const { privateStateProvider, logging = true, feeRelay, txTtlMs } = config;
+    const { privateStateProvider, logging = true, feeRelay } = config;
     const networkConfig = connectionNetworkConfig(connection);
-
-    let relayerWallet: Wallet.WalletContext | null = null;
-    if (feeRelay && 'seed' in feeRelay) {
-      relayerWallet = yield* initWalletEffect(feeRelay.seed, networkConfig, 'fee relay wallet');
-    }
 
     let { walletProvider, midnightProvider } = Wallet.createWalletProviders(connection.wallet, connection.addresses);
 
-    if (relayerWallet && feeRelay && 'seed' in feeRelay) {
-      ({ walletProvider, midnightProvider } = FeeRelay.applySeedRelay(relayerWallet, walletProvider, { txTtlMs }));
-    } else if (feeRelay && 'url' in feeRelay) {
+    if (feeRelay) {
       yield* Effect.logDebug(`Using fee relay server at ${feeRelay.url}`);
-      ({ walletProvider, midnightProvider } = FeeRelay.applyHttpRelay(feeRelay.url, walletProvider));
+      // User's wallet balances value with { payFees: false }
+      walletProvider = {
+        ...walletProvider,
+        balanceTx: (tx) => Wallet.balanceWithoutFees(connection.wallet, tx),
+      };
+      // Relay adds dust and submits
+      midnightProvider = FeeRelay.createRelayProvider(feeRelay.url);
     }
 
     setNetworkId(networkConfig.networkId as 'undeployed');
@@ -583,13 +534,6 @@ function fromWalletEffect(
       networkConfig,
       providers,
       logging,
-      close: relayerWallet
-        ? Wallet.effect.close(relayerWallet).pipe(
-            Effect.mapError(
-              (e) => new ClientError({ cause: e, message: `Failed to close client: ${e.message}` }),
-            ),
-          )
-        : undefined,
     });
   }).pipe(
     Effect.catchAllDefect((defect) =>
@@ -768,9 +712,8 @@ export async function withClient<A>(
 /**
  * Create a Midnight client from a connected wallet (browser).
  *
- * Both fee relay variants are supported here:
- * - `{ seed }` — initialises a local relay wallet (Node.js integration tests)
- * - `{ url }` — proxies to a remote HTTP fee relay server (browser)
+ * When `feeRelay: { url }` is provided, the user's wallet balances value
+ * inputs with `{ payFees: false }` and the relay adds dust (fees) only.
  *
  * @since 0.2.0
  * @category constructors
