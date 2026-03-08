@@ -1,6 +1,7 @@
 # midday-sdk
 
 Developer-friendly SDK for building dapps on Midnight Network.
+This project integrates with the Midnight Network.
 
 ## Installation
 
