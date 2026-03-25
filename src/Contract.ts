@@ -24,7 +24,12 @@
  */
 
 import { Data, Duration, Effect, Stream } from 'effect';
-import { deployContract, findDeployedContract } from '@midnight-ntwrk/midnight-js-contracts';
+import {
+  findDeployedContract,
+  createUnprovenDeployTx,
+  submitTxAsync,
+  createCircuitCallTxInterface,
+} from '@midnight-ntwrk/midnight-js-contracts';
 import { CompiledContract } from '@midnight-ntwrk/compact-js';
 import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
 import type {
@@ -698,26 +703,13 @@ function deployContractEffect(
 
     yield* Effect.logDebug('Deploying contract...');
 
-    // Instrument providers to log deploy lifecycle and fire onSubmit callback
-    const baseProviders = logging ? instrumentProviders(providers) : providers;
-    const instrumentedProviders = onSubmit
-      ? {
-          ...baseProviders,
-          midnightProvider: {
-            ...baseProviders.midnightProvider,
-            submitTx: async (...args: Parameters<typeof baseProviders.midnightProvider.submitTx>) => {
-              const txId = await baseProviders.midnightProvider.submitTx(...args);
-              try { onSubmit({ address: '', txId: String(txId) }); } catch { /* ignore callback errors */ }
-              return txId;
-            },
-          },
-        }
-      : baseProviders;
+    const instrumentedProviders = logging ? instrumentProviders(providers) : providers;
 
-    const deployed = yield* Effect.tryPromise({
+    // Step 1: Create unproven deploy tx (gets contract address)
+    const unprovenDeployTxData = yield* Effect.tryPromise({
       try: () =>
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        deployContract(instrumentedProviders as any, {
+        createUnprovenDeployTx(instrumentedProviders as any, {
           compiledContract: module.compiledContract,
           privateStateId: module.privateStateId,
           initialPrivateState,
@@ -726,18 +718,67 @@ function deployContractEffect(
       catch: (cause) =>
         new ContractError({
           cause,
-          message: `Failed to deploy contract: ${cause instanceof Error ? cause.message : String(cause)}`,
+          message: `Failed to create deploy tx: ${cause instanceof Error ? cause.message : String(cause)}`,
         }),
     });
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const address = (deployed as any).deployTxData.public.contractAddress;
+    const address = (unprovenDeployTxData as any).public.contractAddress as string;
+    yield* Effect.logDebug(`Contract address: ${address}`);
 
-    yield* Effect.logDebug(`Contract deployed at: ${address}`);
+    // Step 2: Prove, balance, and submit (non-blocking — no watchForTxData)
+    const txId = yield* Effect.tryPromise({
+      try: () =>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        submitTxAsync(instrumentedProviders as any, {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          unprovenTx: (unprovenDeployTxData as any).private.unprovenTx,
+        }),
+      catch: (cause) =>
+        new ContractError({
+          cause,
+          message: `Failed to submit deploy tx: ${cause instanceof Error ? cause.message : String(cause)}`,
+        }),
+    });
+
+    yield* Effect.logDebug(`Deploy tx submitted: ${txId}`);
+
+    // Fire onSubmit callback with address and txId
+    if (onSubmit) {
+      try { onSubmit({ address, txId: String(txId) }); } catch { /* ignore callback errors */ }
+    }
+
+    // Step 3: Save private state
+    yield* Effect.promise(async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      providers.privateStateProvider.setContractAddress(address as any);
+      if (module.privateStateId) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await providers.privateStateProvider.set(module.privateStateId, (unprovenDeployTxData as any).private.initialPrivateState);
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await providers.privateStateProvider.setSigningKey(address as any, (unprovenDeployTxData as any).private.signingKey);
+    });
+
+    // Step 4: Wait for finalization (may fail in browser due to indexer WAF)
+    yield* Effect.tryPromise({
+      try: () => providers.publicDataProvider.watchForTxData(String(txId)),
+      catch: (cause) =>
+        new ContractError({
+          cause,
+          message: `Deploy tx submitted (address: ${address}) but finalization watch failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+        }),
+    });
+
+    yield* Effect.logDebug(`Contract deployed and finalized at: ${address}`);
+
+    // Build the deployed contract handle (same shape as deployContract returns)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const callTx = createCircuitCallTxInterface(instrumentedProviders as any, module.compiledContract as any, address as any, module.privateStateId);
 
     return {
       address,
-      instance: deployed as DeployedContractInstance,
+      instance: { callTx } as unknown as DeployedContractInstance,
       module,
       providers,
       logging,
