@@ -8,8 +8,7 @@
     "start": "tsx src/index.ts"
   },
   "dependencies": {
-    "@no-witness-labs/midday-sdk": "workspace:*",
-    "effect": "^3.0.0"
+    "@no-witness-labs/midday-sdk": "workspace:*"
   },
   "devDependencies": {
     "tsx": "^4.7.0",

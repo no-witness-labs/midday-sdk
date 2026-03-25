@@ -255,6 +255,9 @@ export interface DeployOptions {
   initialPrivateState?: unknown;
   /** Timeout in milliseconds. Throws `TxTimeoutError` if deployment isn't finalized in time. */
   timeout?: number;
+  /** Callback fired after the tx is submitted but before finalization.
+   *  Receives the contract address and txId so the UI can show progress. */
+  onSubmit?: (info: { address: string; txId: string }) => void;
 }
 
 /**
@@ -690,13 +693,26 @@ function deployContractEffect(
   options?: DeployOptions,
 ): Effect.Effect<DeployedContractData, ContractError | TxTimeoutError> {
   const base = Effect.gen(function* () {
-    const { initialPrivateState = {} } = options ?? {};
+    const { initialPrivateState = {}, onSubmit } = options ?? {};
     const { module, providers, logging } = contractData;
 
     yield* Effect.logDebug('Deploying contract...');
 
-    // Instrument providers to log deploy lifecycle
-    const instrumentedProviders = logging ? instrumentProviders(providers) : providers;
+    // Instrument providers to log deploy lifecycle and fire onSubmit callback
+    const baseProviders = logging ? instrumentProviders(providers) : providers;
+    const instrumentedProviders = onSubmit
+      ? {
+          ...baseProviders,
+          midnightProvider: {
+            ...baseProviders.midnightProvider,
+            submitTx: async (...args: Parameters<typeof baseProviders.midnightProvider.submitTx>) => {
+              const txId = await baseProviders.midnightProvider.submitTx(...args);
+              try { onSubmit({ address: '', txId: String(txId) }); } catch { /* ignore callback errors */ }
+              return txId;
+            },
+          },
+        }
+      : baseProviders;
 
     const deployed = yield* Effect.tryPromise({
       try: () =>
