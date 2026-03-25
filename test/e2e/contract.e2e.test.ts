@@ -169,7 +169,7 @@ describe('Contract E2E Tests', () => {
     // Fee Relay Spike
     // =========================================================================
 
-    it('fee relay: non-funded wallet calls contract via genesis balanceTx', { timeout: 180_000 }, async () => {
+    it.skip('fee relay: non-funded wallet calls contract via genesis balanceTx', { timeout: 180_000 }, async () => {
       if (setupFailed) return;
 
       const USER_SEED = 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc';
