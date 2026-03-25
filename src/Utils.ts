@@ -214,7 +214,7 @@ function convertBits(data: number[], fromBits: number, toBits: number, pad: bool
 // Coin Creation
 // =============================================================================
 
-import { encodeRawTokenType, nativeToken } from '@midnight-ntwrk/ledger-v7';
+import { encodeRawTokenType, nativeToken } from '@midnight-ntwrk/ledger-v8';
 
 /**
  * Coin information containing nonce, color, and value.

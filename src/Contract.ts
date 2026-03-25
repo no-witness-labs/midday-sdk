@@ -643,6 +643,45 @@ export function loadContractModuleEffect(
 }
 
 // =============================================================================
+// Provider Instrumentation (logging)
+// =============================================================================
+
+function instrumentProviders(providers: ContractProviders): ContractProviders {
+  const log = (label: string) => console.log(`[midday-sdk] ${label} — ${new Date().toISOString()}`);
+
+  return {
+    ...providers,
+    proofProvider: {
+      ...providers.proofProvider,
+      proveTx: async (...args) => {
+        log('proofProvider.proveTx START');
+        const result = await providers.proofProvider.proveTx(...args);
+        log('proofProvider.proveTx DONE');
+        return result;
+      },
+    },
+    walletProvider: {
+      ...providers.walletProvider,
+      balanceTx: async (...args) => {
+        log('walletProvider.balanceTx START');
+        const result = await providers.walletProvider.balanceTx(...args);
+        log('walletProvider.balanceTx DONE');
+        return result;
+      },
+    },
+    midnightProvider: {
+      ...providers.midnightProvider,
+      submitTx: async (...args) => {
+        log('midnightProvider.submitTx START');
+        const result = await providers.midnightProvider.submitTx(...args);
+        log(`midnightProvider.submitTx DONE — txId: ${result}`);
+        return result;
+      },
+    },
+  };
+}
+
+// =============================================================================
 // Contract Effects
 // =============================================================================
 
@@ -656,10 +695,13 @@ function deployContractEffect(
 
     yield* Effect.logDebug('Deploying contract...');
 
+    // Instrument providers to log deploy lifecycle
+    const instrumentedProviders = logging ? instrumentProviders(providers) : providers;
+
     const deployed = yield* Effect.tryPromise({
       try: () =>
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        deployContract(providers as any, {
+        deployContract(instrumentedProviders as any, {
           compiledContract: module.compiledContract,
           privateStateId: module.privateStateId,
           initialPrivateState,

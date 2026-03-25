@@ -33,7 +33,7 @@
 
 import { Context, Data, Effect, Layer } from 'effect';
 import { BrowserLevel } from 'browser-level';
-import type { PrivateStateProvider } from '@midnight-ntwrk/midnight-js-types';
+import type { PrivateStateProvider, PrivateStateExport, ExportPrivateStatesOptions, ImportPrivateStatesOptions, ImportPrivateStatesResult, SigningKeyExport, ExportSigningKeysOptions, ImportSigningKeysOptions, ImportSigningKeysResult } from '@midnight-ntwrk/midnight-js-types';
 
 import { runEffectPromise } from './Runtime.js';
 
@@ -551,6 +551,10 @@ export function indexedDBPrivateStateProvider(
   const data = makeIndexedDB(config);
 
   return {
+    setContractAddress(): void {
+      // No-op: our implementation uses privateStateId as the key directly,
+      // so contract address scoping is handled by the caller via unique IDs.
+    },
     async get(privateStateId: string): Promise<unknown | null> {
       return get(data, privateStateId);
     },
@@ -574,6 +578,18 @@ export function indexedDBPrivateStateProvider(
     },
     async clearSigningKeys(): Promise<void> {
       return clearSigningKeys(data);
+    },
+    async exportPrivateStates(_options?: ExportPrivateStatesOptions): Promise<PrivateStateExport> {
+      throw new Error('exportPrivateStates is not yet supported');
+    },
+    async importPrivateStates(_exportData: PrivateStateExport, _options?: ImportPrivateStatesOptions): Promise<ImportPrivateStatesResult> {
+      throw new Error('importPrivateStates is not yet supported');
+    },
+    async exportSigningKeys(_options?: ExportSigningKeysOptions): Promise<SigningKeyExport> {
+      throw new Error('exportSigningKeys is not yet supported');
+    },
+    async importSigningKeys(_exportData: SigningKeyExport, _options?: ImportSigningKeysOptions): Promise<ImportSigningKeysResult> {
+      throw new Error('importSigningKeys is not yet supported');
     },
   };
 }
@@ -592,6 +608,9 @@ export function inMemoryPrivateStateProvider(): PrivateStateProvider<string, unk
   const data = makeInMemory();
 
   return {
+    setContractAddress(): void {
+      // No-op: our implementation uses privateStateId as the key directly.
+    },
     async get(privateStateId: string): Promise<unknown | null> {
       return get(data, privateStateId);
     },
@@ -615,6 +634,18 @@ export function inMemoryPrivateStateProvider(): PrivateStateProvider<string, unk
     },
     async clearSigningKeys(): Promise<void> {
       return clearSigningKeys(data);
+    },
+    async exportPrivateStates(_options?: ExportPrivateStatesOptions): Promise<PrivateStateExport> {
+      throw new Error('exportPrivateStates is not yet supported');
+    },
+    async importPrivateStates(_exportData: PrivateStateExport, _options?: ImportPrivateStatesOptions): Promise<ImportPrivateStatesResult> {
+      throw new Error('importPrivateStates is not yet supported');
+    },
+    async exportSigningKeys(_options?: ExportSigningKeysOptions): Promise<SigningKeyExport> {
+      throw new Error('exportSigningKeys is not yet supported');
+    },
+    async importSigningKeys(_exportData: SigningKeyExport, _options?: ImportSigningKeysOptions): Promise<ImportSigningKeysResult> {
+      throw new Error('importSigningKeys is not yet supported');
     },
   };
 }

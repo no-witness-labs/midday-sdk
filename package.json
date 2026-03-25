@@ -43,26 +43,26 @@
   "dependencies": {
     "@effect/platform": "^0.77.0",
     "@effect/schema": "^0.75.0",
-    "@midnight-ntwrk/compact-js": "2.4.0",
-    "@midnight-ntwrk/compact-runtime": "0.14.0",
+    "@midnight-ntwrk/compact-js": "2.5.0",
+    "@midnight-ntwrk/compact-runtime": "0.15.0",
     "@midnight-ntwrk/dapp-connector-api": "4.0.1",
-    "@midnight-ntwrk/ledger-v7": "7.0.2",
-    "@midnight-ntwrk/midnight-js-contracts": "3.0.0",
-    "@midnight-ntwrk/midnight-js-fetch-zk-config-provider": "3.0.0",
-    "@midnight-ntwrk/midnight-js-http-client-proof-provider": "3.0.0",
-    "@midnight-ntwrk/midnight-js-indexer-public-data-provider": "3.0.0",
-    "@midnight-ntwrk/midnight-js-network-id": "3.0.0",
-    "@midnight-ntwrk/midnight-js-node-zk-config-provider": "3.0.0",
-    "@midnight-ntwrk/midnight-js-types": "3.0.0",
-    "@midnight-ntwrk/wallet-sdk-address-format": "3.0.0",
-    "@midnight-ntwrk/wallet-sdk-dust-wallet": "2.0.0-rc.2",
-    "@midnight-ntwrk/wallet-sdk-facade": "2.0.0-rc.2",
-    "@midnight-ntwrk/wallet-sdk-hd": "3.0.0",
-    "@midnight-ntwrk/wallet-sdk-shielded": "2.0.0-rc.2",
-    "@midnight-ntwrk/wallet-sdk-unshielded-wallet": "2.0.0-rc.2",
+    "@midnight-ntwrk/ledger-v8": "8.0.3",
+    "@midnight-ntwrk/midnight-js-contracts": "4.0.2",
+    "@midnight-ntwrk/midnight-js-fetch-zk-config-provider": "4.0.2",
+    "@midnight-ntwrk/midnight-js-http-client-proof-provider": "4.0.2",
+    "@midnight-ntwrk/midnight-js-indexer-public-data-provider": "4.0.2",
+    "@midnight-ntwrk/midnight-js-network-id": "4.0.2",
+    "@midnight-ntwrk/midnight-js-node-zk-config-provider": "4.0.2",
+    "@midnight-ntwrk/midnight-js-types": "4.0.2",
+    "@midnight-ntwrk/wallet-sdk-address-format": "3.1.0",
+    "@midnight-ntwrk/wallet-sdk-dust-wallet": "3.0.0",
+    "@midnight-ntwrk/wallet-sdk-facade": "3.0.0",
+    "@midnight-ntwrk/wallet-sdk-hd": "3.0.1",
+    "@midnight-ntwrk/wallet-sdk-shielded": "2.1.0",
+    "@midnight-ntwrk/wallet-sdk-unshielded-wallet": "2.1.0",
     "browser-level": "^1.0.1",
     "dockerode": "^4.0.7",
-    "effect": "^3.19.15",
+    "effect": "^3.19.16",
     "pino": "^8.16.0",
     "pino-pretty": "^10.2.3",
     "rxjs": "^7.8.1",
@@ -83,7 +83,7 @@
     "node": ">=18.0.0"
   },
   "peerDependencies": {
-    "@midnight-ntwrk/compact-runtime": "0.14.0"
+    "@midnight-ntwrk/compact-runtime": "0.15.0"
   },
   "packageManager": "pnpm@9.0.0",
   "keywords": [
@@ -109,7 +109,7 @@
   },
   "pnpm": {
     "overrides": {
-      "@midnight-ntwrk/ledger-v7": "7.0.2"
+      "@midnight-ntwrk/ledger-v8": "8.0.3"
     }
   }
 }

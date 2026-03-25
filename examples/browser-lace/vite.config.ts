@@ -20,7 +20,9 @@ function zkConfigMiddleware(contractPath: string): Plugin {
       server.middlewares.use('/zk-config', async (req, res, next) => {
         const url = req.url || '';
         // Match pattern: /{circuitId}/{type}
-        const match = url.match(/^\/([^/]+)\/(zkir|prover-key|verifier-key)$/);
+        // Use (.+) not ([^/]+) — built-in circuits have multi-segment IDs
+        // like midnight/zswap/output, midnight/zswap/input, etc.
+        const match = url.match(/^\/(.+)\/(zkir|prover-key|verifier-key)$/);
 
         if (!match) {
           return next();
@@ -74,9 +76,15 @@ export default defineConfig({
     // but include deps that contain Wasm so vite-plugin-wasm can handle them
     exclude: ['@no-witness-labs/midday-sdk'],
     include: [
-      '@midnight-ntwrk/ledger-v7',
+      '@midnight-ntwrk/ledger-v8',
       '@midnight-ntwrk/compact-runtime',
+      '@midnight-ntwrk/compact-js',
     ],
+  },
+  resolve: {
+    // Ensure compact-js is loaded only once — it uses Symbol() (not Symbol.for())
+    // for its internal TypeId, so dual instances cause "ctor" undefined errors.
+    dedupe: ['@midnight-ntwrk/compact-js'],
   },
   server: {
     fs: {
