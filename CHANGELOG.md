@@ -1,5 +1,15 @@
 # @no-witness-labs/midday-sdk
 
+## 0.4.1
+
+### Patch Changes
+
+- Split deploy flow to show contract address before finalization
+
+  - Use createUnprovenDeployTx + submitTxAsync instead of deployContract
+  - onSubmit callback now fires with both address and txId after submission
+  - Fixes browser dapps not seeing contract address until finalization completes
+
 ## 0.4.0
 
 ### Minor Changes

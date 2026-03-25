@@ -1,5 +1,12 @@
 # @examples/counter
 
+## 0.0.9
+
+### Patch Changes
+
+- Updated dependencies
+  - @no-witness-labs/midday-sdk@0.4.1
+
 ## 0.0.8
 
 ### Patch Changes
