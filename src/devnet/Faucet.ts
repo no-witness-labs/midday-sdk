@@ -10,8 +10,7 @@
 
 import { Effect } from 'effect';
 import { createServer, type Server } from 'http';
-import * as Rx from 'rxjs';
-import * as ledger from '@midnight-ntwrk/ledger-v7';
+import * as ledger from '@midnight-ntwrk/ledger-v8';
 import { WalletFacade } from '@midnight-ntwrk/wallet-sdk-facade';
 import { HDWallet, Roles } from '@midnight-ntwrk/wallet-sdk-hd';
 import { ShieldedWallet } from '@midnight-ntwrk/wallet-sdk-shielded';
@@ -27,6 +26,7 @@ import {
   ShieldedAddress,
   ShieldedCoinPublicKey,
   ShieldedEncryptionPublicKey,
+  UnshieldedAddress,
 } from '@midnight-ntwrk/wallet-sdk-address-format';
 
 import type { NetworkConfig } from '../Config.js';
@@ -117,23 +117,26 @@ async function createWallet(keys: DerivedKeys, networkConfig: NetworkConfig): Pr
       indexerWsUrl: networkConfig.indexerWS,
     },
     indexerUrl: networkConfig.indexerWS,
+    txHistoryStorage: new InMemoryTransactionHistoryStorage(),
   };
 
-  const shieldedWallet = ShieldedWallet(configuration).startWithSecretKeys(keys.shieldedSecretKeys);
-  const dustWallet = DustWallet(configuration).startWithSecretKey(
-    keys.dustSecretKey,
-    ledger.LedgerParameters.initialParameters().dust,
-  );
-  const unshieldedWallet = UnshieldedWallet({
-    ...configuration,
-    txHistoryStorage: new InMemoryTransactionHistoryStorage(),
-  }).startWithPublicKey(UnshieldedPublicKey.fromKeyStore(keys.unshieldedKeystore));
-
-  const wallet = new WalletFacade(shieldedWallet, unshieldedWallet, dustWallet);
+  const wallet = await WalletFacade.init({
+    configuration,
+    shielded: () => ShieldedWallet(configuration).startWithSecretKeys(keys.shieldedSecretKeys),
+    unshielded: () =>
+      UnshieldedWallet(configuration).startWithPublicKey(
+        UnshieldedPublicKey.fromKeyStore(keys.unshieldedKeystore),
+      ),
+    dust: () =>
+      DustWallet(configuration).startWithSecretKey(
+        keys.dustSecretKey,
+        ledger.LedgerParameters.initialParameters().dust,
+      ),
+  });
   await wallet.start(keys.shieldedSecretKeys, keys.dustSecretKey);
 
   // Wait for sync
-  await Rx.firstValueFrom(wallet.state().pipe(Rx.filter((s) => s.isSynced)));
+  await wallet.waitForSyncedState();
 
   return wallet;
 }
@@ -170,6 +173,10 @@ export async function fundShielded(
   const genesisWallet = await createWallet(genesisKeys, networkConfig);
 
   try {
+    // Parse bech32m string to ShieldedAddress
+    const parsedAddr = MidnightBech32m.parse(shieldedAddress);
+    const receiverAddr = ShieldedAddress.codec.decode(networkConfig.networkId, parsedAddr);
+
     // Create transfer transaction
     const ttl = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes TTL
     const recipe = await genesisWallet.transferTransaction(
@@ -179,7 +186,7 @@ export async function fundShielded(
           outputs: [
             {
               type: ledger.nativeToken().raw,
-              receiverAddress: shieldedAddress,
+              receiverAddress: receiverAddr,
               amount,
             },
           ],
@@ -239,6 +246,10 @@ export async function fundUnshielded(
   const genesisWallet = await createWallet(genesisKeys, networkConfig);
 
   try {
+    // Parse bech32m string to UnshieldedAddress
+    const parsedAddr = MidnightBech32m.parse(unshieldedAddress);
+    const receiverAddr = UnshieldedAddress.codec.decode(networkConfig.networkId, parsedAddr);
+
     // Create transfer transaction
     const ttl = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes TTL
     const recipe = await genesisWallet.transferTransaction(
@@ -248,7 +259,7 @@ export async function fundUnshielded(
           outputs: [
             {
               type: ledger.nativeToken().raw,
-              receiverAddress: unshieldedAddress,
+              receiverAddress: receiverAddr,
               amount,
             },
           ],

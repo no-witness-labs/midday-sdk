@@ -115,7 +115,7 @@ export interface ResolvedDevNetConfig {
  * @category constants
  */
 export const DEFAULT_NODE_CONFIG: Required<NodeConfig> = {
-  image: 'midnightntwrk/midnight-node:0.20.1',
+  image: 'midnightntwrk/midnight-node:0.22.3',
   port: 9944,
   cfgPreset: 'dev',
 } as const;
@@ -127,7 +127,7 @@ export const DEFAULT_NODE_CONFIG: Required<NodeConfig> = {
  * @category constants
  */
 export const DEFAULT_INDEXER_CONFIG: Required<IndexerConfig> = {
-  image: 'midnightntwrk/indexer-standalone:3.0.0',
+  image: 'midnightntwrk/indexer-standalone:4.0.0',
   port: 8088,
   logLevel: 'info',
 } as const;
@@ -139,7 +139,7 @@ export const DEFAULT_INDEXER_CONFIG: Required<IndexerConfig> = {
  * @category constants
  */
 export const DEFAULT_PROOF_SERVER_CONFIG: Required<ProofServerConfig> = {
-  image: 'bricktowers/proof-server:7.0.0',
+  image: 'midnightntwrk/proof-server:8.0.3',
   port: 6300,
   zkParamsPath: '',
 } as const;

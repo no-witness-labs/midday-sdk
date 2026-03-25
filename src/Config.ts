@@ -99,7 +99,10 @@ export const DEFAULT_TX_TTL_MS = 30 * 60 * 1000;
  * @category constructors
  */
 export function publicDataProvider(config: NetworkConfig): ReturnType<typeof indexerPublicDataProvider> {
-  return indexerPublicDataProvider(config.indexer, config.indexerWS);
+  // In browser environments, pass the native WebSocket; in Node.js, let the library default to the `ws` package
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const webSocketImpl = typeof globalThis.WebSocket !== 'undefined' ? globalThis.WebSocket as any : undefined;
+  return indexerPublicDataProvider(config.indexer, config.indexerWS, webSocketImpl);
 }
 
 // =============================================================================

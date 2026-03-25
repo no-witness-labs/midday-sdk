@@ -9,7 +9,7 @@
  */
 
 import { createServer, type Server } from 'http';
-import * as ledger from '@midnight-ntwrk/ledger-v7';
+import * as ledger from '@midnight-ntwrk/ledger-v8';
 import { WalletFacade } from '@midnight-ntwrk/wallet-sdk-facade';
 import { HDWallet, Roles } from '@midnight-ntwrk/wallet-sdk-hd';
 import { ShieldedWallet } from '@midnight-ntwrk/wallet-sdk-shielded';
@@ -20,8 +20,7 @@ import {
   UnshieldedWallet,
   InMemoryTransactionHistoryStorage,
 } from '@midnight-ntwrk/wallet-sdk-unshielded-wallet';
-import * as Rx from 'rxjs';
-import { Transaction, type FinalizedTransaction } from '@midnight-ntwrk/ledger-v7';
+import { Transaction, type FinalizedTransaction } from '@midnight-ntwrk/ledger-v8';
 import type { UnboundTransaction } from '@midnight-ntwrk/midnight-js-types';
 
 import { DEFAULT_TX_TTL_MS, type NetworkConfig } from '../Config.js';
@@ -86,23 +85,26 @@ async function createWallet(keys: DerivedKeys, networkConfig: NetworkConfig): Pr
       indexerWsUrl: networkConfig.indexerWS,
     },
     indexerUrl: networkConfig.indexerWS,
+    txHistoryStorage: new InMemoryTransactionHistoryStorage(),
   };
 
-  const shieldedWallet = ShieldedWallet(configuration).startWithSecretKeys(keys.shieldedSecretKeys);
-  const dustWallet = DustWallet(configuration).startWithSecretKey(
-    keys.dustSecretKey,
-    ledger.LedgerParameters.initialParameters().dust,
-  );
-  const unshieldedWallet = UnshieldedWallet({
-    ...configuration,
-    txHistoryStorage: new InMemoryTransactionHistoryStorage(),
-  }).startWithPublicKey(UnshieldedPublicKey.fromKeyStore(keys.unshieldedKeystore));
-
-  const wallet = new WalletFacade(shieldedWallet, unshieldedWallet, dustWallet);
+  const wallet = await WalletFacade.init({
+    configuration,
+    shielded: () => ShieldedWallet(configuration).startWithSecretKeys(keys.shieldedSecretKeys),
+    unshielded: () =>
+      UnshieldedWallet(configuration).startWithPublicKey(
+        UnshieldedPublicKey.fromKeyStore(keys.unshieldedKeystore),
+      ),
+    dust: () =>
+      DustWallet(configuration).startWithSecretKey(
+        keys.dustSecretKey,
+        ledger.LedgerParameters.initialParameters().dust,
+      ),
+  });
   await wallet.start(keys.shieldedSecretKeys, keys.dustSecretKey);
 
   // Wait for sync
-  await Rx.firstValueFrom(wallet.state().pipe(Rx.filter((s) => s.isSynced)));
+  await wallet.waitForSyncedState();
 
   return wallet;
 }
@@ -130,7 +132,8 @@ export interface ServerOptions {
  * to balance and submit transactions on behalf of browser wallets.
  *
  * Endpoints:
- * - `POST /balance-tx` — accepts `{ tx: "<hex>" }`, returns `{ tx: "<hex>" }`
+ * - `POST /balance-tx` — accepts `{ tx: "<hex>" }` (UnboundTransaction), returns `{ tx: "<hex>" }` (FinalizedTransaction)
+ * - `POST /balance-finalized-tx` — accepts `{ tx: "<hex>" }` (FinalizedTransaction), adds dust only, returns `{ tx: "<hex>" }`
  * - `POST /submit-tx` — accepts `{ tx: "<hex>" }`, returns `{ txId: "<hex>" }`
  * - `GET /health` — returns `{ status: "ok" }`
  *
@@ -245,6 +248,63 @@ export function startServer(networkConfig: NetworkConfig, options: ServerOptions
           res.end(JSON.stringify({ tx: finalizedHex }));
         } catch (error) {
           console.error('[fee-relay] /balance-tx error:', error);
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }));
+        }
+      });
+      return;
+    }
+
+    // Balance finalized transaction (split flow: add dust only)
+    if (req.method === 'POST' && req.url === '/balance-finalized-tx') {
+      let body = '';
+      req.on('data', (chunk) => (body += chunk));
+      req.on('end', async () => {
+        try {
+          const { tx: txHex } = JSON.parse(body);
+          if (!txHex) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing tx field (hex-encoded FinalizedTransaction)' }));
+            return;
+          }
+
+          const { wallet, keys } = await getWallet();
+
+          // Deserialize FinalizedTransaction from hex
+          // FinalizedTransaction = Transaction<SignatureEnabled, Proof, Binding>
+          const txBytes = hexToBytes(txHex);
+          const finalizedTx = Transaction.deserialize(
+            'signature' as ledger.SignatureEnabled['instance'],
+            'proof' as ledger.Proof['instance'],
+            'binding' as ledger.Binding['instance'],
+            txBytes,
+          ) as unknown as FinalizedTransaction;
+
+          // Balance with dust only — relay covers fees, user already added value inputs
+          const ttl = new Date(Date.now() + txTtlMs);
+          const recipe = await wallet.balanceFinalizedTransaction(
+            finalizedTx,
+            {
+              shieldedSecretKeys: keys.shieldedSecretKeys,
+              dustSecretKey: keys.dustSecretKey,
+            },
+            { ttl, tokenKindsToBalance: ['dust'] },
+          );
+
+          // Sign relay's balancing transaction intents (originalTransaction is already finalized)
+          const signFn = (payload: Uint8Array) => keys.unshieldedKeystore.signData(payload);
+          signTransactionIntents(recipe.balancingTransaction, signFn, 'pre-proof');
+
+          const finalized = await wallet.finalizeRecipe(recipe);
+
+          // Serialize back to hex
+          const finalizedBytes = finalized.serialize();
+          const finalizedHex = bytesToHex(finalizedBytes);
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ tx: finalizedHex }));
+        } catch (error) {
+          console.error('[fee-relay] /balance-finalized-tx error:', error);
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }));
         }

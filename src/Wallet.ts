@@ -18,8 +18,8 @@
 
 import { Context, Data, Effect, Layer } from 'effect';
 import * as Rx from 'rxjs';
-import * as ledger from '@midnight-ntwrk/ledger-v7';
-import { Transaction, type FinalizedTransaction, type TransactionId } from '@midnight-ntwrk/ledger-v7';
+import * as ledger from '@midnight-ntwrk/ledger-v8';
+import { Transaction, type FinalizedTransaction, type TransactionId } from '@midnight-ntwrk/ledger-v8';
 import { WalletFacade } from '@midnight-ntwrk/wallet-sdk-facade';
 import { HDWallet, Roles } from '@midnight-ntwrk/wallet-sdk-hd';
 import { ShieldedWallet } from '@midnight-ntwrk/wallet-sdk-shielded';
@@ -31,7 +31,6 @@ import {
   InMemoryTransactionHistoryStorage,
 } from '@midnight-ntwrk/wallet-sdk-unshielded-wallet';
 import type { WalletProvider, MidnightProvider, UnboundTransaction } from '@midnight-ntwrk/midnight-js-types';
-import { getNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 
 import { DEFAULT_TX_TTL_MS, type NetworkConfig } from './Config.js';
 import { hexToBytes, bytesToHex } from './Utils.js';
@@ -141,9 +140,9 @@ export interface ConnectedAPI {
   }>;
   getUnshieldedAddress(): Promise<{ unshieldedAddress: string }>;
   getDustAddress(): Promise<{ dustAddress: string }>;
-  balanceUnsealedTransaction(tx: string): Promise<{ tx: string }>;
-  balanceSealedTransaction(tx: string): Promise<{ tx: string }>;
-  submitTransaction(tx: string): Promise<string>;
+  balanceUnsealedTransaction(tx: string, options?: { payFees?: boolean }): Promise<{ tx: string }>;
+  balanceSealedTransaction(tx: string, options?: { payFees?: boolean }): Promise<{ tx: string }>;
+  submitTransaction(tx: string): Promise<void>;
   getProvingProvider(keyMaterialProvider: KeyMaterialProvider): Promise<ProvingProvider>;
   getConfiguration(): Promise<Configuration>;
   hintUsage(methodNames: string[]): Promise<void>;
@@ -495,6 +494,7 @@ function initEffect(seed: string, networkConfig: NetworkConfig): Effect.Effect<W
           indexerWsUrl: networkConfig.indexerWS,
         },
         indexerUrl: networkConfig.indexerWS,
+        txHistoryStorage: new InMemoryTransactionHistoryStorage(),
       };
 
       const hdWallet = HDWallet.fromSeed(seedBytes);
@@ -512,17 +512,19 @@ function initEffect(seed: string, networkConfig: NetworkConfig): Effect.Effect<W
       const dustSecretKey = ledger.DustSecretKey.fromSeed(derivationResult.keys[Roles.Dust]);
       const unshieldedKeystore = createKeystore(derivationResult.keys[Roles.NightExternal], configuration.networkId);
 
-      const shieldedWallet = ShieldedWallet(configuration).startWithSecretKeys(shieldedSecretKeys);
-      const dustWallet = DustWallet(configuration).startWithSecretKey(
-        dustSecretKey,
-        ledger.LedgerParameters.initialParameters().dust,
-      );
-      const unshieldedWallet = UnshieldedWallet({
-        ...configuration,
-        txHistoryStorage: new InMemoryTransactionHistoryStorage(),
-      }).startWithPublicKey(UnshieldedPublicKey.fromKeyStore(unshieldedKeystore));
-
-      const wallet = new WalletFacade(shieldedWallet, unshieldedWallet, dustWallet);
+      const wallet = await WalletFacade.init({
+        configuration,
+        shielded: () => ShieldedWallet(configuration).startWithSecretKeys(shieldedSecretKeys),
+        unshielded: () =>
+          UnshieldedWallet(configuration).startWithPublicKey(
+            UnshieldedPublicKey.fromKeyStore(unshieldedKeystore),
+          ),
+        dust: () =>
+          DustWallet(configuration).startWithSecretKey(
+            dustSecretKey,
+            ledger.LedgerParameters.initialParameters().dust,
+          ),
+      });
       await wallet.start(shieldedSecretKeys, dustSecretKey);
 
       return { wallet, shieldedSecretKeys, dustSecretKey, unshieldedKeystore };
@@ -577,8 +579,33 @@ function deriveAddressEffect(seed: string, networkId: string): Effect.Effect<str
 // Internal Effects — Browser Wallet Connector
 // =============================================================================
 
+/**
+ * Find the first available wallet injected under `window.midnight`.
+ *
+ * Lace v2.36.0+ injects under a UUID key (CAIP-372 standard) instead of
+ * the legacy `mnLace` key. This helper checks both patterns.
+ *
+ * @internal
+ */
+function findInjectedWallet(): InitialAPI | undefined {
+  if (typeof window === 'undefined' || !window.midnight) return undefined;
+
+  // Legacy key first
+  if (window.midnight.mnLace) return window.midnight.mnLace;
+
+  // CAIP-372: discover any wallet that exposes the expected shape
+  for (const key of Object.keys(window.midnight)) {
+    const candidate = window.midnight[key];
+    if (candidate && typeof candidate.connect === 'function' && typeof candidate.apiVersion === 'string') {
+      return candidate;
+    }
+  }
+
+  return undefined;
+}
+
 function isAvailableEffect(): Effect.Effect<boolean, never> {
-  return Effect.sync(() => typeof window !== 'undefined' && !!window.midnight?.mnLace);
+  return Effect.sync(() => !!findInjectedWallet());
 }
 
 function waitForWalletEffect(timeout: number = 5000): Effect.Effect<InitialAPI, WalletError> {
@@ -587,9 +614,8 @@ function waitForWalletEffect(timeout: number = 5000): Effect.Effect<InitialAPI, 
       const start = Date.now();
 
       while (Date.now() - start < timeout) {
-        if (window.midnight?.mnLace) {
-          return window.midnight.mnLace;
-        }
+        const wallet = findInjectedWallet();
+        if (wallet) return wallet;
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
 
@@ -699,20 +725,33 @@ function balanceTxEffect(
       const txBytes = tx.serialize();
       const serializedTx = bytesToHex(txBytes);
 
-      const result = await wallet.balanceUnsealedTransaction(serializedTx);
+      let result: { tx: string };
+      try {
+        result = await wallet.balanceUnsealedTransaction(serializedTx);
+      } catch (e: unknown) {
+        // DApp Connector APIError has: type, code, reason fields
+        const err = e as { type?: string; code?: string; reason?: string; message?: string };
+        const details = [
+          err.code && `code=${err.code}`,
+          err.reason && `reason=${err.reason}`,
+          err.type && `type=${err.type}`,
+          err.message && `message=${err.message}`,
+        ].filter(Boolean).join(', ') || JSON.stringify(e);
+        console.error('[midday-sdk] Lace balanceUnsealedTransaction error:', e);
+        throw new Error(`Lace balanceUnsealedTransaction failed: ${details}`);
+      }
 
       const resultBytes = hexToBytes(result.tx);
-      const networkId = getNetworkId();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const transaction = (Transaction as any).deserialize(
-        { SignatureEnabled: true },
-        { Proof: true },
-        { Binding: true },
-        resultBytes,
-        networkId,
-      ) as FinalizedTransaction;
-
-      return transaction;
+      try {
+        return Transaction.deserialize(
+          'signature' as ledger.SignatureEnabled['instance'],
+          'proof' as ledger.Proof['instance'],
+          'binding' as ledger.Binding['instance'],
+          resultBytes,
+        ) as FinalizedTransaction;
+      } catch (e) {
+        throw new Error(`Transaction.deserialize failed (${resultBytes.length} bytes): ${e instanceof Error ? e.message : JSON.stringify(e)}`);
+      }
     },
     catch: (cause) =>
       new WalletError({
@@ -720,6 +759,30 @@ function balanceTxEffect(
         message: `Failed to balance transaction: ${cause instanceof Error ? cause.message : String(cause)}`,
       }),
   });
+}
+
+/**
+ * Balance a transaction via Lace with `{ payFees: false }`.
+ *
+ * Lace adds shielded + unshielded inputs and signs, but does NOT add dust (fees).
+ * The caller is expected to send the resulting FinalizedTransaction to a fee relay
+ * that adds dust-only balancing.
+ *
+ * @internal
+ */
+export async function balanceWithoutFees(
+  wallet: ConnectedAPI,
+  tx: UnboundTransaction,
+): Promise<FinalizedTransaction> {
+  const txHex = bytesToHex(tx.serialize());
+  const result = await wallet.balanceUnsealedTransaction(txHex, { payFees: false });
+  const resultBytes = hexToBytes(result.tx);
+  return Transaction.deserialize(
+    'signature' as ledger.SignatureEnabled['instance'],
+    'proof' as ledger.Proof['instance'],
+    'binding' as ledger.Binding['instance'],
+    resultBytes,
+  ) as FinalizedTransaction;
 }
 
 function submitTxEffect(
