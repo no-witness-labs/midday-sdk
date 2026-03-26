@@ -263,6 +263,9 @@ export interface DeployOptions {
   /** Callback fired after the tx is submitted but before finalization.
    *  Receives the contract address and txId so the UI can show progress. */
   onSubmit?: (info: { address: string; txId: string }) => void;
+  /** Skip waiting for tx finalization. Returns immediately after submission.
+   *  The contract handle is fully functional — calls will work once the deploy tx lands on-chain. */
+  skipFinalization?: boolean;
 }
 
 /**
@@ -698,7 +701,7 @@ function deployContractEffect(
   options?: DeployOptions,
 ): Effect.Effect<DeployedContractData, ContractError | TxTimeoutError> {
   const base = Effect.gen(function* () {
-    const { initialPrivateState = {}, onSubmit } = options ?? {};
+    const { initialPrivateState = {}, onSubmit, skipFinalization } = options ?? {};
     const { module, providers, logging } = contractData;
 
     yield* Effect.logDebug('Deploying contract...');
@@ -760,15 +763,19 @@ function deployContractEffect(
       await providers.privateStateProvider.setSigningKey(address as any, (unprovenDeployTxData as any).private.signingKey);
     });
 
-    // Step 4: Wait for finalization (may fail in browser due to indexer WAF)
-    yield* Effect.tryPromise({
-      try: () => providers.publicDataProvider.watchForTxData(String(txId)),
-      catch: (cause) =>
-        new ContractError({
-          cause,
-          message: `Deploy tx submitted (address: ${address}) but finalization watch failed: ${cause instanceof Error ? cause.message : String(cause)}`,
-        }),
-    });
+    // Step 4: Wait for finalization (optional)
+    if (!skipFinalization) {
+      yield* Effect.tryPromise({
+        try: () => providers.publicDataProvider.watchForTxData(String(txId)),
+        catch: (cause) =>
+          new ContractError({
+            cause,
+            message: `Deploy tx submitted (address: ${address}) but finalization watch failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+          }),
+      });
+    } else {
+      yield* Effect.logDebug('Skipping finalization watch (skipFinalization: true)');
+    }
 
     yield* Effect.logDebug(`Contract deployed and finalized at: ${address}`);
 

@@ -1,5 +1,15 @@
 # @no-witness-labs/midday-sdk
 
+## 0.4.2
+
+### Patch Changes
+
+- Add skipFinalization option to DeployOptions
+
+  - When `skipFinalization: true`, deploy returns immediately after tx submission
+  - Contract handle is fully functional once the deploy tx lands on-chain
+  - Useful for browser dapps where indexer finalization watch may fail
+
 ## 0.4.1
 
 ### Patch Changes
