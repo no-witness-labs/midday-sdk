@@ -1,5 +1,11 @@
 # @no-witness-labs/midday-sdk
 
+## 0.4.3
+
+### Patch Changes
+
+- 545faae: Skip HTTP fetch for built-in ZK circuits (midnight/zswap/\*) in HttpZkConfigProvider to avoid noisy 404s in browser console
+
 ## 0.4.2
 
 ### Patch Changes
