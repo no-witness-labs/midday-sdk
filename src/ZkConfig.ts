@@ -152,6 +152,15 @@ export function fromUrl(baseUrl: string): Provider {
 // HTTP Provider — Internal Effects
 // =============================================================================
 
+/**
+ * Built-in circuit IDs (e.g. `midnight/zswap/output`) are served by the proof
+ * server itself — they don't exist in user contract artifact directories.
+ * Skip the HTTP fetch to avoid noisy 404s in the browser console.
+ */
+function isBuiltinCircuit(circuitId: string): boolean {
+  return circuitId.startsWith('midnight/');
+}
+
 function fetchBytesEffect(
   provider: HttpZkConfigProviderData,
   url: string,
@@ -177,6 +186,9 @@ function getZKIREffect(
   provider: HttpZkConfigProviderData,
   circuitId: string,
 ): Effect.Effect<ZKIR, ZkConfigError> {
+  if (isBuiltinCircuit(circuitId)) {
+    return Effect.fail(new ZkConfigError({ cause: null, message: `Built-in circuit ${circuitId} — skipping HTTP fetch` }));
+  }
   return Effect.gen(function* () {
     const cached = provider.cache.get(circuitId);
     if (cached) {
@@ -192,6 +204,9 @@ function getProverKeyEffect(
   provider: HttpZkConfigProviderData,
   circuitId: string,
 ): Effect.Effect<ProverKey, ZkConfigError> {
+  if (isBuiltinCircuit(circuitId)) {
+    return Effect.fail(new ZkConfigError({ cause: null, message: `Built-in circuit ${circuitId} — skipping HTTP fetch` }));
+  }
   return Effect.gen(function* () {
     const cached = provider.cache.get(circuitId);
     if (cached) {
@@ -207,6 +222,9 @@ function getVerifierKeyEffect(
   provider: HttpZkConfigProviderData,
   circuitId: string,
 ): Effect.Effect<VerifierKey, ZkConfigError> {
+  if (isBuiltinCircuit(circuitId)) {
+    return Effect.fail(new ZkConfigError({ cause: null, message: `Built-in circuit ${circuitId} — skipping HTTP fetch` }));
+  }
   return Effect.gen(function* () {
     const cached = provider.cache.get(circuitId);
     if (cached) {

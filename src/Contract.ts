@@ -777,11 +777,24 @@ function deployContractEffect(
       yield* Effect.logDebug('Skipping finalization watch (skipFinalization: true)');
     }
 
-    yield* Effect.logDebug(`Contract deployed and finalized at: ${address}`);
+    yield* Effect.logDebug(`Contract deployed at: ${address}${skipFinalization ? ' (finalization skipped)' : ''}`);
+
+    // When skipFinalization is set, stub watchForTxData so all subsequent callTx
+    // calls also return immediately after submission without waiting for finalization.
+    const callProviders = skipFinalization
+      ? {
+          ...instrumentedProviders,
+          publicDataProvider: {
+            ...instrumentedProviders.publicDataProvider,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            watchForTxData: async (txId: any) => ({ txId, status: 'submitted' }) as any,
+          },
+        }
+      : instrumentedProviders;
 
     // Build the deployed contract handle (same shape as deployContract returns)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const callTx = createCircuitCallTxInterface(instrumentedProviders as any, module.compiledContract as any, address as any, module.privateStateId);
+    const callTx = createCircuitCallTxInterface(callProviders as any, module.compiledContract as any, address as any, module.privateStateId);
 
     return {
       address,
