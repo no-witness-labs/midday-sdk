@@ -30,6 +30,10 @@ import {
   UnshieldedWallet,
   InMemoryTransactionHistoryStorage,
 } from '@midnight-ntwrk/wallet-sdk-unshielded-wallet';
+import {
+  MidnightBech32m,
+  UnshieldedAddress,
+} from '@midnight-ntwrk/wallet-sdk-address-format';
 import type { WalletProvider, MidnightProvider, UnboundTransaction } from '@midnight-ntwrk/midnight-js-types';
 
 import { DEFAULT_TX_TTL_MS, type NetworkConfig } from './Config.js';
@@ -66,6 +70,7 @@ export interface WalletContext {
   shieldedSecretKeys: ledger.ZswapSecretKeys;
   dustSecretKey: ledger.DustSecretKey;
   unshieldedKeystore: ReturnType<typeof createKeystore>;
+  networkId: string;
 }
 
 // =============================================================================
@@ -143,6 +148,15 @@ export interface ConnectedAPI {
   balanceUnsealedTransaction(tx: string, options?: { payFees?: boolean }): Promise<{ tx: string }>;
   balanceSealedTransaction(tx: string, options?: { payFees?: boolean }): Promise<{ tx: string }>;
   submitTransaction(tx: string): Promise<void>;
+  makeTransfer(
+    desiredOutputs: Array<{
+      kind: 'shielded' | 'unshielded';
+      type: string;
+      value: bigint;
+      recipient: string;
+    }>,
+    options?: { payFees?: boolean },
+  ): Promise<{ tx: string }>;
   getProvingProvider(keyMaterialProvider: KeyMaterialProvider): Promise<ProvingProvider>;
   getConfiguration(): Promise<Configuration>;
   hintUsage(methodNames: string[]): Promise<void>;
@@ -279,6 +293,18 @@ export interface ConnectedWallet {
   getBalance(): Promise<WalletBalance>;
   /** Get WalletProvider and MidnightProvider for contract operations. */
   providers(): WalletProviders;
+  /**
+   * Move NIGHT (or any token) from the unshielded pool into the shielded pool
+   * of *this same wallet*. Required before interacting with shielded contracts
+   * (`receiveShielded`) if the wallet was funded via a faucet, which only
+   * deposits to the unshielded address.
+   */
+  shield(amount: bigint, options?: ShieldOptions): Promise<ShieldResult>;
+  /**
+   * Move NIGHT (or any token) from the shielded pool back into the unshielded
+   * pool of *this same wallet*. The inverse of {@link shield}.
+   */
+  unshield(amount: bigint, options?: ShieldOptions): Promise<ShieldResult>;
   /** Close wallet and release resources. */
   close(): Promise<void>;
   /** Support `await using wallet = await Wallet.fromSeed(...)` */
@@ -288,8 +314,36 @@ export interface ConnectedWallet {
   readonly effect: {
     getBalance(): Effect.Effect<WalletBalance, WalletError>;
     providers(): Effect.Effect<WalletProviders, WalletError>;
+    shield(amount: bigint, options?: ShieldOptions): Effect.Effect<ShieldResult, WalletError>;
+    unshield(amount: bigint, options?: ShieldOptions): Effect.Effect<ShieldResult, WalletError>;
     close(): Effect.Effect<void, WalletError>;
   };
+}
+
+/**
+ * Options for {@link ConnectedWallet.shield} and {@link ConnectedWallet.unshield}.
+ *
+ * @since 0.5.0
+ * @category model
+ */
+export interface ShieldOptions {
+  /** Transaction TTL (default: 5 minutes from now). */
+  ttl?: Date;
+  /** Raw token type hex. Defaults to native NIGHT. */
+  tokenType?: string;
+}
+
+/**
+ * Result of a {@link ConnectedWallet.shield} / {@link ConnectedWallet.unshield} call.
+ *
+ * @since 0.5.0
+ * @category model
+ */
+export interface ShieldResult {
+  /** Submitted transaction ID. */
+  txId: string;
+  /** Amount transferred in base units. */
+  amount: bigint;
 }
 
 /**
@@ -527,7 +581,7 @@ function initEffect(seed: string, networkConfig: NetworkConfig): Effect.Effect<W
       });
       await wallet.start(shieldedSecretKeys, dustSecretKey);
 
-      return { wallet, shieldedSecretKeys, dustSecretKey, unshieldedKeystore };
+      return { wallet, shieldedSecretKeys, dustSecretKey, unshieldedKeystore, networkId: networkConfig.networkId };
     },
     catch: (cause) =>
       new WalletError({
@@ -838,6 +892,119 @@ function getBalanceFromSeedEffect(walletContext: WalletContext): Effect.Effect<W
   });
 }
 
+// =============================================================================
+// Internal Effects — Self-Shield / Self-Unshield
+// =============================================================================
+
+type TransferDirection = 'shield' | 'unshield';
+
+const SHIELD_DEFAULT_TTL_MS = 5 * 60 * 1000;
+
+function shieldFromSeedEffect(
+  walletContext: WalletContext,
+  direction: TransferDirection,
+  amount: bigint,
+  options?: ShieldOptions,
+): Effect.Effect<ShieldResult, WalletError> {
+  return Effect.tryPromise({
+    try: async () => {
+      const ttl = options?.ttl ?? new Date(Date.now() + SHIELD_DEFAULT_TTL_MS);
+      const tokenType = (options?.tokenType ?? ledger.nativeToken().raw) as ledger.RawTokenType;
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const transfer: any = direction === 'shield'
+        ? {
+            type: 'shielded' as const,
+            outputs: [
+              {
+                type: tokenType,
+                receiverAddress: await walletContext.wallet.shielded.getAddress(),
+                amount,
+              },
+            ],
+          }
+        : {
+            type: 'unshielded' as const,
+            outputs: [
+              {
+                type: tokenType,
+                receiverAddress: UnshieldedAddress.codec.decode(
+                  walletContext.networkId,
+                  MidnightBech32m.parse(walletContext.unshieldedKeystore.getBech32Address().asString()),
+                ),
+                amount,
+              },
+            ],
+          };
+
+      const recipe = await walletContext.wallet.transferTransaction(
+        [transfer],
+        {
+          shieldedSecretKeys: walletContext.shieldedSecretKeys,
+          dustSecretKey: walletContext.dustSecretKey,
+        },
+        { ttl, payFees: true },
+      );
+
+      const signed = await walletContext.wallet.signRecipe(recipe, (payload: Uint8Array) =>
+        walletContext.unshieldedKeystore.signData(payload),
+      );
+      const finalized = await walletContext.wallet.finalizeRecipe(signed);
+      const txId = await walletContext.wallet.submitTransaction(finalized);
+
+      return { txId, amount };
+    },
+    catch: (cause) =>
+      new WalletError({
+        cause,
+        message: `Failed to ${direction} ${amount}: ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
+}
+
+function shieldFromBrowserEffect(
+  connection: WalletConnection,
+  direction: TransferDirection,
+  amount: bigint,
+  options?: ShieldOptions,
+): Effect.Effect<ShieldResult, WalletError> {
+  return Effect.tryPromise({
+    try: async () => {
+      const tokenType = options?.tokenType ?? ledger.nativeToken().raw;
+
+      if (typeof connection.wallet.makeTransfer !== 'function') {
+        throw new Error(
+          'Lace wallet does not expose makeTransfer. Upgrade Lace to a version that supports the Midnight DApp Connector ≥ 4.0.',
+        );
+      }
+
+      const recipient = direction === 'shield'
+        ? connection.addresses.shieldedAddress
+        : (await connection.wallet.getUnshieldedAddress()).unshieldedAddress;
+
+      const { tx } = await connection.wallet.makeTransfer(
+        [
+          {
+            kind: direction === 'shield' ? 'shielded' : 'unshielded',
+            type: tokenType,
+            value: amount,
+            recipient,
+          },
+        ],
+        { payFees: true },
+      );
+
+      await connection.wallet.submitTransaction(tx);
+      return { txId: tx, amount };
+    },
+    catch: (cause) =>
+      new WalletError({
+        cause,
+        message: `Failed to ${direction} ${amount}: ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
+}
+
 function getBalanceFromBrowserEffect(connection: WalletConnection): Effect.Effect<WalletBalance, WalletError> {
   return Effect.tryPromise({
     try: async () => {
@@ -921,6 +1088,15 @@ function createConnectedWalletHandle(
   const closeEff = (): Effect.Effect<void, WalletError> =>
     backend.type === 'seed' ? closeEffect(backend.context) : Effect.void;
 
+  const shieldEff = (
+    direction: TransferDirection,
+    amount: bigint,
+    options?: ShieldOptions,
+  ): Effect.Effect<ShieldResult, WalletError> =>
+    backend.type === 'seed'
+      ? shieldFromSeedEffect(backend.context, direction, amount, options)
+      : shieldFromBrowserEffect(backend.connection, direction, amount, options);
+
   return {
     type: 'connected',
     source: backend.type === 'seed' ? 'seed' : 'browser',
@@ -930,12 +1106,16 @@ function createConnectedWalletHandle(
 
     getBalance: () => runEffectPromise(getBalanceEff()),
     providers: () => runEffect(providersEff()),
+    shield: (amount, options) => runEffectPromise(shieldEff('shield', amount, options)),
+    unshield: (amount, options) => runEffectPromise(shieldEff('unshield', amount, options)),
     close: () => runEffectPromise(closeEff()),
     [Symbol.asyncDispose]: () => runEffectPromise(closeEff()),
 
     effect: {
       getBalance: getBalanceEff,
       providers: providersEff,
+      shield: (amount, options) => shieldEff('shield', amount, options),
+      unshield: (amount, options) => shieldEff('unshield', amount, options),
       close: closeEff,
     },
   };

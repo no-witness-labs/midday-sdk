@@ -1,5 +1,27 @@
 # @no-witness-labs/midday-sdk
 
+## 0.5.0
+
+### Minor Changes
+
+- Add `ConnectedWallet.shield(amount)` and `ConnectedWallet.unshield(amount)` helpers for moving NIGHT (or any token) between the shielded and unshielded pools of the same wallet.
+
+  Works on both seed and browser (Lace) backends. Required before interacting with shielded contracts (e.g. `receiveShielded`) when the wallet was funded via a faucet — preview/preprod faucets only deposit to the unshielded address, so users must self-shield before making shielded contract calls.
+
+  ```ts
+  const wallet = await Midday.Wallet.fromBrowser("preview");
+  const bal = await wallet.getBalance();
+  if (!bal.shielded[Midday.Utils.getNativeTokenColor()]) {
+    await wallet.shield(1_000_000_000n); // 1 tNIGHT
+  }
+  ```
+
+  Browser backend uses the Lace DApp Connector's `makeTransfer` (added to `ConnectedAPI` interface). Lace ≥ Midnight DApp Connector 4.0 is required; an explicit error is thrown on older versions.
+
+### Patch Changes
+
+- 545faae: Skip HTTP fetch for built-in ZK circuits (midnight/zswap/\*) in HttpZkConfigProvider to avoid noisy 404s in browser console
+
 ## 0.4.2
 
 ### Patch Changes
