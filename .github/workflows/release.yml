@@ -33,8 +33,8 @@ jobs:
           cache: "pnpm"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Update npm to latest (required for trusted publishing)
-        run: npm install -g npm@latest
+      - name: Update npm to 11.12.1 (required for trusted publishing)
+        run: npm install -g npm@11.12.1 || npm install -g npm@11.12.1
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
