@@ -305,6 +305,22 @@ export interface ConnectedWallet {
    * pool of *this same wallet*. The inverse of {@link shield}.
    */
   unshield(amount: bigint, options?: ShieldOptions): Promise<ShieldResult>;
+  /**
+   * Register unshielded NIGHT UTXOs for DUST generation. On Midnight, DUST is
+   * produced over time from registered NIGHT holdings and is used to pay tx
+   * fees. Required once per wallet after being funded via a faucet, before
+   * any tx can be sent.
+   *
+   * Currently only supported on seed-backed wallets — the Lace DApp Connector
+   * does not expose programmatic DUST registration. Lace users should register
+   * via the extension UI directly.
+   */
+  registerDust(options?: RegisterDustOptions): Promise<RegisterDustResult>;
+  /**
+   * Deregister previously-registered NIGHT UTXOs from DUST generation.
+   * Same backend constraints as {@link registerDust}.
+   */
+  deregisterDust(options?: RegisterDustOptions): Promise<RegisterDustResult>;
   /** Close wallet and release resources. */
   close(): Promise<void>;
   /** Support `await using wallet = await Wallet.fromSeed(...)` */
@@ -316,6 +332,8 @@ export interface ConnectedWallet {
     providers(): Effect.Effect<WalletProviders, WalletError>;
     shield(amount: bigint, options?: ShieldOptions): Effect.Effect<ShieldResult, WalletError>;
     unshield(amount: bigint, options?: ShieldOptions): Effect.Effect<ShieldResult, WalletError>;
+    registerDust(options?: RegisterDustOptions): Effect.Effect<RegisterDustResult, WalletError>;
+    deregisterDust(options?: RegisterDustOptions): Effect.Effect<RegisterDustResult, WalletError>;
     close(): Effect.Effect<void, WalletError>;
   };
 }
@@ -344,6 +362,34 @@ export interface ShieldResult {
   txId: string;
   /** Amount transferred in base units. */
   amount: bigint;
+}
+
+/**
+ * Options for {@link ConnectedWallet.registerDust} / {@link ConnectedWallet.deregisterDust}.
+ *
+ * @since 0.5.1
+ * @category model
+ */
+export interface RegisterDustOptions {
+  /**
+   * Specific UTXOs to register. Defaults to all currently-unregistered (for
+   * `registerDust`) or all currently-registered (for `deregisterDust`) NIGHT
+   * UTXOs in the wallet's unshielded state.
+   */
+  utxos?: readonly unknown[];
+}
+
+/**
+ * Result of a {@link ConnectedWallet.registerDust} / {@link ConnectedWallet.deregisterDust} call.
+ *
+ * @since 0.5.1
+ * @category model
+ */
+export interface RegisterDustResult {
+  /** Submitted transaction ID. */
+  txId: string;
+  /** Number of UTXOs included in the registration tx. */
+  count: number;
 }
 
 /**
@@ -871,16 +917,31 @@ function getBalanceFromSeedEffect(walletContext: WalletContext): Effect.Effect<W
   return Effect.tryPromise({
     try: async () => {
       const state = await Rx.firstValueFrom(walletContext.wallet.state());
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const s = state as any;
+
+      // DustWalletState (from @midnight-ntwrk/wallet-sdk-dust-wallet) exposes:
+      //   balance(time: Date): bigint                                  — current DUST
+      //   availableCoinsWithFullInfo(time: Date): readonly DustFullInfo[]  — per-UTXO info
+      // Earlier versions of this code called `walletBalance` / `walletCap` which are
+      // NOT real methods — optional chaining silently returned undefined and the
+      // `?? 0n` fallback masked the bug, so `DUST: 0` always appeared in UIs even
+      // when DUST was really present.
+      const now = new Date();
+      const dustBalance = (typeof s.dust?.balance === 'function' ? s.dust.balance(now) : 0n) as bigint;
+      // Cap = sum of maxCap across all available dust UTXOs. `DustFullInfo.maxCap` is
+      // the theoretical maximum capacity for that UTXO (value * night_dust_ratio).
+      const fullInfos: readonly { maxCap: bigint }[] = typeof s.dust?.availableCoinsWithFullInfo === 'function'
+        ? s.dust.availableCoinsWithFullInfo(now)
+        : [];
+      const dustCap = fullInfos.reduce((sum, info) => sum + info.maxCap, 0n);
+
       return {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        shielded: ((state as any).shielded?.balances as Record<string, bigint>) ?? {},
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        unshielded: ((state as any).unshielded?.balances as Record<string, bigint>) ?? {},
+        shielded: (s.shielded?.balances as Record<string, bigint>) ?? {},
+        unshielded: (s.unshielded?.balances as Record<string, bigint>) ?? {},
         dust: {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          balance: ((state as any).dust?.walletBalance?.(new Date()) as bigint) ?? 0n,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          cap: ((state as any).dust?.walletCap?.(new Date()) as bigint) ?? 0n,
+          balance: dustBalance,
+          cap: dustCap,
         },
       };
     },
@@ -911,34 +972,48 @@ function shieldFromSeedEffect(
       const ttl = options?.ttl ?? new Date(Date.now() + SHIELD_DEFAULT_TTL_MS);
       const tokenType = (options?.tokenType ?? ledger.nativeToken().raw) as ledger.RawTokenType;
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const transfer: any = direction === 'shield'
-        ? {
-            type: 'shielded' as const,
-            outputs: [
-              {
-                type: tokenType,
-                receiverAddress: await walletContext.wallet.shielded.getAddress(),
-                amount,
-              },
-            ],
-          }
-        : {
-            type: 'unshielded' as const,
-            outputs: [
-              {
-                type: tokenType,
-                receiverAddress: UnshieldedAddress.codec.decode(
-                  walletContext.networkId,
-                  MidnightBech32m.parse(walletContext.unshieldedKeystore.getBech32Address().asString()),
-                ),
-                amount,
-              },
-            ],
-          };
+      // Cross-pool conversions need wallet.initSwap, NOT transferTransaction.
+      // transferTransaction takes a single output kind and uses inputs from THAT
+      // same kind, which means it can only move within a pool (shielded→shielded
+      // or unshielded→unshielded). For shield/unshield we need to draw inputs
+      // from one pool and emit outputs in the other, which is what initSwap does.
+      const desiredInputs = direction === 'shield'
+        ? { unshielded: { [tokenType]: amount } }
+        : { shielded: { [tokenType]: amount } };
 
-      const recipe = await walletContext.wallet.transferTransaction(
-        [transfer],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const desiredOutputs: any[] = direction === 'shield'
+        ? [
+            {
+              type: 'shielded' as const,
+              outputs: [
+                {
+                  type: tokenType,
+                  receiverAddress: await walletContext.wallet.shielded.getAddress(),
+                  amount,
+                },
+              ],
+            },
+          ]
+        : [
+            {
+              type: 'unshielded' as const,
+              outputs: [
+                {
+                  type: tokenType,
+                  receiverAddress: UnshieldedAddress.codec.decode(
+                    walletContext.networkId,
+                    MidnightBech32m.parse(walletContext.unshieldedKeystore.getBech32Address().asString()),
+                  ),
+                  amount,
+                },
+              ],
+            },
+          ];
+
+      const recipe = await walletContext.wallet.initSwap(
+        desiredInputs,
+        desiredOutputs,
         {
           shieldedSecretKeys: walletContext.shieldedSecretKeys,
           dustSecretKey: walletContext.dustSecretKey,
@@ -1003,6 +1078,95 @@ function shieldFromBrowserEffect(
         message: `Failed to ${direction} ${amount}: ${cause instanceof Error ? cause.message : String(cause)}`,
       }),
   });
+}
+
+// =============================================================================
+// Internal Effects — DUST Registration
+// =============================================================================
+
+type RegisterDirection = 'register' | 'deregister';
+
+function registerDustFromSeedEffect(
+  walletContext: WalletContext,
+  direction: RegisterDirection,
+  options?: RegisterDustOptions,
+): Effect.Effect<RegisterDustResult, WalletError> {
+  return Effect.tryPromise({
+    try: async () => {
+      const nativeTokenType = ledger.nativeToken().raw;
+
+      // Pull the current list of available unshielded UTXOs from the wallet state.
+      // Note: Midnight's faucets (preview/preprod/local genesis) register NIGHT for DUST
+      // generation automatically at mint time, so most users never need to call this.
+      // It's an escape hatch for wallets that acquired NIGHT via some other path.
+      const state = await Rx.firstValueFrom(walletContext.wallet.state());
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const unshieldedState = (state as any).unshielded;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const allCoins: readonly any[] = (unshieldedState?.availableCoins) ?? (unshieldedState?.totalCoins) ?? [];
+
+      // Filter to NIGHT UTXOs that match the requested direction:
+      //  - register: coins not yet registered for DUST generation
+      //  - deregister: coins currently registered
+      const shouldInclude = (coin: { utxo: { type: string }; meta: { registeredForDustGeneration: boolean } }) => {
+        if (coin.utxo.type !== nativeTokenType) return false;
+        return direction === 'register'
+          ? !coin.meta.registeredForDustGeneration
+          : coin.meta.registeredForDustGeneration;
+      };
+
+      const targets: readonly unknown[] = options?.utxos ?? allCoins.filter(shouldInclude);
+
+      if (targets.length === 0) {
+        throw new Error(
+          direction === 'register'
+            ? 'No unregistered NIGHT UTXOs to register. Faucet some NIGHT first, or they may already be registered.'
+            : 'No registered NIGHT UTXOs to deregister.',
+        );
+      }
+
+      const verifyingKey = walletContext.unshieldedKeystore.getPublicKey();
+      const signFn = (payload: Uint8Array) => walletContext.unshieldedKeystore.signData(payload);
+
+      const recipe = direction === 'register'
+        ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await (walletContext.wallet as any).registerNightUtxosForDustGeneration(
+            targets,
+            verifyingKey,
+            signFn,
+          )
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        : await (walletContext.wallet as any).deregisterFromDustGeneration(
+            targets,
+            verifyingKey,
+            signFn,
+          );
+
+      const signed = await walletContext.wallet.signRecipe(recipe, signFn);
+      const finalized = await walletContext.wallet.finalizeRecipe(signed);
+      const txId = await walletContext.wallet.submitTransaction(finalized);
+
+      return { txId, count: targets.length };
+    },
+    catch: (cause) =>
+      new WalletError({
+        cause,
+        message: `Failed to ${direction} DUST: ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
+}
+
+function registerDustFromBrowserEffect(
+  _connection: WalletConnection,
+  direction: RegisterDirection,
+  _options?: RegisterDustOptions,
+): Effect.Effect<RegisterDustResult, WalletError> {
+  return Effect.fail(
+    new WalletError({
+      cause: new Error(`${direction}Dust not supported via Lace`),
+      message: `${direction === 'register' ? 'registerDust' : 'deregisterDust'} is not yet supported via Lace. The DApp Connector does not expose DUST registration — use the Lace extension UI directly, or use a seed-backed wallet for programmatic registration.`,
+    }),
+  );
 }
 
 function getBalanceFromBrowserEffect(connection: WalletConnection): Effect.Effect<WalletBalance, WalletError> {
@@ -1097,6 +1261,14 @@ function createConnectedWalletHandle(
       ? shieldFromSeedEffect(backend.context, direction, amount, options)
       : shieldFromBrowserEffect(backend.connection, direction, amount, options);
 
+  const registerDustEff = (
+    direction: RegisterDirection,
+    options?: RegisterDustOptions,
+  ): Effect.Effect<RegisterDustResult, WalletError> =>
+    backend.type === 'seed'
+      ? registerDustFromSeedEffect(backend.context, direction, options)
+      : registerDustFromBrowserEffect(backend.connection, direction, options);
+
   return {
     type: 'connected',
     source: backend.type === 'seed' ? 'seed' : 'browser',
@@ -1108,6 +1280,8 @@ function createConnectedWalletHandle(
     providers: () => runEffect(providersEff()),
     shield: (amount, options) => runEffectPromise(shieldEff('shield', amount, options)),
     unshield: (amount, options) => runEffectPromise(shieldEff('unshield', amount, options)),
+    registerDust: (options) => runEffectPromise(registerDustEff('register', options)),
+    deregisterDust: (options) => runEffectPromise(registerDustEff('deregister', options)),
     close: () => runEffectPromise(closeEff()),
     [Symbol.asyncDispose]: () => runEffectPromise(closeEff()),
 
@@ -1116,6 +1290,8 @@ function createConnectedWalletHandle(
       providers: providersEff,
       shield: (amount, options) => shieldEff('shield', amount, options),
       unshield: (amount, options) => shieldEff('unshield', amount, options),
+      registerDust: (options) => registerDustEff('register', options),
+      deregisterDust: (options) => registerDustEff('deregister', options),
       close: closeEff,
     },
   };
