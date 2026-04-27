@@ -25,7 +25,6 @@ import type { UnboundTransaction } from '@midnight-ntwrk/midnight-js-types';
 
 import { DEFAULT_TX_TTL_MS, type NetworkConfig } from '../Config.js';
 import { hexToBytes, bytesToHex } from '../Utils.js';
-import { signTransactionIntents } from '../Wallet.js';
 import * as Images from './Images.js';
 
 /**
@@ -230,15 +229,11 @@ export function startServer(networkConfig: NetworkConfig, options: ServerOptions
             { ttl },
           );
 
-          // Workaround: wallet-sdk-unshielded-wallet v1.0.0 bug —
-          // signRecipe uses 'pre-proof' but proven intents need 'proof'
-          const signFn = (payload: Uint8Array) => keys.unshieldedKeystore.signData(payload);
-          signTransactionIntents(recipe.baseTransaction, signFn, 'proof');
-          if (recipe.balancingTransaction) {
-            signTransactionIntents(recipe.balancingTransaction, signFn, 'pre-proof');
-          }
+          const signedRecipe = await wallet.signRecipe(recipe, (payload: Uint8Array) =>
+            keys.unshieldedKeystore.signData(payload),
+          );
 
-          const finalized = await wallet.finalizeRecipe(recipe);
+          const finalized = await wallet.finalizeRecipe(signedRecipe);
 
           // Serialize back to hex
           const finalizedBytes = finalized.serialize();
@@ -291,11 +286,11 @@ export function startServer(networkConfig: NetworkConfig, options: ServerOptions
             { ttl, tokenKindsToBalance: ['dust'] },
           );
 
-          // Sign relay's balancing transaction intents (originalTransaction is already finalized)
-          const signFn = (payload: Uint8Array) => keys.unshieldedKeystore.signData(payload);
-          signTransactionIntents(recipe.balancingTransaction, signFn, 'pre-proof');
+          const signedRecipe = await wallet.signRecipe(recipe, (payload: Uint8Array) =>
+            keys.unshieldedKeystore.signData(payload),
+          );
 
-          const finalized = await wallet.finalizeRecipe(recipe);
+          const finalized = await wallet.finalizeRecipe(signedRecipe);
 
           // Serialize back to hex
           const finalizedBytes = finalized.serialize();
