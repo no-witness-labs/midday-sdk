@@ -20,7 +20,7 @@ import { Context, Data, Effect, Layer } from 'effect';
 import * as Rx from 'rxjs';
 import * as ledger from '@midnight-ntwrk/ledger-v8';
 import { Transaction, type FinalizedTransaction, type TransactionId } from '@midnight-ntwrk/ledger-v8';
-import { WalletFacade } from '@midnight-ntwrk/wallet-sdk-facade';
+import { WalletFacade, WalletEntrySchema, mergeWalletEntries } from '@midnight-ntwrk/wallet-sdk-facade';
 import { HDWallet, Roles } from '@midnight-ntwrk/wallet-sdk-hd';
 import { ShieldedWallet } from '@midnight-ntwrk/wallet-sdk-shielded';
 import { DustWallet } from '@midnight-ntwrk/wallet-sdk-dust-wallet';
@@ -28,8 +28,8 @@ import {
   createKeystore,
   PublicKey as UnshieldedPublicKey,
   UnshieldedWallet,
-  InMemoryTransactionHistoryStorage,
 } from '@midnight-ntwrk/wallet-sdk-unshielded-wallet';
+import { InMemoryTransactionHistoryStorage } from '@midnight-ntwrk/wallet-sdk-abstractions';
 import {
   MidnightBech32m,
   UnshieldedAddress,
@@ -594,7 +594,7 @@ function initEffect(seed: string, networkConfig: NetworkConfig): Effect.Effect<W
           indexerWsUrl: networkConfig.indexerWS,
         },
         indexerUrl: networkConfig.indexerWS,
-        txHistoryStorage: new InMemoryTransactionHistoryStorage(),
+        txHistoryStorage: new InMemoryTransactionHistoryStorage(WalletEntrySchema, mergeWalletEntries),
       };
 
       const hdWallet = HDWallet.fromSeed(seedBytes);

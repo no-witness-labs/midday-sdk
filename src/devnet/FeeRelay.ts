@@ -10,7 +10,7 @@
 
 import { createServer, type Server } from 'http';
 import * as ledger from '@midnight-ntwrk/ledger-v8';
-import { WalletFacade } from '@midnight-ntwrk/wallet-sdk-facade';
+import { WalletFacade, WalletEntrySchema, mergeWalletEntries } from '@midnight-ntwrk/wallet-sdk-facade';
 import { HDWallet, Roles } from '@midnight-ntwrk/wallet-sdk-hd';
 import { ShieldedWallet } from '@midnight-ntwrk/wallet-sdk-shielded';
 import { DustWallet } from '@midnight-ntwrk/wallet-sdk-dust-wallet';
@@ -18,8 +18,8 @@ import {
   createKeystore,
   PublicKey as UnshieldedPublicKey,
   UnshieldedWallet,
-  InMemoryTransactionHistoryStorage,
 } from '@midnight-ntwrk/wallet-sdk-unshielded-wallet';
+import { InMemoryTransactionHistoryStorage } from '@midnight-ntwrk/wallet-sdk-abstractions';
 import { Transaction, type FinalizedTransaction } from '@midnight-ntwrk/ledger-v8';
 import type { UnboundTransaction } from '@midnight-ntwrk/midnight-js-types';
 
@@ -85,7 +85,7 @@ async function createWallet(keys: DerivedKeys, networkConfig: NetworkConfig): Pr
       indexerWsUrl: networkConfig.indexerWS,
     },
     indexerUrl: networkConfig.indexerWS,
-    txHistoryStorage: new InMemoryTransactionHistoryStorage(),
+    txHistoryStorage: new InMemoryTransactionHistoryStorage(WalletEntrySchema, mergeWalletEntries),
   };
 
   const wallet = await WalletFacade.init({
