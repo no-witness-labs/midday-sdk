@@ -1,5 +1,63 @@
 # @no-witness-labs/midday-sdk
 
+## 0.6.0
+
+### Minor Changes
+
+- e5cb746: Bump Midnight wallet-sdk packages to the 2026-04-23 release batch:
+
+  - `wallet-sdk-facade` 3.0.0 → 4.0.0
+  - `wallet-sdk-dust-wallet` 3.0.0 → 4.0.0
+  - `wallet-sdk-shielded` 2.1.0 → 3.0.0
+  - `wallet-sdk-unshielded-wallet` 2.1.0 → 3.0.0
+  - `wallet-sdk-address-format` 3.1.0 → 3.1.1
+  - `wallet-sdk-hd` 3.0.1 → 3.0.2
+  - adds `wallet-sdk-abstractions` 2.1.0 (now hosts `InMemoryTransactionHistoryStorage`)
+
+  Includes the upstream deterministic-segment-id fix in the dust-wallet balancer (replaces `Transaction.fromPartsRandomized` with collision-free segment selection), retiring the previous segment_id collision / balanceTx hang workaround.
+
+  `InMemoryTransactionHistoryStorage` now requires a schema argument; the SDK passes `WalletEntrySchema` + `mergeWalletEntries` from `wallet-sdk-facade` at every facade init site.
+
+### Patch Changes
+
+- 70c4497: Fix `Wallet.getBalance().dust` reporting zero on seed-backed wallets.
+
+  `getBalanceFromSeedEffect` was calling `state.dust.walletBalance(time)` and `state.dust.walletCap(time)`, neither of which exist on `DustWalletState`. Optional chaining (`?.`) silently returned `undefined` and the `?? 0n` fallback masked the bug — `wallet.getBalance().dust.balance` always showed `0` even when DUST was present, which made it look like every faucet-funded wallet was missing DUST registration.
+
+  The real APIs are `state.dust.balance(time: Date): bigint` and `state.dust.availableCoinsWithFullInfo(time: Date): readonly DustFullInfo[]` (sum `.maxCap` for total capacity). Fixed both.
+
+  Downstream effect: apps using `Wallet.getBalance().dust.balance` for UI display will now show real values. Fee-paying wallet operations were never affected (the underlying facade balancer always saw real DUST), only the query display.
+
+- 70c4497: Fix `Wallet.shield()` and `Wallet.unshield()` failing with `Wallet.InsufficientFunds` on freshly-funded wallets.
+
+  The previous implementation used `wallet.transferTransaction()` with an output of `type: 'shielded'` for shielding (and `'unshielded'` for unshielding). `transferTransaction` selects inputs from the **same pool** as the output kind — so for `type: 'shielded'` it can only spend shielded UTXOs. On a wallet with NIGHT only in the unshielded pool (every freshly-faucet'd wallet), this returned `Insufficient funds` because there were no shielded UTXOs to spend.
+
+  The correct API for cross-pool conversion is `wallet.initSwap(desiredInputs, desiredOutputs, secretKeys, options)`, which takes explicit per-pool input and output specifications. The fix uses `initSwap` for both `shield` (unshielded inputs → shielded outputs) and `unshield` (shielded inputs → unshielded outputs).
+
+  Why this wasn't caught earlier: on local devnet with the genesis seed, the wallet has _both_ shielded and unshielded NIGHT pre-funded, so the old `transferTransaction(shielded → shielded)` call happened to find shielded UTXOs to spend — semantically a no-op move within the same pool, but it didn't error. Real wallets funded only via faucet (preview/preprod) hit the bug immediately.
+
+- 70c4497: Add `ConnectedWallet.registerDust()` and `ConnectedWallet.deregisterDust()` helpers as an escape hatch for managing DUST generation from unshielded NIGHT UTXOs.
+
+  ```ts
+  const wallet = await Midday.Wallet.fromSeed(seed, networkConfig);
+
+  // Register all currently-unregistered NIGHT UTXOs for DUST generation.
+  const { txId, count } = await wallet.registerDust();
+  console.log(`Registered ${count} NIGHT UTXOs. tx=${txId}`);
+
+  // Or register a specific subset:
+  await wallet.registerDust({ utxos: [...] });
+
+  // Inverse:
+  await wallet.deregisterDust();
+  ```
+
+  **When this is needed.** In practice, **rarely**. Midnight's preview/preprod faucets and local devnet genesis already register NIGHT for DUST generation at mint time — all UTXOs arrive with `meta.registeredForDustGeneration: true`. This helper is an escape hatch for wallets that acquired NIGHT via a path that skipped registration (e.g., a contract payout, a direct transfer from another wallet), or for ops scripts that want to deregister before transferring NIGHT out.
+
+  Calling `registerDust()` on a wallet whose NIGHT is already fully registered throws a clear error instead of submitting a no-op tx.
+
+  **Seed-backed wallets only.** The Lace DApp Connector does not expose DUST registration programmatically; Lace users must register via the extension UI. Calling `registerDust()` on a browser-backed wallet throws a clear error directing to the UI.
+
 ## 0.5.0
 
 ### Minor Changes
