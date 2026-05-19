@@ -1,5 +1,12 @@
 # @examples/effect-di
 
+## 0.0.14
+
+### Patch Changes
+
+- Updated dependencies [231f106]
+  - @no-witness-labs/midday-sdk@0.6.2
+
 ## 0.0.13
 
 ### Patch Changes
