@@ -71,6 +71,33 @@ export class TxTimeoutError extends Data.TaggedError('TxTimeoutError')<{
   readonly message: string;
 }> {}
 
+/**
+ * Contract state lookup returned no result at the given address (and optionally
+ * at the given block height). Distinct from `ContractError` because consumers
+ * may want a "not yet deployed → redirect to create flow" UX rather than
+ * treating it as a crash.
+ *
+ * @since 0.6.3
+ * @category errors
+ */
+export class ContractStateNotFoundError extends Data.TaggedError('ContractStateNotFoundError')<{
+  readonly address: string;
+  readonly blockHeight?: number;
+  readonly message: string;
+}> {}
+
+/**
+ * `loadContract` was called without one of the required argument shapes:
+ * (1) `module` + `zkConfig`, (2) `path` (Node.js), or
+ * (3) `moduleUrl` + `zkConfigBaseUrl` (browser).
+ *
+ * @since 0.6.3
+ * @category errors
+ */
+export class ContractLoadArgsError extends Data.TaggedError('ContractLoadArgsError')<{
+  readonly message: string;
+}> {}
+
 // =============================================================================
 // Types
 // =============================================================================
@@ -470,10 +497,10 @@ export interface DeployedContract<
     /** Type-safe Effect action methods. */
     readonly actions: ToEffectActions<TActions>;
     call(action: TCircuits, ...args: unknown[]): Effect.Effect<CallResult, ContractError>;
-    getState(): Effect.Effect<unknown, ContractError>;
-    getStateAt(blockHeight: number): Effect.Effect<unknown, ContractError>;
-    ledgerState(): Effect.Effect<TLedger, ContractError>;
-    ledgerStateAt(blockHeight: number): Effect.Effect<TLedger, ContractError>;
+    getState(): Effect.Effect<unknown, ContractError | ContractStateNotFoundError>;
+    getStateAt(blockHeight: number): Effect.Effect<unknown, ContractError | ContractStateNotFoundError>;
+    ledgerState(): Effect.Effect<TLedger, ContractError | ContractStateNotFoundError>;
+    ledgerStateAt(blockHeight: number): Effect.Effect<TLedger, ContractError | ContractStateNotFoundError>;
     /** Watch parsed state as an Effect.Stream. */
     watchState(options?: WatchOptions): Stream.Stream<TLedger, ContractError>;
     /** Watch raw state as an Effect.Stream. */
@@ -522,10 +549,10 @@ export interface ReadonlyContract<TLedger = unknown> {
 
   /** Effect versions of read-only methods. */
   readonly effect: {
-    readState(address: string): Effect.Effect<TLedger, ContractError>;
-    readStateAt(address: string, blockHeight: number): Effect.Effect<TLedger, ContractError>;
-    readRawState(address: string): Effect.Effect<unknown, ContractError>;
-    readRawStateAt(address: string, blockHeight: number): Effect.Effect<unknown, ContractError>;
+    readState(address: string): Effect.Effect<TLedger, ContractError | ContractStateNotFoundError>;
+    readStateAt(address: string, blockHeight: number): Effect.Effect<TLedger, ContractError | ContractStateNotFoundError>;
+    readRawState(address: string): Effect.Effect<unknown, ContractError | ContractStateNotFoundError>;
+    readRawStateAt(address: string, blockHeight: number): Effect.Effect<unknown, ContractError | ContractStateNotFoundError>;
     watchState(address: string, options?: WatchOptions): Stream.Stream<TLedger, ContractError>;
     watchRawState(address: string, options?: WatchOptions): Stream.Stream<unknown, ContractError>;
   };
@@ -582,7 +609,7 @@ export function loadContractModuleEffect(
     networkConfig: { proofServer: string };
   },
   logging: boolean,
-): Effect.Effect<LoadedContractData, ContractError> {
+): Effect.Effect<LoadedContractData, ContractError | ContractLoadArgsError> {
   return Effect.tryPromise({
     try: async () => {
       let module: ContractModule;
@@ -603,12 +630,13 @@ export function loadContractModuleEffect(
         module = options.module;
         zkConfig = options.zkConfig;
       } else {
-        throw new Error(
-          'Contract loading requires one of: ' +
-          '(1) module + zkConfig, ' +
-          '(2) path (Node.js), or ' +
-          '(3) moduleUrl + zkConfigBaseUrl (browser)',
-        );
+        throw new ContractLoadArgsError({
+          message:
+            'Contract loading requires one of: ' +
+            '(1) module + zkConfig, ' +
+            '(2) path (Node.js), or ' +
+            '(3) moduleUrl + zkConfigBaseUrl (browser)',
+        });
       }
 
       const witnesses = options.witnesses ?? {};
@@ -646,10 +674,12 @@ export function loadContractModuleEffect(
       };
     },
     catch: (cause) =>
-      new ContractError({
-        cause,
-        message: `Failed to load contract: ${cause instanceof Error ? cause.message : String(cause)}`,
-      }),
+      cause instanceof ContractLoadArgsError
+        ? cause
+        : new ContractError({
+            cause,
+            message: `Failed to load contract: ${cause instanceof Error ? cause.message : String(cause)}`,
+          }),
   });
 }
 
@@ -913,28 +943,35 @@ function callContractEffect(
   });
 }
 
-function contractStateEffect(contractData: DeployedContractData): Effect.Effect<unknown, ContractError> {
+function contractStateEffect(
+  contractData: DeployedContractData,
+): Effect.Effect<unknown, ContractError | ContractStateNotFoundError> {
   const address = contractData.address;
   return Effect.tryPromise({
     try: async () => {
       const contractState = await contractData.providers.publicDataProvider.queryContractState(address);
       if (!contractState) {
-        throw new Error(`Contract state not found at ${address}`);
+        throw new ContractStateNotFoundError({
+          address,
+          message: `Contract state not found at ${address}`,
+        });
       }
       return contractState.data;
     },
     catch: (cause) =>
-      new ContractError({
-        cause,
-        message: `Failed to query contract state: ${cause instanceof Error ? cause.message : String(cause)}`,
-      }),
+      cause instanceof ContractStateNotFoundError
+        ? cause
+        : new ContractError({
+            cause,
+            message: `Failed to query contract state: ${cause instanceof Error ? cause.message : String(cause)}`,
+          }),
   });
 }
 
 function contractStateAtEffect(
   contractData: DeployedContractData,
   blockHeight: number,
-): Effect.Effect<unknown, ContractError> {
+): Effect.Effect<unknown, ContractError | ContractStateNotFoundError> {
   const address = contractData.address;
   return Effect.tryPromise({
     try: async () => {
@@ -943,19 +980,27 @@ function contractStateAtEffect(
         blockHeight,
       });
       if (!contractState) {
-        throw new Error(`Contract state not found at ${address} at block ${blockHeight}`);
+        throw new ContractStateNotFoundError({
+          address,
+          blockHeight,
+          message: `Contract state not found at ${address} at block ${blockHeight}`,
+        });
       }
       return contractState.data;
     },
     catch: (cause) =>
-      new ContractError({
-        cause,
-        message: `Failed to query contract state at block ${blockHeight}: ${cause instanceof Error ? cause.message : String(cause)}`,
-      }),
+      cause instanceof ContractStateNotFoundError
+        ? cause
+        : new ContractError({
+            cause,
+            message: `Failed to query contract state at block ${blockHeight}: ${cause instanceof Error ? cause.message : String(cause)}`,
+          }),
   });
 }
 
-function ledgerStateEffect(contractData: DeployedContractData): Effect.Effect<unknown, ContractError> {
+function ledgerStateEffect(
+  contractData: DeployedContractData,
+): Effect.Effect<unknown, ContractError | ContractStateNotFoundError> {
   return contractStateEffect(contractData).pipe(
     Effect.map((data) => contractData.module.ledger(data)),
   );
@@ -964,7 +1009,7 @@ function ledgerStateEffect(contractData: DeployedContractData): Effect.Effect<un
 function ledgerStateAtEffect(
   contractData: DeployedContractData,
   blockHeight: number,
-): Effect.Effect<unknown, ContractError> {
+): Effect.Effect<unknown, ContractError | ContractStateNotFoundError> {
   return contractStateAtEffect(contractData, blockHeight).pipe(
     Effect.map((data) => contractData.module.ledger(data)),
   );
@@ -1028,7 +1073,7 @@ function readRawStateEffect(
   address: string,
   provider: PublicDataProvider,
   atBlock?: number,
-): Effect.Effect<unknown, ContractError> {
+): Effect.Effect<unknown, ContractError | ContractStateNotFoundError> {
   return Effect.tryPromise({
     try: async () => {
       const opts = atBlock !== undefined
@@ -1036,19 +1081,24 @@ function readRawStateEffect(
         : undefined;
       const contractState = await provider.queryContractState(address, opts);
       if (!contractState) {
-        throw new Error(
-          atBlock !== undefined
-            ? `Contract state not found at ${address} at block ${atBlock}`
-            : `Contract state not found at ${address}`,
-        );
+        throw new ContractStateNotFoundError({
+          address,
+          blockHeight: atBlock,
+          message:
+            atBlock !== undefined
+              ? `Contract state not found at ${address} at block ${atBlock}`
+              : `Contract state not found at ${address}`,
+        });
       }
       return contractState.data;
     },
     catch: (cause) =>
-      new ContractError({
-        cause,
-        message: `Failed to query contract state: ${cause instanceof Error ? cause.message : String(cause)}`,
-      }),
+      cause instanceof ContractStateNotFoundError
+        ? cause
+        : new ContractError({
+            cause,
+            message: `Failed to query contract state: ${cause instanceof Error ? cause.message : String(cause)}`,
+          }),
   });
 }
 
@@ -1062,7 +1112,7 @@ function readStateEffect<TLedger>(
   provider: PublicDataProvider,
   ledgerParser: LedgerParser<TLedger>,
   atBlock?: number,
-): Effect.Effect<TLedger, ContractError> {
+): Effect.Effect<TLedger, ContractError | ContractStateNotFoundError> {
   return readRawStateEffect(address, provider, atBlock).pipe(
     Effect.map((data) => ledgerParser(data)),
   );
@@ -1388,7 +1438,7 @@ export interface CreateContractOptions<M extends ContractModule = ContractModule
  */
 function createContractEffect<M extends ContractModule>(
   options: CreateContractOptions<M>,
-): Effect.Effect<LoadedContractFor<M>, ContractError> {
+): Effect.Effect<LoadedContractFor<M>, ContractError | ContractLoadArgsError> {
   const {
     walletProvider,
     midnightProvider,
