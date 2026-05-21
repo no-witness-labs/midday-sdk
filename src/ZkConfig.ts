@@ -58,6 +58,20 @@ export class ZkConfigError extends Data.TaggedError('ZkConfigError')<{
   readonly message: string;
 }> {}
 
+/**
+ * HTTP fetch for a ZK key returned a non-ok response (`!response.ok`).
+ *
+ * @since 0.6.3
+ * @category errors
+ */
+export class ZkConfigFetchError extends Data.TaggedError('ZkConfigFetchError')<{
+  readonly url: string;
+  readonly status: number;
+  readonly statusText: string;
+  readonly cause?: unknown;
+  readonly message: string;
+}> {}
+
 // =============================================================================
 // Types
 // =============================================================================
@@ -164,28 +178,35 @@ function isBuiltinCircuit(circuitId: string): boolean {
 function fetchBytesEffect(
   provider: HttpZkConfigProviderData,
   url: string,
-): Effect.Effect<Uint8Array, ZkConfigError> {
+): Effect.Effect<Uint8Array, ZkConfigError | ZkConfigFetchError> {
   return Effect.tryPromise({
     try: async () => {
       const response = await provider.fetchFn(url);
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status} ${response.statusText}`);
+        throw new ZkConfigFetchError({
+          url,
+          status: response.status,
+          statusText: response.statusText,
+          message: `HTTP ${response.status} ${response.statusText} fetching ${url}`,
+        });
       }
       const buffer = await response.arrayBuffer();
       return new Uint8Array(buffer);
     },
     catch: (cause) =>
-      new ZkConfigError({
-        cause,
-        message: `Failed to fetch ZK config from ${url}: ${cause instanceof Error ? cause.message : String(cause)}`,
-      }),
+      cause instanceof ZkConfigFetchError
+        ? cause
+        : new ZkConfigError({
+            cause,
+            message: `Failed to fetch ZK config from ${url}: ${cause instanceof Error ? cause.message : String(cause)}`,
+          }),
   });
 }
 
 function getZKIREffect(
   provider: HttpZkConfigProviderData,
   circuitId: string,
-): Effect.Effect<ZKIR, ZkConfigError> {
+): Effect.Effect<ZKIR, ZkConfigError | ZkConfigFetchError> {
   if (isBuiltinCircuit(circuitId)) {
     return Effect.fail(new ZkConfigError({ cause: null, message: `Built-in circuit ${circuitId} — skipping HTTP fetch` }));
   }
@@ -203,7 +224,7 @@ function getZKIREffect(
 function getProverKeyEffect(
   provider: HttpZkConfigProviderData,
   circuitId: string,
-): Effect.Effect<ProverKey, ZkConfigError> {
+): Effect.Effect<ProverKey, ZkConfigError | ZkConfigFetchError> {
   if (isBuiltinCircuit(circuitId)) {
     return Effect.fail(new ZkConfigError({ cause: null, message: `Built-in circuit ${circuitId} — skipping HTTP fetch` }));
   }
@@ -221,7 +242,7 @@ function getProverKeyEffect(
 function getVerifierKeyEffect(
   provider: HttpZkConfigProviderData,
   circuitId: string,
-): Effect.Effect<VerifierKey, ZkConfigError> {
+): Effect.Effect<VerifierKey, ZkConfigError | ZkConfigFetchError> {
   if (isBuiltinCircuit(circuitId)) {
     return Effect.fail(new ZkConfigError({ cause: null, message: `Built-in circuit ${circuitId} — skipping HTTP fetch` }));
   }
@@ -402,15 +423,15 @@ export interface ZkConfigServiceImpl {
   readonly getZKIR: (
     provider: HttpZkConfigProviderData,
     circuitId: string,
-  ) => Effect.Effect<ZKIR, ZkConfigError>;
+  ) => Effect.Effect<ZKIR, ZkConfigError | ZkConfigFetchError>;
   readonly getProverKey: (
     provider: HttpZkConfigProviderData,
     circuitId: string,
-  ) => Effect.Effect<ProverKey, ZkConfigError>;
+  ) => Effect.Effect<ProverKey, ZkConfigError | ZkConfigFetchError>;
   readonly getVerifierKey: (
     provider: HttpZkConfigProviderData,
     circuitId: string,
-  ) => Effect.Effect<VerifierKey, ZkConfigError>;
+  ) => Effect.Effect<VerifierKey, ZkConfigError | ZkConfigFetchError>;
 }
 
 /**

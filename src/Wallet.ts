@@ -55,6 +55,80 @@ export class WalletError extends Data.TaggedError('WalletError')<{
   readonly message: string;
 }> {}
 
+/**
+ * Seed → HDWallet → key-derivation failure. `phase: 'init'` covers
+ * `HDWallet.fromSeed` returning a non-`seedOk` variant (invalid seed bytes);
+ * `phase: 'derive'` covers `deriveKeysAt(0)` returning a non-`keysDerived`
+ * variant. Surfaces from `Wallet.fromSeed` and `Wallet.deriveAddress`.
+ *
+ * @since 0.6.3
+ * @category errors
+ */
+export class WalletKeyDerivationError extends Data.TaggedError('WalletKeyDerivationError')<{
+  readonly phase: 'init' | 'derive';
+  readonly cause?: unknown;
+  readonly message: string;
+}> {}
+
+/**
+ * Lace browser extension is unavailable.
+ * - `'not-installed'` — no Midnight DApp Connector found on `window` after the wait.
+ * - `'incompatible-version'` — Lace is present but lacks a required capability
+ *   (e.g. `makeTransfer`); upgrade Lace to a DApp-Connector ≥ 4.0 build.
+ *
+ * @since 0.6.3
+ * @category errors
+ */
+export class LaceUnavailableError extends Data.TaggedError('LaceUnavailableError')<{
+  readonly reason: 'not-installed' | 'incompatible-version';
+  readonly detail?: string;
+  readonly message: string;
+}> {}
+
+/**
+ * Lace's `balanceUnsealedTransaction` (or related Lace-side step in the browser
+ * transaction pipeline) rejected. `detail` carries the joined Lace `APIError`
+ * fields (`code`/`reason`/`type`/`message`) for diagnostics.
+ *
+ * @since 0.6.3
+ * @category errors
+ */
+export class LaceTransferError extends Data.TaggedError('LaceTransferError')<{
+  readonly operation: 'balance';
+  readonly detail: string;
+  readonly cause?: unknown;
+  readonly message: string;
+}> {}
+
+/**
+ * `ledger.Transaction.deserialize` failed on bytes returned by Lace. Typically
+ * indicates a serializer/runtime version skew between the SDK's ledger-v8 and
+ * Lace's. `bytesLength` is the size of the Lace-returned blob.
+ *
+ * @since 0.6.3
+ * @category errors
+ */
+export class TransactionDeserializeError extends Data.TaggedError('TransactionDeserializeError')<{
+  readonly bytesLength: number;
+  readonly cause?: unknown;
+  readonly message: string;
+}> {}
+
+/**
+ * No eligible NIGHT UTXOs to (de)register for DUST generation.
+ * Distinct from `WalletError` because it's a *precondition* failure —
+ * not an exception — and consumers typically surface UX like
+ * "faucet some NIGHT first" rather than treating it as a crash.
+ *
+ * @since 0.6.3
+ * @category errors
+ */
+export class DustRegistrationError extends Data.TaggedError('DustRegistrationError')<{
+  readonly direction: 'register' | 'deregister';
+  readonly reason: 'no-eligible-utxos';
+  readonly message: string;
+}> {}
+
 // =============================================================================
 // Types — Seed Wallet
 // =============================================================================
@@ -330,10 +404,10 @@ export interface ConnectedWallet {
   readonly effect: {
     getBalance(): Effect.Effect<WalletBalance, WalletError>;
     providers(): Effect.Effect<WalletProviders, WalletError>;
-    shield(amount: bigint, options?: ShieldOptions): Effect.Effect<ShieldResult, WalletError>;
-    unshield(amount: bigint, options?: ShieldOptions): Effect.Effect<ShieldResult, WalletError>;
-    registerDust(options?: RegisterDustOptions): Effect.Effect<RegisterDustResult, WalletError>;
-    deregisterDust(options?: RegisterDustOptions): Effect.Effect<RegisterDustResult, WalletError>;
+    shield(amount: bigint, options?: ShieldOptions): Effect.Effect<ShieldResult, WalletError | LaceUnavailableError>;
+    unshield(amount: bigint, options?: ShieldOptions): Effect.Effect<ShieldResult, WalletError | LaceUnavailableError>;
+    registerDust(options?: RegisterDustOptions): Effect.Effect<RegisterDustResult, WalletError | DustRegistrationError>;
+    deregisterDust(options?: RegisterDustOptions): Effect.Effect<RegisterDustResult, WalletError | DustRegistrationError>;
     close(): Effect.Effect<void, WalletError>;
   };
 }
@@ -517,7 +591,10 @@ function closeEffect(walletContext: WalletContext): Effect.Effect<void, WalletEr
   });
 }
 
-function initEffect(seed: string, networkConfig: NetworkConfig): Effect.Effect<WalletContext, WalletError> {
+function initEffect(
+  seed: string,
+  networkConfig: NetworkConfig,
+): Effect.Effect<WalletContext, WalletError | WalletKeyDerivationError> {
   return Effect.tryPromise({
     try: async () => {
       const seedBytes = hexToBytes(seed);
@@ -539,14 +616,26 @@ function initEffect(seed: string, networkConfig: NetworkConfig): Effect.Effect<W
       };
 
       const hdWallet = HDWallet.fromSeed(seedBytes);
-      if (hdWallet.type !== 'seedOk') throw new Error('Failed to initialize HDWallet');
+      if (hdWallet.type !== 'seedOk') {
+        throw new WalletKeyDerivationError({
+          phase: 'init',
+          cause: hdWallet,
+          message: `HDWallet.fromSeed returned non-seedOk variant: ${hdWallet.type}`,
+        });
+      }
 
       const derivationResult = hdWallet.hdWallet
         .selectAccount(0)
         .selectRoles([Roles.Zswap, Roles.NightExternal, Roles.Dust])
         .deriveKeysAt(0);
 
-      if (derivationResult.type !== 'keysDerived') throw new Error('Failed to derive keys');
+      if (derivationResult.type !== 'keysDerived') {
+        throw new WalletKeyDerivationError({
+          phase: 'derive',
+          cause: derivationResult,
+          message: `deriveKeysAt(0) returned non-keysDerived variant: ${derivationResult.type}`,
+        });
+      }
       hdWallet.hdWallet.clear();
 
       const shieldedSecretKeys = ledger.ZswapSecretKeys.fromSeed(derivationResult.keys[Roles.Zswap]);
@@ -571,10 +660,12 @@ function initEffect(seed: string, networkConfig: NetworkConfig): Effect.Effect<W
       return { wallet, shieldedSecretKeys, dustSecretKey, unshieldedKeystore, networkId: networkConfig.networkId };
     },
     catch: (cause) =>
-      new WalletError({
-        cause,
-        message: `Failed to initialize wallet: ${cause instanceof Error ? cause.message : String(cause)}`,
-      }),
+      cause instanceof WalletKeyDerivationError
+        ? cause
+        : new WalletError({
+            cause,
+            message: `Failed to initialize wallet: ${cause instanceof Error ? cause.message : String(cause)}`,
+          }),
   });
 }
 
@@ -589,30 +680,47 @@ function waitForSyncEffect(walletContext: WalletContext): Effect.Effect<void, Wa
   }).pipe(Effect.asVoid);
 }
 
-function deriveAddressEffect(seed: string, networkId: string): Effect.Effect<string, WalletError> {
+function deriveAddressEffect(
+  seed: string,
+  networkId: string,
+): Effect.Effect<string, WalletError | WalletKeyDerivationError> {
   return Effect.try({
     try: () => {
       const seedBytes = hexToBytes(seed);
 
       const hdWallet = HDWallet.fromSeed(seedBytes);
-      if (hdWallet.type !== 'seedOk') throw new Error('Failed to initialize HDWallet');
+      if (hdWallet.type !== 'seedOk') {
+        throw new WalletKeyDerivationError({
+          phase: 'init',
+          cause: hdWallet,
+          message: `HDWallet.fromSeed returned non-seedOk variant: ${hdWallet.type}`,
+        });
+      }
 
       const derivationResult = hdWallet.hdWallet
         .selectAccount(0)
         .selectRoles([Roles.NightExternal])
         .deriveKeysAt(0);
 
-      if (derivationResult.type !== 'keysDerived') throw new Error('Failed to derive keys');
+      if (derivationResult.type !== 'keysDerived') {
+        throw new WalletKeyDerivationError({
+          phase: 'derive',
+          cause: derivationResult,
+          message: `deriveKeysAt(0) returned non-keysDerived variant: ${derivationResult.type}`,
+        });
+      }
       hdWallet.hdWallet.clear();
 
       const unshieldedKeystore = createKeystore(derivationResult.keys[Roles.NightExternal], networkId as 'undeployed');
       return unshieldedKeystore.getBech32Address().asString();
     },
     catch: (cause) =>
-      new WalletError({
-        cause,
-        message: `Failed to derive address: ${cause instanceof Error ? cause.message : String(cause)}`,
-      }),
+      cause instanceof WalletKeyDerivationError
+        ? cause
+        : new WalletError({
+            cause,
+            message: `Failed to derive address: ${cause instanceof Error ? cause.message : String(cause)}`,
+          }),
   });
 }
 
@@ -649,7 +757,9 @@ function isAvailableEffect(): Effect.Effect<boolean, never> {
   return Effect.sync(() => !!findInjectedWallet());
 }
 
-function waitForWalletEffect(timeout: number = 5000): Effect.Effect<InitialAPI, WalletError> {
+function waitForWalletEffect(
+  timeout: number = 5000,
+): Effect.Effect<InitialAPI, WalletError | LaceUnavailableError> {
   return Effect.tryPromise({
     try: async () => {
       const start = Date.now();
@@ -660,13 +770,18 @@ function waitForWalletEffect(timeout: number = 5000): Effect.Effect<InitialAPI, 
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
 
-      throw new Error('Lace wallet not found. Please install the Lace browser extension.');
+      throw new LaceUnavailableError({
+        reason: 'not-installed',
+        message: 'Lace wallet not found. Please install the Lace browser extension.',
+      });
     },
     catch: (cause) =>
-      new WalletError({
-        cause,
-        message: `Wallet not available: ${cause instanceof Error ? cause.message : String(cause)}`,
-      }),
+      cause instanceof LaceUnavailableError
+        ? cause
+        : new WalletError({
+            cause,
+            message: `Wallet not available: ${cause instanceof Error ? cause.message : String(cause)}`,
+          }),
   });
 }
 
@@ -676,7 +791,9 @@ function isVersionCompatible(version: string, required: string): boolean {
   return major >= requiredMajor;
 }
 
-function connectEffect(networkId: string = 'testnet'): Effect.Effect<WalletConnection, WalletError> {
+function connectEffect(
+  networkId: string = 'testnet',
+): Effect.Effect<WalletConnection, WalletError | LaceUnavailableError> {
   return Effect.gen(function* () {
     if (typeof window === 'undefined') {
       return yield* Effect.fail(
@@ -760,7 +877,7 @@ function getProvingProviderEffect(
 function balanceTxEffect(
   wallet: ConnectedAPI,
   tx: UnboundTransaction,
-): Effect.Effect<FinalizedTransaction, WalletError> {
+): Effect.Effect<FinalizedTransaction, WalletError | LaceTransferError | TransactionDeserializeError> {
   return Effect.tryPromise({
     try: async () => {
       const txBytes = tx.serialize();
@@ -779,7 +896,12 @@ function balanceTxEffect(
           err.message && `message=${err.message}`,
         ].filter(Boolean).join(', ') || JSON.stringify(e);
         console.error('[midday-sdk] Lace balanceUnsealedTransaction error:', e);
-        throw new Error(`Lace balanceUnsealedTransaction failed: ${details}`);
+        throw new LaceTransferError({
+          operation: 'balance',
+          detail: details,
+          cause: e,
+          message: `Lace balanceUnsealedTransaction failed: ${details}`,
+        });
       }
 
       const resultBytes = hexToBytes(result.tx);
@@ -791,14 +913,20 @@ function balanceTxEffect(
           resultBytes,
         ) as FinalizedTransaction;
       } catch (e) {
-        throw new Error(`Transaction.deserialize failed (${resultBytes.length} bytes): ${e instanceof Error ? e.message : JSON.stringify(e)}`);
+        throw new TransactionDeserializeError({
+          bytesLength: resultBytes.length,
+          cause: e,
+          message: `Transaction.deserialize failed (${resultBytes.length} bytes): ${e instanceof Error ? e.message : JSON.stringify(e)}`,
+        });
       }
     },
     catch: (cause) =>
-      new WalletError({
-        cause,
-        message: `Failed to balance transaction: ${cause instanceof Error ? cause.message : String(cause)}`,
-      }),
+      cause instanceof LaceTransferError || cause instanceof TransactionDeserializeError
+        ? cause
+        : new WalletError({
+            cause,
+            message: `Failed to balance transaction: ${cause instanceof Error ? cause.message : String(cause)}`,
+          }),
   });
 }
 
@@ -983,15 +1111,18 @@ function shieldFromBrowserEffect(
   direction: TransferDirection,
   amount: bigint,
   options?: ShieldOptions,
-): Effect.Effect<ShieldResult, WalletError> {
+): Effect.Effect<ShieldResult, WalletError | LaceUnavailableError> {
   return Effect.tryPromise({
     try: async () => {
       const tokenType = options?.tokenType ?? ledger.nativeToken().raw;
 
       if (typeof connection.wallet.makeTransfer !== 'function') {
-        throw new Error(
-          'Lace wallet does not expose makeTransfer. Upgrade Lace to a version that supports the Midnight DApp Connector ≥ 4.0.',
-        );
+        throw new LaceUnavailableError({
+          reason: 'incompatible-version',
+          detail: 'makeTransfer not exposed',
+          message:
+            'Lace wallet does not expose makeTransfer. Upgrade Lace to a version that supports the Midnight DApp Connector ≥ 4.0.',
+        });
       }
 
       const recipient = direction === 'shield'
@@ -1014,10 +1145,12 @@ function shieldFromBrowserEffect(
       return { txId: tx, amount };
     },
     catch: (cause) =>
-      new WalletError({
-        cause,
-        message: `Failed to ${direction} ${amount}: ${cause instanceof Error ? cause.message : String(cause)}`,
-      }),
+      cause instanceof LaceUnavailableError
+        ? cause
+        : new WalletError({
+            cause,
+            message: `Failed to ${direction} ${amount}: ${cause instanceof Error ? cause.message : String(cause)}`,
+          }),
   });
 }
 
@@ -1031,7 +1164,7 @@ function registerDustFromSeedEffect(
   walletContext: WalletContext,
   direction: RegisterDirection,
   options?: RegisterDustOptions,
-): Effect.Effect<RegisterDustResult, WalletError> {
+): Effect.Effect<RegisterDustResult, WalletError | DustRegistrationError> {
   return Effect.tryPromise({
     try: async () => {
       const nativeTokenType = ledger.nativeToken().raw;
@@ -1059,11 +1192,14 @@ function registerDustFromSeedEffect(
       const targets: readonly unknown[] = options?.utxos ?? allCoins.filter(shouldInclude);
 
       if (targets.length === 0) {
-        throw new Error(
-          direction === 'register'
-            ? 'No unregistered NIGHT UTXOs to register. Faucet some NIGHT first, or they may already be registered.'
-            : 'No registered NIGHT UTXOs to deregister.',
-        );
+        throw new DustRegistrationError({
+          direction,
+          reason: 'no-eligible-utxos',
+          message:
+            direction === 'register'
+              ? 'No unregistered NIGHT UTXOs to register. Faucet some NIGHT first, or they may already be registered.'
+              : 'No registered NIGHT UTXOs to deregister.',
+        });
       }
 
       const verifyingKey = walletContext.unshieldedKeystore.getPublicKey();
@@ -1090,10 +1226,12 @@ function registerDustFromSeedEffect(
       return { txId, count: targets.length };
     },
     catch: (cause) =>
-      new WalletError({
-        cause,
-        message: `Failed to ${direction} DUST: ${cause instanceof Error ? cause.message : String(cause)}`,
-      }),
+      cause instanceof DustRegistrationError
+        ? cause
+        : new WalletError({
+            cause,
+            message: `Failed to ${direction} DUST: ${cause instanceof Error ? cause.message : String(cause)}`,
+          }),
   });
 }
 
@@ -1139,7 +1277,7 @@ function fromSeedEffect(
   seed: string,
   networkConfig: NetworkConfig,
   options?: FromSeedOptions,
-): Effect.Effect<ConnectedWallet, WalletError> {
+): Effect.Effect<ConnectedWallet, WalletError | WalletKeyDerivationError> {
   return Effect.gen(function* () {
     const walletContext = yield* initEffect(seed, networkConfig);
 
@@ -1156,7 +1294,9 @@ function fromSeedEffect(
   });
 }
 
-function fromBrowserEffect(networkId: string = 'testnet'): Effect.Effect<ConnectedWallet, WalletError> {
+function fromBrowserEffect(
+  networkId: string = 'testnet',
+): Effect.Effect<ConnectedWallet, WalletError | LaceUnavailableError> {
   return Effect.gen(function* () {
     const connection = yield* connectEffect(networkId);
     const address = connection.addresses.shieldedAddress;
@@ -1197,7 +1337,7 @@ function createConnectedWalletHandle(
     direction: TransferDirection,
     amount: bigint,
     options?: ShieldOptions,
-  ): Effect.Effect<ShieldResult, WalletError> =>
+  ): Effect.Effect<ShieldResult, WalletError | LaceUnavailableError> =>
     backend.type === 'seed'
       ? shieldFromSeedEffect(backend.context, direction, amount, options)
       : shieldFromBrowserEffect(backend.connection, direction, amount, options);
@@ -1205,7 +1345,7 @@ function createConnectedWalletHandle(
   const registerDustEff = (
     direction: RegisterDirection,
     options?: RegisterDustOptions,
-  ): Effect.Effect<RegisterDustResult, WalletError> =>
+  ): Effect.Effect<RegisterDustResult, WalletError | DustRegistrationError> =>
     backend.type === 'seed'
       ? registerDustFromSeedEffect(backend.context, direction, options)
       : registerDustFromBrowserEffect(backend.connection, direction, options);
@@ -1434,10 +1574,16 @@ export const effect = {
  * @category service
  */
 export interface WalletServiceImpl {
-  readonly init: (seed: string, networkConfig: NetworkConfig) => Effect.Effect<WalletContext, WalletError>;
+  readonly init: (
+    seed: string,
+    networkConfig: NetworkConfig,
+  ) => Effect.Effect<WalletContext, WalletError | WalletKeyDerivationError>;
   readonly waitForSync: (walletContext: WalletContext) => Effect.Effect<void, WalletError>;
   readonly close: (walletContext: WalletContext) => Effect.Effect<void, WalletError>;
-  readonly deriveAddress: (seed: string, networkId: string) => Effect.Effect<string, WalletError>;
+  readonly deriveAddress: (
+    seed: string,
+    networkId: string,
+  ) => Effect.Effect<string, WalletError | WalletKeyDerivationError>;
   readonly providers: (walletContext: WalletContext) => Effect.Effect<WalletProviders, WalletError>;
 }
 
@@ -1474,7 +1620,7 @@ export const WalletLive: Layer.Layer<WalletService> = Layer.succeed(WalletServic
  * @category service
  */
 export interface WalletConnectorServiceImpl {
-  readonly connect: (networkId?: string) => Effect.Effect<WalletConnection, WalletError>;
+  readonly connect: (networkId?: string) => Effect.Effect<WalletConnection, WalletError | LaceUnavailableError>;
   readonly isAvailable: () => Effect.Effect<boolean, never>;
   readonly disconnect: () => Effect.Effect<void, never>;
   readonly getProvingProvider: (
@@ -1521,7 +1667,7 @@ export interface WalletProviderServiceImpl {
   readonly balanceTx: (
     wallet: ConnectedAPI,
     tx: UnboundTransaction,
-  ) => Effect.Effect<FinalizedTransaction, WalletError>;
+  ) => Effect.Effect<FinalizedTransaction, WalletError | LaceTransferError | TransactionDeserializeError>;
   readonly submitTx: (wallet: ConnectedAPI, tx: FinalizedTransaction) => Effect.Effect<TransactionId, WalletError>;
 }
 
