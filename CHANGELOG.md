@@ -1,5 +1,13 @@
 # @no-witness-labs/midday-sdk
 
+## 0.6.4
+
+### Patch Changes
+
+- Bump Midnight dependency stack for preview/preprod wallet-sync compatibility: `compact-js` 2.5.1, `compact-runtime` 0.16.0, `midnight-js-*` 4.1.1, wallet dust/facade/shielded/unshielded packages, and Node engine >=22.
+- Recompile bundled counter and secret-counter Compact artifacts with `COMPACTC_VERSION=0.31.0` / `run-compactc`.
+- Run Vitest suites with `--no-file-parallelism` to avoid wallet/devnet state races.
+
 ## 0.6.3
 
 ### Patch Changes
