@@ -293,6 +293,15 @@ export interface WalletProviders {
   midnightProvider: MidnightProvider;
 }
 
+/** Wallet balance pools that may contribute inputs to a transaction. */
+export type TokenKindToBalance = 'dust' | 'shielded' | 'unshielded';
+
+/** Controls transaction balancing for seed-backed wallets. */
+export interface BalanceOptions {
+  /** Pools available to the wallet balancer. Defaults to the wallet SDK's `all` policy. */
+  readonly tokenKindsToBalance?: 'all' | TokenKindToBalance[];
+}
+
 // =============================================================================
 // Types — Unified Wallet
 // =============================================================================
@@ -365,8 +374,12 @@ export interface ConnectedWallet {
 
   /** Get current wallet balance across all account types. */
   getBalance(): Promise<WalletBalance>;
-  /** Get WalletProvider and MidnightProvider for contract operations. */
-  providers(): WalletProviders;
+  /**
+   * Get WalletProvider and MidnightProvider for contract operations.
+   * Balance options are supported only by seed-backed wallets because the
+   * browser connector does not expose pool selection.
+   */
+  providers(options?: BalanceOptions): WalletProviders;
   /**
    * Move NIGHT (or any token) from the unshielded pool into the shielded pool
    * of *this same wallet*. Required before interacting with shielded contracts
@@ -403,7 +416,7 @@ export interface ConnectedWallet {
   /** Effect versions of wallet operations. */
   readonly effect: {
     getBalance(): Effect.Effect<WalletBalance, WalletError>;
-    providers(): Effect.Effect<WalletProviders, WalletError>;
+    providers(options?: BalanceOptions): Effect.Effect<WalletProviders, WalletError>;
     shield(amount: bigint, options?: ShieldOptions): Effect.Effect<ShieldResult, WalletError | LaceUnavailableError>;
     unshield(amount: bigint, options?: ShieldOptions): Effect.Effect<ShieldResult, WalletError | LaceUnavailableError>;
     registerDust(options?: RegisterDustOptions): Effect.Effect<RegisterDustResult, WalletError | DustRegistrationError>;
@@ -519,6 +532,7 @@ export async function balanceAndFinalize(
   walletContext: WalletContext,
   tx: UnboundTransaction,
   ttl: Date,
+  options?: BalanceOptions,
 ): Promise<ledger.FinalizedTransaction> {
   const recipe = await walletContext.wallet.balanceUnboundTransaction(
     tx,
@@ -526,7 +540,12 @@ export async function balanceAndFinalize(
       shieldedSecretKeys: walletContext.shieldedSecretKeys,
       dustSecretKey: walletContext.dustSecretKey,
     },
-    { ttl },
+    {
+      ttl,
+      ...(options?.tokenKindsToBalance === undefined
+        ? {}
+        : { tokenKindsToBalance: options.tokenKindsToBalance }),
+    },
   );
 
   const signedRecipe = await walletContext.wallet.signRecipe(recipe, (payload: Uint8Array) =>
@@ -550,7 +569,7 @@ export async function balanceAndFinalize(
  */
 function providersEffect(
   walletContext: WalletContext,
-  options?: { txTtlMs?: number },
+  options?: { txTtlMs?: number } & BalanceOptions,
 ): Effect.Effect<WalletProviders, WalletError> {
   const defaultTtlMs = options?.txTtlMs ?? DEFAULT_TX_TTL_MS;
   return Effect.try({
@@ -562,7 +581,8 @@ function providersEffect(
           walletContext.shieldedSecretKeys.encryptionPublicKey as unknown as ledger.EncPublicKey,
         balanceTx: async (tx: UnboundTransaction, ttl?: Date): Promise<ledger.FinalizedTransaction> => {
           const txTtl = ttl ?? new Date(Date.now() + defaultTtlMs);
-          return balanceAndFinalize(walletContext, tx, txTtl);
+          await walletContext.wallet.waitForSyncedState();
+          return balanceAndFinalize(walletContext, tx, txTtl, options);
         },
       };
 
@@ -885,7 +905,7 @@ function balanceTxEffect(
 
       let result: { tx: string };
       try {
-        result = await wallet.balanceUnsealedTransaction(serializedTx);
+        result = await wallet.balanceUnsealedTransaction(serializedTx, { payFees: true });
       } catch (e: unknown) {
         // DApp Connector APIError has: type, code, reason fields
         const err = e as { type?: string; code?: string; reason?: string; message?: string };
@@ -1318,17 +1338,24 @@ function createConnectedWalletHandle(
       ? getBalanceFromSeedEffect(backend.context)
       : getBalanceFromBrowserEffect(backend.connection);
 
-  const providersEff = (): Effect.Effect<WalletProviders, WalletError> =>
+  const providersEff = (options?: BalanceOptions): Effect.Effect<WalletProviders, WalletError> =>
     backend.type === 'seed'
-      ? providersEffect(backend.context)
-      : Effect.try({
-          try: () => createWalletProviders(backend.connection.wallet, backend.connection.addresses),
-          catch: (cause) =>
+      ? providersEffect(backend.context, options)
+      : options?.tokenKindsToBalance !== undefined
+        ? Effect.fail(
             new WalletError({
-              cause,
-              message: `Failed to create wallet providers: ${cause instanceof Error ? cause.message : String(cause)}`,
+              cause: undefined,
+              message: 'Balance pool selection is not supported by the Midnight browser connector.',
             }),
-        });
+          )
+        : Effect.try({
+            try: () => createWalletProviders(backend.connection.wallet, backend.connection.addresses),
+            catch: (cause) =>
+              new WalletError({
+                cause,
+                message: `Failed to create wallet providers: ${cause instanceof Error ? cause.message : String(cause)}`,
+              }),
+          });
 
   const closeEff = (): Effect.Effect<void, WalletError> =>
     backend.type === 'seed' ? closeEffect(backend.context) : Effect.void;
@@ -1358,7 +1385,7 @@ function createConnectedWalletHandle(
     encryptionPublicKey: keys.encryptionPublicKey,
 
     getBalance: () => runEffectPromise(getBalanceEff()),
-    providers: () => runEffect(providersEff()),
+    providers: (options) => runEffect(providersEff(options)),
     shield: (amount, options) => runEffectPromise(shieldEff('shield', amount, options)),
     unshield: (amount, options) => runEffectPromise(shieldEff('unshield', amount, options)),
     registerDust: (options) => runEffectPromise(registerDustEff('register', options)),
@@ -1513,7 +1540,10 @@ export async function getWalletProvingProvider(
  * @since 0.2.0
  * @category browser
  */
-export function createWalletProviders(wallet: ConnectedAPI, addresses: ShieldedAddresses): WalletProviders {
+export function createWalletProviders(
+  wallet: ConnectedAPI,
+  addresses: ShieldedAddresses,
+): WalletProviders {
   const walletProvider: WalletProvider = {
     getCoinPublicKey: () => addresses.shieldedCoinPublicKey as unknown as ReturnType<WalletProvider['getCoinPublicKey']>,
     getEncryptionPublicKey: () =>

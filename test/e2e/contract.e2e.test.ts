@@ -70,6 +70,7 @@ describe('Contract E2E Tests', () => {
           networkConfig: cluster.networkConfig,
           privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
           logging: true,
+          balance: { tokenKindsToBalance: ['unshielded', 'dust'] },
         });
 
         // Load and deploy contract with retry — proof server can be flaky
