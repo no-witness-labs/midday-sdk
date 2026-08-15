@@ -459,6 +459,8 @@ export interface ServerOptions {
  * Start an HTTP faucet server for browser apps.
  *
  * The server accepts POST requests to /faucet with JSON body:
+ * { "unshieldedAddress": "mn_addr_..." }
+ * or the legacy shielded form:
  * { "coinPublicKey": "...", "encryptionPublicKey": "..." }
  *
  * @param networkConfig - Network configuration for the devnet
@@ -501,20 +503,23 @@ export function startServer(networkConfig: NetworkConfig, options: ServerOptions
       req.on('data', (chunk) => (body += chunk));
       req.on('end', async () => {
         try {
-          const { coinPublicKey, encryptionPublicKey } = JSON.parse(body);
-          if (!coinPublicKey || !encryptionPublicKey) {
+          const { unshieldedAddress, coinPublicKey, encryptionPublicKey } = JSON.parse(body);
+          if (!unshieldedAddress && (!coinPublicKey || !encryptionPublicKey)) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Missing coinPublicKey or encryptionPublicKey' }));
+            res.end(JSON.stringify({ error: 'Provide unshieldedAddress or both coinPublicKey and encryptionPublicKey' }));
             return;
           }
 
-          // Convert hex keys to bech32m address
-          const coinKey = ShieldedCoinPublicKey.fromHexString(coinPublicKey);
-          const encKey = ShieldedEncryptionPublicKey.fromHexString(encryptionPublicKey);
-          const shieldedAddr = new ShieldedAddress(coinKey, encKey);
-          const address = MidnightBech32m.encode(networkConfig.networkId, shieldedAddr).asString();
-
-          const result = await fundShielded(networkConfig, address);
+          let result: FundResult;
+          if (unshieldedAddress) {
+            result = await fundUnshielded(networkConfig, unshieldedAddress);
+          } else {
+            const coinKey = ShieldedCoinPublicKey.fromHexString(coinPublicKey);
+            const encKey = ShieldedEncryptionPublicKey.fromHexString(encryptionPublicKey);
+            const shieldedAddr = new ShieldedAddress(coinKey, encKey);
+            const address = MidnightBech32m.encode(networkConfig.networkId, shieldedAddr).asString();
+            result = await fundShielded(networkConfig, address);
+          }
 
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ txId: result.txId, amount: result.amount.toString() }));
