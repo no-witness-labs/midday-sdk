@@ -417,6 +417,10 @@ function createIndexerEffect(
             `RUST_LOG=indexer=${config.indexer.logLevel},chain_indexer=${config.indexer.logLevel},indexer_api=${config.indexer.logLevel},wallet_indexer=${config.indexer.logLevel},indexer_common=${config.indexer.logLevel},fastrace_opentelemetry=${config.indexer.logLevel},${config.indexer.logLevel}`,
             `APP__INFRA__SECRET=${Config.DEV_INDEXER_SECRET}`,
             `APP__INFRA__NODE__URL=${nodeUrl}`,
+            // Indexer 4.3+ requires an SPO node and a non-empty Blockfrost id at
+            // startup; SPO features are unused on a local devnet.
+            `APP__INFRA__SPO_NODE__URL=${nodeUrl}`,
+            'APP__INFRA__SPO_NODE__BLOCKFROST_ID=unused-local-devnet',
           ],
           Healthcheck: {
             // This is what the indexer uses to signal it's fully synced
