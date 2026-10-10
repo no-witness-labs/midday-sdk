@@ -149,6 +149,56 @@ const wallet = await Midday.Wallet.fromBrowser('preview');
 const wallet = Midday.Wallet.fromAddress('0x...');
 ```
 
+### Persisting Seed Wallet State
+
+A seed wallet normally syncs from genesis on every start, which can take hours on
+public networks. Long-running services can snapshot the synced state and resume
+from it after a restart:
+
+```typescript
+import { writeFile, readFile } from 'node:fs/promises';
+
+// Snapshot (e.g. periodically, and before shutdown)
+const wallet = await Midday.Wallet.fromSeed(seed, networkConfig);
+const snapshot = await wallet.serializeState();
+await writeFile('wallet-state.enc', encrypt(snapshot)); // your encryption
+await wallet.close();
+
+// Resume: only the blocks since the snapshot are synced
+const saved = decrypt(await readFile('wallet-state.enc'));
+const resumed = await Midday.Wallet.fromSeed(seed, networkConfig, { restoreState: saved });
+```
+
+The snapshot is a versioned JSON string that records the snapshot format version,
+the `networkId`, and the wallet SDK package versions that produced it, alongside
+the shielded, unshielded and DUST wallet states and the transaction history.
+
+Restoring validates the snapshot first and fails with `WalletSnapshotError` instead
+of silently syncing from scratch. Decide in your code whether to discard the
+snapshot and resync:
+
+```typescript
+const wallet = await Midday.Wallet.fromSeed(seed, networkConfig, { restoreState: saved })
+  .catch(async (err) => {
+    if (err?._tag !== 'WalletSnapshotError') throw err;
+    // err.reason: 'malformed' | 'unsupported-version' | 'network-mismatch'
+    //           | 'key-mismatch' | 'restore-failed'
+    return Midday.Wallet.fromSeed(seed, networkConfig); // full resync
+  });
+```
+
+`serializeState()` fails with reason `'pending-transactions'` while submitted
+transactions are still unconfirmed, because pending submissions are not part of
+the snapshot. Retry once they settle. It is only available on seed-backed wallets.
+Effect users can call `wallet.effect.serializeState()`.
+
+:::danger[Snapshots contain private wallet data]
+A snapshot holds your coins, UTXOs, nullifier-related data and transaction history.
+It does not contain the seed or secret keys, but anyone who reads it learns your
+private balances and activity. Store snapshots encrypted and access-controlled,
+treat them like the seed, and never log their contents.
+:::
+
 ### Lace Wallet (Browser)
 
 For browser applications, connect to the Lace wallet extension:

@@ -154,6 +154,11 @@ await deployed.actions.increment();
 const wallet = await Midday.Wallet.fromSeed(seed, networkConfig);
 const balance = await wallet.getBalance();
 
+// Persist sync state and resume after a restart instead of resyncing the chain.
+// Snapshots contain private wallet data: store them encrypted, never log them.
+const snapshot = await wallet.serializeState();
+const resumed = await Midday.Wallet.fromSeed(seed, networkConfig, { restoreState: snapshot });
+
 // From browser (Lace extension)
 const wallet = await Midday.Wallet.fromBrowser('preview');
 const balance = await wallet.getBalance();

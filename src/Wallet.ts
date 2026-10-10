@@ -6,6 +6,8 @@
  *
  * **Seed Wallet** (server-side):
  * - `Wallet.fromSeed(seed, config)` — create and sync a connected wallet
+ * - `wallet.serializeState()` / `Wallet.fromSeed(seed, config, { restoreState })`
+ *   — persist and resume sync state across restarts
  * - `Wallet.deriveAddress(seed, networkId)` — derive address without connecting
  *
  * **Browser Wallet** (Lace extension):
@@ -16,11 +18,16 @@
  * @module
  */
 
-import { Context, Data, Effect, Layer } from 'effect';
+import { Context, Data, Effect, Layer, Schema } from 'effect';
 import * as Rx from 'rxjs';
 import * as ledger from '@midnight-ntwrk/ledger-v8';
 import { Transaction, type FinalizedTransaction, type TransactionId } from '@midnight-ntwrk/ledger-v8';
-import { WalletFacade, WalletEntrySchema, mergeWalletEntries } from '@midnight-ntwrk/wallet-sdk-facade';
+import {
+  WalletFacade,
+  WalletEntrySchema,
+  mergeWalletEntries,
+  type WalletEntry,
+} from '@midnight-ntwrk/wallet-sdk-facade';
 import { HDWallet, Roles } from '@midnight-ntwrk/wallet-sdk-hd';
 import { ShieldedWallet } from '@midnight-ntwrk/wallet-sdk-shielded';
 import { DustWallet } from '@midnight-ntwrk/wallet-sdk-dust-wallet';
@@ -129,6 +136,256 @@ export class DustRegistrationError extends Data.TaggedError('DustRegistrationErr
   readonly message: string;
 }> {}
 
+/**
+ * A wallet state snapshot could not be produced or restored.
+ *
+ * - `'malformed'` — not a snapshot (bad JSON, missing fields, corrupt component).
+ * - `'unsupported-version'` — snapshot format version this SDK cannot read.
+ * - `'network-mismatch'` — snapshot was taken on a different network.
+ * - `'key-mismatch'` — snapshot belongs to a different seed.
+ * - `'restore-failed'` — the wallet SDK rejected a component state.
+ * - `'pending-transactions'` — `serializeState` refused because submitted
+ *   transactions are still awaiting confirmation; retry once they settle.
+ *
+ * Restoring never falls back to a fresh sync on its own: callers decide
+ * whether to discard the snapshot and call `fromSeed` without `restoreState`.
+ *
+ * @since 0.7.0
+ * @category errors
+ */
+export class WalletSnapshotError extends Data.TaggedError('WalletSnapshotError')<{
+  readonly reason:
+    | 'malformed'
+    | 'unsupported-version'
+    | 'network-mismatch'
+    | 'key-mismatch'
+    | 'restore-failed'
+    | 'pending-transactions';
+  readonly cause?: unknown;
+  readonly message: string;
+}> {}
+
+// =============================================================================
+// Wallet State Snapshots
+// =============================================================================
+
+/**
+ * Snapshot format version written by {@link ConnectedWallet.serializeState}.
+ *
+ * @since 0.7.0
+ * @category constants
+ */
+export const WALLET_SNAPSHOT_VERSION = 1;
+
+/**
+ * Package versions recorded in every snapshot (informational). Must match the
+ * exact versions pinned in package.json.
+ *
+ * @since 0.7.0
+ * @category constants
+ */
+export const WALLET_SNAPSHOT_PACKAGES: Readonly<Record<string, string>> = {
+  '@midnight-ntwrk/ledger-v8': '8.1.0',
+  '@midnight-ntwrk/wallet-sdk-abstractions': '2.1.0',
+  '@midnight-ntwrk/wallet-sdk-dust-wallet': '4.2.0',
+  '@midnight-ntwrk/wallet-sdk-facade': '4.1.0',
+  '@midnight-ntwrk/wallet-sdk-shielded': '3.0.2',
+  '@midnight-ntwrk/wallet-sdk-unshielded-wallet': '3.1.0',
+};
+
+const SNAPSHOT_FORMAT = 'midday-wallet-snapshot';
+
+const WalletSnapshotSchema = Schema.Struct({
+  format: Schema.Literal(SNAPSHOT_FORMAT),
+  version: Schema.Literal(WALLET_SNAPSHOT_VERSION),
+  networkId: Schema.String,
+  createdAt: Schema.String,
+  packages: Schema.Record({ key: Schema.String, value: Schema.String }),
+  shielded: Schema.String,
+  unshielded: Schema.String,
+  dust: Schema.String,
+  txHistory: Schema.String,
+});
+
+/**
+ * Decoded snapshot envelope. Each component field is the opaque state string
+ * produced by the corresponding wallet-sdk wallet's `serializeState()`.
+ *
+ * Contains private wallet data (coins, UTXOs, transaction history) but no
+ * secret keys; restoring still requires the seed.
+ *
+ * @since 0.7.0
+ * @category model
+ */
+export type WalletSnapshot = typeof WalletSnapshotSchema.Type;
+
+/**
+ * Public keys a snapshot must carry to be restored with a given seed.
+ *
+ * @since 0.7.0
+ * @category model
+ */
+export interface SnapshotExpectedKeys {
+  readonly coinPublicKey: string;
+  readonly encryptionPublicKey: string;
+  readonly unshieldedPublicKey: string;
+  readonly dustPublicKey: bigint;
+}
+
+const ShieldedComponentSchema = Schema.Struct({
+  networkId: Schema.String,
+  publicKeys: Schema.Struct({ coinPublicKey: Schema.String, encryptionPublicKey: Schema.String }),
+});
+const UnshieldedComponentSchema = Schema.Struct({
+  networkId: Schema.String,
+  publicKey: Schema.Struct({ publicKey: Schema.String }),
+});
+const DustComponentSchema = Schema.Struct({
+  networkId: Schema.String,
+  publicKey: Schema.Struct({ publicKey: Schema.BigInt }),
+});
+
+const snapshotError = (reason: WalletSnapshotError['reason'], message: string, cause?: unknown) =>
+  new WalletSnapshotError({ reason, message, cause });
+
+/**
+ * Validate a serialized snapshot against the target network and, when given,
+ * the seed's public keys. Error messages never include snapshot contents.
+ */
+function decodeSnapshotEffect(
+  serialized: string,
+  expected: { readonly networkId: string; readonly keys?: SnapshotExpectedKeys },
+): Effect.Effect<WalletSnapshot, WalletSnapshotError> {
+  return Effect.gen(function* () {
+    const raw = yield* Effect.try({
+      try: (): unknown => JSON.parse(serialized),
+      catch: () => snapshotError('malformed', 'Wallet snapshot is not valid JSON'),
+    });
+    if (typeof raw !== 'object' || raw === null || (raw as { format?: unknown }).format !== SNAPSHOT_FORMAT) {
+      return yield* Effect.fail(snapshotError('malformed', `Wallet snapshot is missing format "${SNAPSHOT_FORMAT}"`));
+    }
+    const version = (raw as { version?: unknown }).version;
+    if (version !== WALLET_SNAPSHOT_VERSION) {
+      return yield* Effect.fail(
+        snapshotError(
+          'unsupported-version',
+          `Wallet snapshot version ${JSON.stringify(version)} is not supported (expected ${WALLET_SNAPSHOT_VERSION})`,
+        ),
+      );
+    }
+    // Parse errors are not attached as `cause`: they can echo snapshot values.
+    const snapshot = yield* Schema.decodeUnknown(WalletSnapshotSchema)(raw).pipe(
+      Effect.mapError(() => snapshotError('malformed', 'Wallet snapshot envelope is malformed')),
+    );
+    if (snapshot.networkId !== expected.networkId) {
+      return yield* Effect.fail(
+        snapshotError(
+          'network-mismatch',
+          `Wallet snapshot is for network "${snapshot.networkId}", not "${expected.networkId}"`,
+        ),
+      );
+    }
+
+    const decodeComponent = <A, I>(name: string, schema: Schema.Schema<A, I>, value: string) =>
+      Schema.decodeUnknown(Schema.parseJson(schema))(value).pipe(
+        Effect.mapError(() => snapshotError('malformed', `Wallet snapshot ${name} state is malformed`)),
+      );
+    const shielded = yield* decodeComponent('shielded', ShieldedComponentSchema, snapshot.shielded);
+    const unshielded = yield* decodeComponent('unshielded', UnshieldedComponentSchema, snapshot.unshielded);
+    const dust = yield* decodeComponent('dust', DustComponentSchema, snapshot.dust);
+
+    for (const [name, networkId] of [
+      ['shielded', shielded.networkId],
+      ['unshielded', unshielded.networkId],
+      ['dust', dust.networkId],
+    ] as const) {
+      if (networkId !== expected.networkId) {
+        return yield* Effect.fail(
+          snapshotError(
+            'network-mismatch',
+            `Wallet snapshot ${name} state is for network "${networkId}", not "${expected.networkId}"`,
+          ),
+        );
+      }
+    }
+
+    const keys = expected.keys;
+    if (keys) {
+      const mismatched = [
+        shielded.publicKeys.coinPublicKey !== keys.coinPublicKey ? 'shielded coin key' : undefined,
+        shielded.publicKeys.encryptionPublicKey !== keys.encryptionPublicKey ? 'shielded encryption key' : undefined,
+        unshielded.publicKey.publicKey !== keys.unshieldedPublicKey ? 'unshielded key' : undefined,
+        dust.publicKey.publicKey !== keys.dustPublicKey ? 'dust key' : undefined,
+      ].filter((m) => m !== undefined);
+      if (mismatched.length > 0) {
+        return yield* Effect.fail(
+          snapshotError(
+            'key-mismatch',
+            `Wallet snapshot belongs to a different seed (mismatched: ${mismatched.join(', ')})`,
+          ),
+        );
+      }
+    }
+
+    return snapshot;
+  });
+}
+
+function serializeStateEffect(
+  walletContext: WalletContext,
+): Effect.Effect<string, WalletError | WalletSnapshotError> {
+  return Effect.gen(function* () {
+    const { wallet } = walletContext;
+    const pending = yield* Effect.tryPromise({
+      try: () => Rx.firstValueFrom(wallet.pendingTransactionsService.state()),
+      catch: (cause) =>
+        new WalletError({
+          cause,
+          message: `Failed to read pending transactions: ${cause instanceof Error ? cause.message : String(cause)}`,
+        }),
+    });
+    // Submitted-but-unconfirmed transactions live in the facade's pending
+    // service, which is not part of the snapshot. Restoring a snapshot taken
+    // now could leave their coins locked if the transaction later fails.
+    if (pending.all.length > 0) {
+      return yield* Effect.fail(
+        snapshotError(
+          'pending-transactions',
+          `Cannot snapshot wallet state while ${pending.all.length} submitted transaction(s) are pending; retry after they settle`,
+        ),
+      );
+    }
+
+    const [shielded, unshielded, dust, txHistory] = yield* Effect.tryPromise({
+      try: () =>
+        Promise.all([
+          wallet.shielded.serializeState(),
+          wallet.unshielded.serializeState(),
+          wallet.dust.serializeState(),
+          walletContext.txHistoryStorage.serialize(),
+        ]),
+      catch: (cause) =>
+        new WalletError({
+          cause,
+          message: `Failed to serialize wallet state: ${cause instanceof Error ? cause.message : String(cause)}`,
+        }),
+    });
+
+    const snapshot: WalletSnapshot = {
+      format: SNAPSHOT_FORMAT,
+      version: WALLET_SNAPSHOT_VERSION,
+      networkId: walletContext.networkId,
+      createdAt: new Date().toISOString(),
+      packages: WALLET_SNAPSHOT_PACKAGES,
+      shielded,
+      unshielded,
+      dust,
+      txHistory,
+    };
+    return JSON.stringify(snapshot);
+  });
+}
+
 // =============================================================================
 // Types — Seed Wallet
 // =============================================================================
@@ -145,6 +402,8 @@ export interface WalletContext {
   dustSecretKey: ledger.DustSecretKey;
   unshieldedKeystore: ReturnType<typeof createKeystore>;
   networkId: string;
+  /** Transaction history backing the facade; serialized into wallet snapshots. */
+  txHistoryStorage: InMemoryTransactionHistoryStorage<WalletEntry, typeof WalletEntrySchema.Encoded>;
 }
 
 // =============================================================================
@@ -408,6 +667,19 @@ export interface ConnectedWallet {
    * Same backend constraints as {@link registerDust}.
    */
   deregisterDust(options?: RegisterDustOptions): Promise<RegisterDustResult>;
+  /**
+   * Export a versioned snapshot of the wallet's synced state (shielded,
+   * unshielded and dust components plus transaction history) so a later
+   * `Wallet.fromSeed(seed, config, { restoreState })` resumes sync from where
+   * this wallet left off instead of replaying the chain.
+   *
+   * The snapshot contains private wallet data (coins, UTXOs, history) but no
+   * secret keys. Store it encrypted and access-controlled; never log it.
+   *
+   * Fails with `WalletSnapshotError` (`'pending-transactions'`) while
+   * submitted transactions are unconfirmed. Seed-backed wallets only.
+   */
+  serializeState(): Promise<string>;
   /** Close wallet and release resources. */
   close(): Promise<void>;
   /** Support `await using wallet = await Wallet.fromSeed(...)` */
@@ -421,6 +693,7 @@ export interface ConnectedWallet {
     unshield(amount: bigint, options?: ShieldOptions): Effect.Effect<ShieldResult, WalletError | LaceUnavailableError>;
     registerDust(options?: RegisterDustOptions): Effect.Effect<RegisterDustResult, WalletError | DustRegistrationError>;
     deregisterDust(options?: RegisterDustOptions): Effect.Effect<RegisterDustResult, WalletError | DustRegistrationError>;
+    serializeState(): Effect.Effect<string, WalletError | WalletSnapshotError>;
     close(): Effect.Effect<void, WalletError>;
   };
 }
@@ -521,6 +794,25 @@ export type MidnightWallet = ConnectedWallet | ReadonlyWallet;
 export interface FromSeedOptions {
   /** Whether to wait for wallet sync before returning (default: true) */
   sync?: boolean;
+  /**
+   * Snapshot from {@link ConnectedWallet.serializeState} to resume from.
+   * Validated against the network and the seed's keys; an invalid snapshot
+   * fails with `WalletSnapshotError` rather than silently syncing from scratch.
+   *
+   * @since 0.7.0
+   */
+  restoreState?: string;
+}
+
+/**
+ * Options for the seed wallet `init` effect.
+ *
+ * @since 0.7.0
+ * @category model
+ */
+export interface InitOptions {
+  /** Snapshot from {@link ConnectedWallet.serializeState} to resume from. */
+  restoreState?: string;
 }
 
 /**
@@ -614,78 +906,146 @@ function closeEffect(walletContext: WalletContext): Effect.Effect<void, WalletEr
 function initEffect(
   seed: string,
   networkConfig: NetworkConfig,
-): Effect.Effect<WalletContext, WalletError | WalletKeyDerivationError> {
-  return Effect.tryPromise({
-    try: async () => {
-      const seedBytes = hexToBytes(seed);
-
-      const configuration = {
-        networkId: networkConfig.networkId as 'undeployed',
-        costParameters: {
-          additionalFeeOverhead: 300_000_000_000_000_000n,
-          feeBlocksMargin: 5,
-        },
-        relayURL: new URL(networkConfig.node),
-        provingServerUrl: new URL(networkConfig.proofServer),
-        indexerClientConnection: {
-          indexerHttpUrl: networkConfig.indexer,
-          indexerWsUrl: networkConfig.indexerWS,
-        },
-        indexerUrl: networkConfig.indexerWS,
-        txHistoryStorage: new InMemoryTransactionHistoryStorage(WalletEntrySchema, mergeWalletEntries),
-      };
-
-      const hdWallet = HDWallet.fromSeed(seedBytes);
-      if (hdWallet.type !== 'seedOk') {
-        throw new WalletKeyDerivationError({
-          phase: 'init',
-          cause: hdWallet,
-          message: `HDWallet.fromSeed returned non-seedOk variant: ${hdWallet.type}`,
+  options?: InitOptions,
+): Effect.Effect<WalletContext, WalletError | WalletKeyDerivationError | WalletSnapshotError> {
+  const toInitError = (cause: unknown) =>
+    cause instanceof WalletKeyDerivationError
+      ? cause
+      : new WalletError({
+          cause,
+          message: `Failed to initialize wallet: ${cause instanceof Error ? cause.message : String(cause)}`,
         });
-      }
 
-      const derivationResult = hdWallet.hdWallet
-        .selectAccount(0)
-        .selectRoles([Roles.Zswap, Roles.NightExternal, Roles.Dust])
-        .deriveKeysAt(0);
+  return Effect.gen(function* () {
+    const keys = yield* Effect.try({
+      try: () => {
+        const hdWallet = HDWallet.fromSeed(hexToBytes(seed));
+        if (hdWallet.type !== 'seedOk') {
+          throw new WalletKeyDerivationError({
+            phase: 'init',
+            cause: hdWallet,
+            message: `HDWallet.fromSeed returned non-seedOk variant: ${hdWallet.type}`,
+          });
+        }
 
-      if (derivationResult.type !== 'keysDerived') {
-        throw new WalletKeyDerivationError({
-          phase: 'derive',
-          cause: derivationResult,
-          message: `deriveKeysAt(0) returned non-keysDerived variant: ${derivationResult.type}`,
+        const derivationResult = hdWallet.hdWallet
+          .selectAccount(0)
+          .selectRoles([Roles.Zswap, Roles.NightExternal, Roles.Dust])
+          .deriveKeysAt(0);
+
+        if (derivationResult.type !== 'keysDerived') {
+          throw new WalletKeyDerivationError({
+            phase: 'derive',
+            cause: derivationResult,
+            message: `deriveKeysAt(0) returned non-keysDerived variant: ${derivationResult.type}`,
+          });
+        }
+        hdWallet.hdWallet.clear();
+
+        return {
+          shieldedSecretKeys: ledger.ZswapSecretKeys.fromSeed(derivationResult.keys[Roles.Zswap]),
+          dustSecretKey: ledger.DustSecretKey.fromSeed(derivationResult.keys[Roles.Dust]),
+          unshieldedKeystore: createKeystore(
+            derivationResult.keys[Roles.NightExternal],
+            networkConfig.networkId as 'undeployed',
+          ),
+        };
+      },
+      catch: toInitError,
+    });
+    const { shieldedSecretKeys, dustSecretKey, unshieldedKeystore } = keys;
+    const unshieldedPublicKey = UnshieldedPublicKey.fromKeyStore(unshieldedKeystore);
+
+    const snapshot =
+      options?.restoreState === undefined
+        ? undefined
+        : yield* decodeSnapshotEffect(options.restoreState, {
+            networkId: networkConfig.networkId,
+            keys: {
+              coinPublicKey: String(shieldedSecretKeys.coinPublicKey),
+              encryptionPublicKey: String(shieldedSecretKeys.encryptionPublicKey),
+              unshieldedPublicKey: unshieldedPublicKey.publicKey,
+              dustPublicKey: dustSecretKey.publicKey,
+            },
+          });
+
+    const txHistoryStorage = snapshot
+      ? yield* Effect.try({
+          try: () => InMemoryTransactionHistoryStorage.restore(snapshot.txHistory, WalletEntrySchema, mergeWalletEntries),
+          catch: () => snapshotError('restore-failed', 'Wallet snapshot transaction history could not be restored'),
+        })
+      : new InMemoryTransactionHistoryStorage(WalletEntrySchema, mergeWalletEntries);
+
+    const configuration = {
+      networkId: networkConfig.networkId as 'undeployed',
+      costParameters: {
+        additionalFeeOverhead: 300_000_000_000_000_000n,
+        feeBlocksMargin: 5,
+      },
+      relayURL: new URL(networkConfig.node),
+      provingServerUrl: new URL(networkConfig.proofServer),
+      indexerClientConnection: {
+        indexerHttpUrl: networkConfig.indexer,
+        indexerWsUrl: networkConfig.indexerWS,
+      },
+      indexerUrl: networkConfig.indexerWS,
+      txHistoryStorage,
+    };
+
+    // Components are built before the facade so a snapshot the wallet SDK
+    // rejects surfaces as WalletSnapshotError, with nothing left running.
+    const components = yield* Effect.try({
+      try: () => {
+        const built: Array<{ stop(): Promise<void> }> = [];
+        try {
+          const shielded = snapshot
+            ? ShieldedWallet(configuration).restore(snapshot.shielded)
+            : ShieldedWallet(configuration).startWithSecretKeys(shieldedSecretKeys);
+          built.push(shielded);
+          const unshielded = snapshot
+            ? UnshieldedWallet(configuration).restore(snapshot.unshielded)
+            : UnshieldedWallet(configuration).startWithPublicKey(unshieldedPublicKey);
+          built.push(unshielded);
+          const dust = snapshot
+            ? DustWallet(configuration).restore(snapshot.dust)
+            : DustWallet(configuration).startWithSecretKey(
+                dustSecretKey,
+                ledger.LedgerParameters.initialParameters().dust,
+              );
+          return { shielded, unshielded, dust };
+        } catch (cause) {
+          for (const component of built) void component.stop().catch(() => undefined);
+          throw cause;
+        }
+      },
+      catch: (cause) =>
+        snapshot
+          ? snapshotError('restore-failed', 'Wallet SDK rejected the snapshot state')
+          : toInitError(cause),
+    });
+
+    const wallet = yield* Effect.tryPromise({
+      try: async () => {
+        const facade = await WalletFacade.init({
+          configuration,
+          shielded: () => components.shielded,
+          unshielded: () => components.unshielded,
+          dust: () => components.dust,
         });
-      }
-      hdWallet.hdWallet.clear();
+        await facade.start(shieldedSecretKeys, dustSecretKey);
+        return facade;
+      },
+      catch: toInitError,
+    });
 
-      const shieldedSecretKeys = ledger.ZswapSecretKeys.fromSeed(derivationResult.keys[Roles.Zswap]);
-      const dustSecretKey = ledger.DustSecretKey.fromSeed(derivationResult.keys[Roles.Dust]);
-      const unshieldedKeystore = createKeystore(derivationResult.keys[Roles.NightExternal], configuration.networkId);
-
-      const wallet = await WalletFacade.init({
-        configuration,
-        shielded: () => ShieldedWallet(configuration).startWithSecretKeys(shieldedSecretKeys),
-        unshielded: () =>
-          UnshieldedWallet(configuration).startWithPublicKey(
-            UnshieldedPublicKey.fromKeyStore(unshieldedKeystore),
-          ),
-        dust: () =>
-          DustWallet(configuration).startWithSecretKey(
-            dustSecretKey,
-            ledger.LedgerParameters.initialParameters().dust,
-          ),
-      });
-      await wallet.start(shieldedSecretKeys, dustSecretKey);
-
-      return { wallet, shieldedSecretKeys, dustSecretKey, unshieldedKeystore, networkId: networkConfig.networkId };
-    },
-    catch: (cause) =>
-      cause instanceof WalletKeyDerivationError
-        ? cause
-        : new WalletError({
-            cause,
-            message: `Failed to initialize wallet: ${cause instanceof Error ? cause.message : String(cause)}`,
-          }),
+    return {
+      wallet,
+      shieldedSecretKeys,
+      dustSecretKey,
+      unshieldedKeystore,
+      networkId: networkConfig.networkId,
+      txHistoryStorage,
+    };
   });
 }
 
@@ -1297,9 +1657,9 @@ function fromSeedEffect(
   seed: string,
   networkConfig: NetworkConfig,
   options?: FromSeedOptions,
-): Effect.Effect<ConnectedWallet, WalletError | WalletKeyDerivationError> {
+): Effect.Effect<ConnectedWallet, WalletError | WalletKeyDerivationError | WalletSnapshotError> {
   return Effect.gen(function* () {
-    const walletContext = yield* initEffect(seed, networkConfig);
+    const walletContext = yield* initEffect(seed, networkConfig, { restoreState: options?.restoreState });
 
     if (options?.sync !== false) {
       yield* waitForSyncEffect(walletContext);
@@ -1360,6 +1720,16 @@ function createConnectedWalletHandle(
   const closeEff = (): Effect.Effect<void, WalletError> =>
     backend.type === 'seed' ? closeEffect(backend.context) : Effect.void;
 
+  const serializeStateEff = (): Effect.Effect<string, WalletError | WalletSnapshotError> =>
+    backend.type === 'seed'
+      ? serializeStateEffect(backend.context)
+      : Effect.fail(
+          new WalletError({
+            cause: undefined,
+            message: 'serializeState is only supported by seed-backed wallets; the browser extension manages its own state.',
+          }),
+        );
+
   const shieldEff = (
     direction: TransferDirection,
     amount: bigint,
@@ -1390,6 +1760,7 @@ function createConnectedWalletHandle(
     unshield: (amount, options) => runEffectPromise(shieldEff('unshield', amount, options)),
     registerDust: (options) => runEffectPromise(registerDustEff('register', options)),
     deregisterDust: (options) => runEffectPromise(registerDustEff('deregister', options)),
+    serializeState: () => runEffectPromise(serializeStateEff()),
     close: () => runEffectPromise(closeEff()),
     [Symbol.asyncDispose]: () => runEffectPromise(closeEff()),
 
@@ -1400,6 +1771,7 @@ function createConnectedWalletHandle(
       unshield: (amount, options) => shieldEff('unshield', amount, options),
       registerDust: (options) => registerDustEff('register', options),
       deregisterDust: (options) => registerDustEff('deregister', options),
+      serializeState: serializeStateEff,
       close: closeEff,
     },
   };
@@ -1417,16 +1789,23 @@ function createConnectedWalletHandle(
  *
  * @param seed - 64-character hex seed
  * @param networkConfig - Network configuration
- * @param options - Options (sync: whether to wait for sync, default true)
+ * @param options - Options (sync: whether to wait for sync, default true;
+ *   restoreState: snapshot from `wallet.serializeState()` to resume from)
  * @returns Connected wallet handle
  * @throws {WalletError} When initialization or sync fails
+ * @throws {WalletSnapshotError} When `restoreState` is invalid, corrupt, or
+ *   for another network or seed (no silent fallback to a fresh sync)
  *
  * @example
  * ```typescript
  * const wallet = await Midday.Wallet.fromSeed(seed, networkConfig);
  * const balance = await wallet.getBalance();
  * const { walletProvider, midnightProvider } = wallet.providers();
+ *
+ * // Persist sync state (encrypted, access-controlled storage) and resume later
+ * const snapshot = await wallet.serializeState();
  * await wallet.close();
+ * const resumed = await Midday.Wallet.fromSeed(seed, networkConfig, { restoreState: snapshot });
  * ```
  *
  * @since 0.7.0
@@ -1583,6 +1962,8 @@ export const effect = {
   deriveAddress: deriveAddressEffect,
   close: closeEffect,
   providers: providersEffect,
+  serializeState: serializeStateEffect,
+  decodeSnapshot: decodeSnapshotEffect,
   // Browser wallet connector
   connect: connectEffect,
   isAvailable: isAvailableEffect,
@@ -1607,7 +1988,8 @@ export interface WalletServiceImpl {
   readonly init: (
     seed: string,
     networkConfig: NetworkConfig,
-  ) => Effect.Effect<WalletContext, WalletError | WalletKeyDerivationError>;
+    options?: InitOptions,
+  ) => Effect.Effect<WalletContext, WalletError | WalletKeyDerivationError | WalletSnapshotError>;
   readonly waitForSync: (walletContext: WalletContext) => Effect.Effect<void, WalletError>;
   readonly close: (walletContext: WalletContext) => Effect.Effect<void, WalletError>;
   readonly deriveAddress: (
