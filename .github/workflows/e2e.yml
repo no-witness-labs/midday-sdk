@@ -35,7 +35,7 @@ jobs:
         run: |
           docker pull midnightntwrk/midnight-node:0.22.3
           docker pull midnightntwrk/indexer-standalone:4.0.0
-          docker pull midnightntwrk/proof-server:8.0.3
+          docker pull midnightntwrk/proof-server:8.1.3
 
       - name: Run E2E tests
         run: pnpm test:e2e

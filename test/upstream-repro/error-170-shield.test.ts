@@ -13,7 +13,8 @@ import * as Midday from '../../src/index.js';
 //
 // Prereqs:
 //   1. Faucet a preprod test wallet with tNIGHT (https://faucet.preprod.midnight.network).
-//   2. Run a local proof server on :6300 (matches Midday.Config.NETWORKS.preprod).
+//   2. Run a local proof server on :6300 and export MIDNIGHT_REPRO_BLOCKFROST_PROJECT_ID
+//      (a Blockfrost Midnight Preprod token; Preprod is served by Blockfrost).
 //      docker run --rm -p 6300:6300 midnightnetwork/proof-server:latest
 //   3. Export the BIP39 seed for the faucet'd wallet as MIDNIGHT_REPRO_SEED
 //      (hex, no 0x prefix). For the abandon×23+diesel mnemonic this is the
@@ -24,11 +25,14 @@ import * as Midday from '../../src/index.js';
 
 const SEED = process.env.MIDNIGHT_REPRO_SEED;
 const NETWORK = process.env.MIDNIGHT_REPRO_NETWORK ?? 'preprod';
+const BLOCKFROST_PROJECT_ID = process.env.MIDNIGHT_REPRO_BLOCKFROST_PROJECT_ID;
 const AMOUNT = BigInt(process.env.MIDNIGHT_REPRO_AMOUNT ?? '100000000'); // 0.1 NIGHT default
 
 describe.skipIf(!SEED)('upstream-repro: shield → Error 170 InvalidDustSpendProof', () => {
   it('Wallet.shield() rejected by runtime with Custom error 170', async () => {
-    const config = Midday.Config.getNetworkConfig(NETWORK);
+    const config = NETWORK === 'preprod' || NETWORK === 'mainnet'
+      ? Midday.Config.blockfrost(NETWORK, BLOCKFROST_PROJECT_ID!)
+      : Midday.Config.getNetworkConfig(NETWORK);
     const wallet = await Midday.Wallet.fromSeed(SEED!, config);
     if (wallet.type !== 'connected') {
       throw new Error(`wallet not connected: ${JSON.stringify(wallet)}`);

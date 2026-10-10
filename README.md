@@ -194,6 +194,13 @@ const client = await Midday.Client.create({
   // ...
 });
 
+// Preprod / mainnet are served by Blockfrost and need a project token
+const client = await Midday.Client.create({
+  networkConfig: Midday.Config.blockfrost('preprod', process.env.BLOCKFROST_PROJECT_ID!),
+  seed: 'your-64-char-hex-seed',
+  // ...
+});
+
 // Custom network
 const client = await Midday.Client.create({
   networkConfig: {

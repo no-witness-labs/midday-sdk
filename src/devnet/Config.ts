@@ -139,7 +139,7 @@ export const DEFAULT_INDEXER_CONFIG: Required<IndexerConfig> = {
  * @category constants
  */
 export const DEFAULT_PROOF_SERVER_CONFIG: Required<ProofServerConfig> = {
-  image: 'midnightntwrk/proof-server:8.1.0',
+  image: 'midnightntwrk/proof-server:8.1.3',
   port: 6300,
   zkParamsPath: '',
 } as const;
