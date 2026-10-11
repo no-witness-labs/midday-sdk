@@ -129,7 +129,7 @@ import * as Midday from '@no-witness-labs/midday-sdk';
 // Connect to Lace wallet
 const wallet = await Midday.Wallet.fromBrowser('preview');
 
-// Create client with connected wallet
+// Create client with connected wallet; the client uses the wallet's network
 const client = await Midday.Client.create({
   wallet,
   privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
@@ -332,7 +332,6 @@ const deployed = await loaded.deploy({ timeout: 60_000 });
 | Service | Layer | Description |
 |---------|-------|-------------|
 | `Client.MiddayClientService` | `Client.layer(config)` | Pre-initialized client (scoped — auto-closes) |
-| `Client.ClientService` | `Client.ClientLive` | Client factory |
 | `ClusterService` | `Cluster.managedLayer(config?)` | Managed devnet cluster (auto-starts/removes) |
 
 ### Key Types
@@ -382,6 +381,36 @@ import type {
 | `ContractError` | `Contract` | Contract deployment/call failures |
 | `Contract.TxTimeoutError` | `Contract` | Deploy/join timeout (has `operation`) |
 | `WalletError` | `Wallet` | Wallet connection/operation failures |
+
+## Supported Networks and Versions
+
+Midday 0.7 targets the **ledger 8** cohort, which is what Preview and Preprod run today:
+
+| Network | How to configure | Status |
+|---------|------------------|--------|
+| Local devnet | `NETWORKS.local` / `Cluster.make()` (node 1.0.400, indexer 4.3.7, proof server 8.1.3) | Supported, tested in CI |
+| Preview | `NETWORKS.preview` | Supported |
+| Preprod | `Config.blockfrost('preprod', projectId)` | Supported |
+| Mainnet | `Config.blockfrost('mainnet', projectId)` | Configurable; not tested |
+| Public devnet (ledger 9) | — | Not supported by 0.7; ledger-9 support is planned for 0.8 |
+
+Pinned upstream versions: `@midnight-ntwrk/midnight-js-*` 4.1.1, `compact-runtime` 0.16.0 (peer dependency), `compact-js` 2.5.1, `ledger-v8` 8.1.0, wallet SDK 4.x, Compact compiler 0.31.1. Contracts must be compiled with Compact 0.31.x.
+
+**Consumer requirement:** your lockfile must resolve a single copy of `@midnight-ntwrk/onchain-runtime-v3` (3.0.0). Two copies break contract state decoding with `expected instance of StateValue`. With pnpm, add to your `package.json`:
+
+```json
+{ "pnpm": { "overrides": { "@midnight-ntwrk/onchain-runtime-v3": "3.0.0" } } }
+```
+
+## Upgrading to 0.7
+
+- `NETWORKS.preprod` is gone; Preprod and mainnet are served by Blockfrost: use `Config.blockfrost(network, projectId)`. Keep the project id out of browser bundles.
+- `PrivateState.indexedDBPrivateStateProvider` now requires `accountId` (the wallet address) and `password` (≥ 16 characters, a string or a function returning one). It is midnight-js's encrypted level provider; state written by the previous store is not migrated.
+- `Client.create({ wallet })` follows the wallet's network; a `network`/`networkConfig` that disagrees with the wallet is rejected. The development seed is only implied for the `local` preset.
+- `feeRelay` on `Client.create` now applies to browser wallets and is rejected for seed wallets; `FromWalletConfig.txTtlMs` and the unused `storage` option are removed.
+- `Client.TxTimeoutError` is the same class as `Contract.TxTimeoutError`.
+- Removed: `PrivateState.makeIndexedDB`, `makeInMemory`, the `PrivateState.get/set/...` functions, `PrivateStateService`/`PrivateStateLive`, `Images.build` (use `Images.buildServerImage`).
+- Browser-wallet transaction ids are now ledger identifiers instead of the serialized transaction.
 
 ## License
 

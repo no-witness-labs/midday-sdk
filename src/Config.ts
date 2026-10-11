@@ -140,7 +140,7 @@ export const DEV_WALLET_SEED = '000000000000000000000000000000000000000000000000
  * Used as the fallback when no per-call `ttl` is provided to `balanceTx`.
  * Configurable via `txTtlMs` on `ClientConfig`.
  *
- * @since 0.12.0
+ * @since 0.3.0
  * @category constants
  */
 export const DEFAULT_TX_TTL_MS = 30 * 60 * 1000;

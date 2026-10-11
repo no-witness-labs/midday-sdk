@@ -7,7 +7,7 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
 
 ## Requirements
 
-- Node.js 18.0.0 or higher
+- Node.js 22 or higher (`engines` in package.json)
 - A package manager (pnpm, npm, or yarn)
 
 ## Install the Package
@@ -32,10 +32,16 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
 
 ## Peer Dependencies
 
-Midday SDK includes all necessary dependencies. However, if you're using the Effect API, you may want to install Effect explicitly for better IDE support:
+`@midnight-ntwrk/compact-runtime` (0.16.0 for the ledger-8 cohort) is a peer dependency: your compiled contracts and the SDK must use the same runtime, so install the version your Compact compiler (0.31.x) targets. If you use the Effect API directly, add `effect` as well:
 
 ```bash
-pnpm add effect
+pnpm add @midnight-ntwrk/compact-runtime@0.16.0 effect
+```
+
+Your lockfile must also resolve a single copy of `@midnight-ntwrk/onchain-runtime-v3` (3.0.0); two copies break contract state decoding with `expected instance of StateValue`. With pnpm:
+
+```json
+{ "pnpm": { "overrides": { "@midnight-ntwrk/onchain-runtime-v3": "3.0.0" } } }
 ```
 
 ## TypeScript Configuration
