@@ -33,6 +33,7 @@
     "docs:install": "pnpm --dir website install",
     "test": "vitest run --no-file-parallelism",
     "test:watch": "vitest",
+    "test:unit": "vitest run --no-file-parallelism --exclude test/devnet.integration.test.ts --exclude 'test/e2e/**' test/",
     "test:devnet": "vitest run test/devnet.integration.test.ts",
     "test:e2e": "vitest run --no-file-parallelism test/e2e/",
     "compile:contracts": "COMPACTC_VERSION=0.31.1 run-compactc contracts/counter/simple-counter.compact contracts/counter/ && COMPACTC_VERSION=0.31.1 run-compactc contracts/secret-counter/secret-counter.compact contracts/secret-counter/",

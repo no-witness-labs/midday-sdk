@@ -28,6 +28,7 @@ export type Circuits<PS> = {
 export type Ledger = {
   readonly counter: bigint;
   readonly password_hash: Uint8Array;
+  readonly initialized: boolean;
 }
 
 export type ContractReferenceLocations = any;
