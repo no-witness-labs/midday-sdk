@@ -38,5 +38,8 @@ jobs:
       - name: Unit tests
         run: pnpm test:unit
 
+      - name: Packed package in a clean consumer
+        run: pnpm vitest run test/consumer.integration.test.ts
+
       - name: Build examples
         run: pnpm --filter "@examples/*" build

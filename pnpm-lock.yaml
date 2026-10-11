@@ -54,6 +54,9 @@ importers:
       '@midnight-ntwrk/midnight-js-types':
         specifier: 4.1.1
         version: 4.1.1
+      '@midnight-ntwrk/onchain-runtime-v3':
+        specifier: 3.0.0
+        version: 3.0.0
       '@midnight-ntwrk/wallet-sdk-abstractions':
         specifier: 2.1.0
         version: 2.1.0

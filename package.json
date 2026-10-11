@@ -88,7 +88,8 @@
     "node": ">=22.0.0"
   },
   "peerDependencies": {
-    "@midnight-ntwrk/compact-runtime": "0.16.0"
+    "@midnight-ntwrk/compact-runtime": "0.16.0",
+    "@midnight-ntwrk/onchain-runtime-v3": "3.0.0"
   },
   "packageManager": "pnpm@9.0.0",
   "keywords": [
