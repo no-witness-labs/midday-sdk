@@ -128,6 +128,8 @@ export interface CreateBaseProvidersOptions {
   storageConfig?: StorageConfig;
   /** Transaction TTL in milliseconds (default: 30 minutes) */
   txTtlMs?: number;
+  /** Wallet pools available for transaction inputs and fees. */
+  balance?: Wallet.BalanceOptions;
 }
 
 // =============================================================================
@@ -167,6 +169,8 @@ export interface ClientConfig {
   feeRelay?: { url: string };
   /** Transaction TTL in milliseconds (default: 30 minutes). Used as the fallback when no per-call TTL is provided to `balanceTx`. */
   txTtlMs?: number;
+  /** Seed-wallet balancing policy, for example `['unshielded', 'dust']`. */
+  balance?: Wallet.BalanceOptions;
 }
 
 /**
@@ -315,7 +319,10 @@ function createBaseProvidersEffect(
   walletContext: Wallet.WalletContext,
   options: CreateBaseProvidersOptions,
 ): Effect.Effect<BaseProviders, ClientError> {
-  return Wallet.effect.providers(walletContext, { txTtlMs: options.txTtlMs }).pipe(
+  return Wallet.effect.providers(walletContext, {
+    txTtlMs: options.txTtlMs,
+    ...options.balance,
+  }).pipe(
     Effect.map(({ walletProvider, midnightProvider }) => {
       const { networkConfig, privateStateProvider } = options;
 
@@ -394,11 +401,12 @@ function createConnectedWalletProviders(
   connectedWallet: Wallet.ConnectedWallet,
   networkConfig: Config.NetworkConfig,
   privateStateProvider: PrivateStateProvider,
+  balance?: Wallet.BalanceOptions,
 ): Effect.Effect<BaseProviders, ClientError> {
   return Effect.gen(function* () {
     yield* Effect.logDebug('Using pre-created wallet...');
 
-    const { walletProvider, midnightProvider } = yield* connectedWallet.effect.providers().pipe(
+    const { walletProvider, midnightProvider } = yield* connectedWallet.effect.providers(balance).pipe(
       Effect.mapError(
         (e) =>
           new ClientError({
@@ -447,6 +455,7 @@ function createEffect(config: ClientConfig): Effect.Effect<MiddayClient, ClientE
       storage,
       logging = true,
       txTtlMs,
+      balance,
     } = config;
 
     const networkConfig = customNetworkConfig ?? Config.getNetworkConfig(network);
@@ -454,7 +463,7 @@ function createEffect(config: ClientConfig): Effect.Effect<MiddayClient, ClientE
     // Path 1: Pre-created ConnectedWallet
     if (connectedWallet) {
       const providers = yield* createConnectedWalletProviders(
-        connectedWallet, networkConfig, privateStateProvider,
+        connectedWallet, networkConfig, privateStateProvider, balance,
       );
       return buildClient({
         networkConfig,
@@ -481,6 +490,7 @@ function createEffect(config: ClientConfig): Effect.Effect<MiddayClient, ClientE
       privateStateProvider,
       storageConfig: storage,
       txTtlMs,
+      balance,
     });
 
     return buildClient({

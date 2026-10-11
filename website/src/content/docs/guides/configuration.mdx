@@ -29,7 +29,32 @@ Midday SDK comes with pre-configured network settings for common environments.
     });
     ```
   </TabItem>
+  <TabItem label="Preprod / Mainnet">
+    ```typescript
+    // Served by Blockfrost: needs a project token for that network.
+    const client = await Midday.Client.create({
+      networkConfig: Midday.Config.blockfrost('preprod', process.env.BLOCKFROST_PROJECT_ID!),
+      seed: 'your-64-char-hex-seed',
+      privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
+    });
+    ```
+  </TabItem>
 </Tabs>
+
+### Blockfrost-Hosted Networks
+
+Midnight retired its own mainnet endpoints on 2026-09-30 and its Preprod
+endpoints on 2026-10-09; both networks are now served by
+[Blockfrost](https://blockfrost.io). `Config.blockfrost(network, projectId)`
+builds the indexer, WebSocket and RPC URLs with the token as a `project_id`
+query parameter, and `Config.getNetworkConfig('preprod')` throws with a pointer
+to it.
+
+:::caution
+The token is part of every URL. Keep it server-side: read it from an
+environment variable, never bundle it into browser code, and mask it in logs
+with `Config.redactUrl(text)`. Tokens are network-specific.
+:::
 
 ### Custom Network
 
