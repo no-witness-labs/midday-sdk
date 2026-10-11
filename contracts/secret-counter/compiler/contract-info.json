@@ -90,6 +90,15 @@
         "type-name": "Bytes",
         "length": 32
       }
+    },
+    {
+      "name": "initialized",
+      "index": 2,
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Boolean"
+      }
     }
   ]
 }

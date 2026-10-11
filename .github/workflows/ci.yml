@@ -32,5 +32,11 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Lint
+        run: pnpm lint
+
+      - name: Unit tests
+        run: pnpm test:unit
+
       - name: Build examples
         run: pnpm --filter "@examples/*" build

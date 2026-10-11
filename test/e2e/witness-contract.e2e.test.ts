@@ -108,6 +108,29 @@ describe('Witness Contract E2E Tests', () => {
 
         const state = await contract.ledgerState();
         expect(state.password_hash).toEqual(PASSWORD_HASH);
+        expect(state.initialized).toBe(true);
+
+        await expect(contract.actions.init(PASSWORD_HASH)).rejects.toThrow(/already initialized/);
+      });
+    });
+
+    it('cannot be re-initialized after an init with the zero hash (#59)', { timeout: 180_000 }, async () => {
+      await Midday.Client.withClient({
+        seed: GENESIS_SEED,
+        networkConfig: cluster.networkConfig,
+        privateStateProvider: Midday.PrivateState.inMemoryPrivateStateProvider(),
+        logging: false,
+      }, async (client) => {
+        const loaded = await client.loadContract({
+          module: SecretCounterContract,
+          zkConfig: Midday.ZkConfig.fromPath(SECRET_COUNTER_DIR),
+          privateStateId: 'secret-counter-reinit-test',
+          witnesses: createWitnesses(SECRET_PASSWORD),
+        });
+        const contract = await loaded.deploy();
+        await contract.actions.init(new Uint8Array(32));
+        await expect(contract.actions.init(PASSWORD_HASH)).rejects.toThrow(/already initialized/);
+        expect((await contract.ledgerState()).password_hash).toEqual(new Uint8Array(32));
       });
     });
 
