@@ -147,13 +147,17 @@ export interface CreateBaseProvidersOptions {
  * @category model
  */
 export interface ClientConfig {
-  /** Network to connect to (default: 'local') */
+  /** Built-in network preset (default: 'local'). Must agree with `networkConfig` when both are given. */
   network?: string;
-  /** Custom network configuration (overrides network preset) */
+  /** Custom network configuration, for example from `Config.blockfrost`. Takes precedence over `network`. */
   networkConfig?: Config.NetworkConfig;
   /** Pre-created wallet (from Wallet.fromSeed or Wallet.fromBrowser) */
   wallet?: Wallet.ConnectedWallet;
-  /** Wallet seed (required for non-local networks). Ignored if `wallet` is provided. */
+  /**
+   * Wallet seed. Required unless `wallet` is provided or the built-in `local`
+   * preset is used without a custom `networkConfig`, where the public development
+   * seed is implied. The development seed is refused on every other network.
+   */
   seed?: string;
   /** Private state provider (required) */
   privateStateProvider: PrivateStateProvider;
@@ -444,6 +448,29 @@ function connectionNetworkConfig(connection: Wallet.WalletConnection): Config.Ne
 // Client Effect Implementations
 // =============================================================================
 
+/**
+ * The network to use. A custom `networkConfig` wins, but it must not contradict
+ * an explicitly named preset: using one network's endpoints under another's
+ * name is how a wallet ends up on the wrong chain.
+ */
+function resolveNetworkConfig(network: string, custom: Config.NetworkConfig | undefined): Config.NetworkConfig {
+  if (!custom) {
+    try {
+      return Config.getNetworkConfig(network);
+    } catch (cause) {
+      throw new ClientError({ cause, message: cause instanceof Error ? cause.message : `Unknown network '${network}'` });
+    }
+  }
+  const preset = network === 'local' ? undefined : Config.NETWORKS[network];
+  if (preset && preset.networkId !== custom.networkId) {
+    throw new ClientError({
+      cause: new Error('Network mismatch'),
+      message: `network '${network}' (${preset.networkId}) contradicts networkConfig.networkId '${custom.networkId}'. Pass one or the other.`,
+    });
+  }
+  return custom;
+}
+
 function createEffect(config: ClientConfig): Effect.Effect<MiddayClient, ClientError> {
   return Effect.gen(function* () {
     const {
@@ -458,7 +485,10 @@ function createEffect(config: ClientConfig): Effect.Effect<MiddayClient, ClientE
       balance,
     } = config;
 
-    const networkConfig = customNetworkConfig ?? Config.getNetworkConfig(network);
+    const networkConfig = yield* Effect.try({
+      try: () => resolveNetworkConfig(network, customNetworkConfig),
+      catch: (e) => (e instanceof ClientError ? e : new ClientError({ cause: e, message: String(e) })),
+    });
 
     // Path 1: Pre-created ConnectedWallet
     if (connectedWallet) {
@@ -472,13 +502,23 @@ function createEffect(config: ClientConfig): Effect.Effect<MiddayClient, ClientE
       });
     }
 
-    // Path 2: Seed-based initialization
-    const walletSeed = seed ?? (network === 'local' ? Config.DEV_WALLET_SEED : undefined);
+    // Path 2: Seed-based initialization. The development seed is public, so it
+    // is only ever implied for the built-in local preset and refused elsewhere.
+    const isLocalPreset = customNetworkConfig === undefined && network === 'local';
+    const walletSeed = seed ?? (isLocalPreset ? Config.DEV_WALLET_SEED : undefined);
     if (!walletSeed) {
       return yield* Effect.fail(
         new ClientError({
           cause: new Error('Missing seed'),
-          message: 'Wallet seed is required for non-local networks. Provide via config.seed or config.wallet.',
+          message: `Wallet seed is required for network '${networkConfig.networkId}'. Provide config.seed or config.wallet; the development seed is only implied for the local preset.`,
+        }),
+      );
+    }
+    if (walletSeed === Config.DEV_WALLET_SEED && networkConfig.networkId !== 'undeployed') {
+      return yield* Effect.fail(
+        new ClientError({
+          cause: new Error('Development seed on a public network'),
+          message: `Refusing the development wallet seed on network '${networkConfig.networkId}': it is publicly known and only valid for local development.`,
         }),
       );
     }
@@ -696,7 +736,7 @@ export async function create(config: ClientConfig): Promise<MiddayClient> {
  * @category constructors
  */
 export function createReadonly(config: ReadonlyClientConfig = {}): ReadonlyClient {
-  const networkConfig = config.networkConfig ?? Config.getNetworkConfig(config.network ?? 'local');
+  const networkConfig = resolveNetworkConfig(config.network ?? 'local', config.networkConfig);
   const provider = Config.publicDataProvider(networkConfig);
   return createReadonlyHandle(networkConfig, provider);
 }
