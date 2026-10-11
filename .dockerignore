@@ -1,0 +1,16 @@
+.git
+node_modules
+**/node_modules
+dist
+**/dist
+docs
+test
+.data
+*.log
+.DS_Store
+.npmrc
+# Workspace members: only their manifests are needed for a frozen install.
+website/*
+!website/package.json
+examples/*/*
+!examples/*/package.json

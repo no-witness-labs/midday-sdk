@@ -5,6 +5,7 @@
  * @module
  */
 
+import * as Images from './Images.js';
 import type { NetworkConfig } from '../Config.js';
 
 /**
@@ -151,7 +152,7 @@ export const DEFAULT_PROOF_SERVER_CONFIG: Required<ProofServerConfig> = {
  * @category constants
  */
 export const DEFAULT_FAUCET_CONFIG: Required<FaucetConfig> = {
-  image: 'midday-faucet:latest',
+  image: Images.serverImage('faucet'),
   port: 3001,
   enabled: true,
 } as const;
@@ -163,7 +164,7 @@ export const DEFAULT_FAUCET_CONFIG: Required<FaucetConfig> = {
  * @category constants
  */
 export const DEFAULT_FEE_RELAY_CONFIG: Required<FeeRelayConfig> = {
-  image: 'midday-fee-relay:latest',
+  image: Images.serverImage('fee-relay'),
   port: 3002,
   enabled: true,
 } as const;

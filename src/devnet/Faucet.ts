@@ -342,7 +342,7 @@ export const effect = {
 export interface DockerOptions {
   /** Port to expose (default: 3001) */
   port?: number;
-  /** Docker image (default: midday-faucet:latest) */
+  /** Docker image (default: `midday-faucet:<sdk version>`, built from this SDK on first use) */
   image?: string;
   /** Cluster name for network (default: midday-devnet) */
   clusterName?: string;
@@ -353,7 +353,7 @@ export interface DockerOptions {
  *
  * Requires the midday-faucet Docker image to be built first:
  * ```bash
- * cd docker/faucet && ./build.sh
+ * ./docker/build.sh   # or let startDocker build it on first use
  * ```
  *
  * @param networkConfig - Network configuration
@@ -382,18 +382,11 @@ export async function startDocker(
 ): Promise<string> {
   const {
     port = 3001,
-    image = 'midday-faucet:latest',
+    image = Images.serverImage('faucet'),
     clusterName = 'midday-devnet',
   } = options;
 
-  // Auto-build image if not available
-  const available = await Images.isAvailable(image);
-  if (!available) {
-    const { resolve, dirname } = await import('path');
-    const { fileURLToPath } = await import('url');
-    const sdkRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-    Images.build(image, resolve(sdkRoot, 'docker/faucet'));
-  }
+  if (!(await Images.isAvailable(image))) Images.buildServerImage('faucet', image);
 
   const Docker = (await import('dockerode')).default;
   const docker = new Docker();
@@ -495,6 +488,12 @@ export function startServer(networkConfig: NetworkConfig, options: ServerOptions
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
       res.end();
+      return;
+    }
+
+    if (req.method === 'GET' && req.url === '/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok' }));
       return;
     }
 
