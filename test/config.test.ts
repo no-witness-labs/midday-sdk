@@ -29,4 +29,27 @@ describe('Config', () => {
   it('redacts tokens', () => {
     expect(Config.redactUrl(Config.blockfrost('preprod', 'secret').indexerWS)).not.toContain('secret');
   });
+
+  describe('withQueryTimeout', () => {
+    const provider = {
+      queryContractState: (address: string) => Promise.resolve(`state of ${address}`),
+      queryZSwapAndContractState: () => new Promise<never>(() => {}),
+      watchForTxData: () => new Promise<never>(() => {}),
+    };
+
+    it('fails a query that never answers instead of hanging', async () => {
+      const bounded = Config.withQueryTimeout(provider, 20);
+      await expect(bounded.queryZSwapAndContractState()).rejects.toMatchObject({
+        _tag: 'IndexerQueryTimeoutError',
+        method: 'queryZSwapAndContractState',
+        timeout: 20,
+      });
+    });
+
+    it('passes answers through and leaves watches unbounded', async () => {
+      const bounded = Config.withQueryTimeout(provider, 20);
+      await expect(bounded.queryContractState('abc')).resolves.toBe('state of abc');
+      expect(bounded.watchForTxData).toBe(provider.watchForTxData);
+    });
+  });
 });

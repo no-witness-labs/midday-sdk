@@ -5,7 +5,7 @@
  * @module
  */
 
-import { Context } from 'effect';
+import { Context, Data } from 'effect';
 import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
 
 // =============================================================================
@@ -165,11 +165,85 @@ export const DEFAULT_TX_TTL_MS = 30 * 60 * 1000;
  * @since 0.6.0
  * @category constructors
  */
-export function publicDataProvider(config: NetworkConfig): ReturnType<typeof indexerPublicDataProvider> {
+export function publicDataProvider(
+  config: NetworkConfig,
+  options: PublicDataProviderOptions = {},
+): ReturnType<typeof indexerPublicDataProvider> {
   // In browser environments, pass the native WebSocket; in Node.js, let the library default to the `ws` package
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const webSocketImpl = typeof globalThis.WebSocket !== 'undefined' ? globalThis.WebSocket as any : undefined;
-  return indexerPublicDataProvider(config.indexer, config.indexerWS, webSocketImpl);
+  return withQueryTimeout(
+    indexerPublicDataProvider(config.indexer, config.indexerWS, webSocketImpl),
+    options.queryTimeoutMs ?? DEFAULT_INDEXER_QUERY_TIMEOUT_MS,
+  );
+}
+
+/**
+ * Options for {@link publicDataProvider}.
+ *
+ * @since 0.7.0
+ * @category model
+ */
+export interface PublicDataProviderOptions {
+  /** Upper bound for each indexer query in milliseconds (default {@link DEFAULT_INDEXER_QUERY_TIMEOUT_MS}). */
+  queryTimeoutMs?: number;
+}
+
+/**
+ * Default upper bound for one indexer query.
+ *
+ * @since 0.7.0
+ * @category constants
+ */
+export const DEFAULT_INDEXER_QUERY_TIMEOUT_MS = 60_000;
+
+/**
+ * An indexer query did not answer within its timeout.
+ *
+ * @since 0.7.0
+ * @category errors
+ */
+export class IndexerQueryTimeoutError extends Data.TaggedError('IndexerQueryTimeoutError')<{
+  readonly method: string;
+  readonly timeout: number;
+  readonly message: string;
+}> {}
+
+/**
+ * Bounds every `query*` method of a public data provider.
+ *
+ * midnight-js sends indexer queries through `cross-fetch` (node-fetch v2 in
+ * Node), which has no request timeout, and its retry link only reacts to
+ * errors: a connection that stalls without closing leaves a contract call
+ * waiting forever before it is proven. Queries run before proving and
+ * submission, so a timed-out call has submitted nothing and is safe to retry.
+ *
+ * @since 0.7.0
+ * @category combinators
+ */
+export function withQueryTimeout<P extends object>(provider: P, timeoutMs: number): P {
+  const bounded: Record<string, unknown> = { ...(provider as Record<string, unknown>) };
+  for (const [name, value] of Object.entries(provider)) {
+    if (!name.startsWith('query') || typeof value !== 'function') continue;
+    bounded[name] = (...args: unknown[]): Promise<unknown> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new IndexerQueryTimeoutError({
+                method: name,
+                timeout: timeoutMs,
+                message: `Indexer ${name} did not answer within ${timeoutMs}ms`,
+              }),
+            ),
+          timeoutMs,
+        );
+      });
+      return Promise.race([Promise.resolve(value.apply(provider, args)), timeout]).finally(() => clearTimeout(timer));
+    };
+  }
+  return bounded as P;
 }
 
 // =============================================================================
