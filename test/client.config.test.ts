@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as Client from '../src/Client.js';
 import * as Config from '../src/Config.js';
+import * as Contract from '../src/Contract.js';
 import * as PrivateState from '../src/PrivateState.js';
 
 // These checks must fail before any wallet or network I/O, so they run without Docker.
@@ -31,6 +32,18 @@ describe('Client.create network and seed guards', () => {
     expect(() => Client.createReadonly({ network: 'preview', networkConfig: preprod })).toThrow(
       /contradicts networkConfig/,
     );
+  });
+
+  it('rejects feeRelay for a seed wallet instead of ignoring it', async () => {
+    await expect(
+      Client.create({ network: 'preview', seed: 'ab'.repeat(32), feeRelay: { url: 'http://relay' }, privateStateProvider }),
+    ).rejects.toMatchObject({ message: expect.stringMatching(/feeRelay requires a browser wallet/) });
+  });
+
+  it('exposes one TxTimeoutError class under one tag', () => {
+    expect(Client.TxTimeoutError).toBe(Contract.TxTimeoutError);
+    const e = new Client.TxTimeoutError({ operation: 'waitForTx', timeout: 1, message: 'm', txHash: 'h' });
+    expect(e._tag).toBe('TxTimeoutError');
   });
 
   it('still requires a seed for a named public preset', async () => {
