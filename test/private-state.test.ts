@@ -51,6 +51,27 @@ describe('boundToContract', () => {
 describe('persistent private state provider (level)', () => {
   const password = 'correct horse battery staple 42';
 
+  it('keeps interleaved writes from bound views under their own contracts', async () => {
+    const dbName = join(await mkdtemp(join(tmpdir(), 'psp-')), 'db');
+    const shared = PrivateState.indexedDBPrivateStateProvider({ accountId: 'acct', password, dbName });
+    const a = PrivateState.boundToContract(shared, A);
+    const b = PrivateState.boundToContract(shared, B);
+    await a.set('contract', 'A-before');
+    await b.set('contract', 'B-before');
+
+    // The upstream provider awaits a lock before it reads the address; without
+    // serialization this write for A landed under B.
+    const writing = a.set('contract', 'A-after');
+    b.setContractAddress(B);
+    const removing = b.remove('contract');
+    shared.setContractAddress(A);
+    await Promise.all([writing, removing]);
+
+    expect(await a.get('contract')).toBe('A-after');
+    expect(await b.get('contract')).toBeNull();
+    expect(await a.get('contract')).toBe('A-after');
+  });
+
   it('requires an account id and a password', () => {
     expect(() => PrivateState.indexedDBPrivateStateProvider({ accountId: '', password })).toThrow(/accountId/);
     expect(() => PrivateState.indexedDBPrivateStateProvider({ accountId: 'acct', password: '' })).toThrow(/password/);
