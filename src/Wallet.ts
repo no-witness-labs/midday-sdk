@@ -1362,6 +1362,17 @@ export async function balanceWithoutFees(
   ) as FinalizedTransaction;
 }
 
+/**
+ * The identifier to watch a transaction by. The ledger documents
+ * `identifiers()` as the watchable ids and `transactionHash()` as unsuitable
+ * for that (transactions can be merged); the wallet SDK uses the first one.
+ */
+export function transactionIdOf(tx: FinalizedTransaction): TransactionId {
+  const [id] = tx.identifiers();
+  if (!id) throw new Error('Transaction has no identifiers');
+  return id;
+}
+
 function submitTxEffect(
   wallet: ConnectedAPI,
   tx: FinalizedTransaction,
@@ -1371,7 +1382,7 @@ function submitTxEffect(
       const txBytes = tx.serialize();
       const serializedTx = bytesToHex(txBytes);
       await wallet.submitTransaction(serializedTx);
-      return serializedTx as TransactionId;
+      return transactionIdOf(tx);
     },
     catch: (cause) =>
       new WalletError({
@@ -1550,7 +1561,13 @@ function shieldFromBrowserEffect(
       );
 
       await connection.wallet.submitTransaction(tx);
-      return { txId: tx, amount };
+      const finalized = Transaction.deserialize(
+        'signature' as ledger.SignatureEnabled['instance'],
+        'proof' as ledger.Proof['instance'],
+        'binding' as ledger.Binding['instance'],
+        hexToBytes(tx),
+      ) as FinalizedTransaction;
+      return { txId: transactionIdOf(finalized), amount };
     },
     catch: (cause) =>
       cause instanceof LaceUnavailableError
