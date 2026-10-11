@@ -40,6 +40,7 @@ import type {
   ProofProvider,
 } from '@midnight-ntwrk/midnight-js-types';
 import type { ContractStateObservableConfig } from '@midnight-ntwrk/midnight-js-types';
+import { SucceedEntirely } from '@midnight-ntwrk/midnight-js-types';
 import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
 
 import { runEffectWithLogging } from './Runtime.js';
@@ -795,38 +796,36 @@ function deployContractEffect(
       await providers.privateStateProvider.setSigningKey(address as any, (unprovenDeployTxData as any).private.signingKey);
     });
 
-    // Step 4: Wait for finalization (optional)
+    // Step 4: Wait for finalization (optional) and require on-chain success:
+    // a deploy that lands as a failure must not yield a usable handle.
     if (!skipFinalization) {
-      yield* Effect.tryPromise({
+      const deployTxData = yield* Effect.tryPromise({
         try: () => providers.publicDataProvider.watchForTxData(String(txId)),
         catch: (cause) =>
           new ContractError({
             cause,
-            message: `Deploy tx submitted (address: ${address}) but finalization watch failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+            message: `Deploy tx ${String(txId)} submitted (address: ${address}) but finalization watch failed: ${cause instanceof Error ? cause.message : String(cause)}`,
           }),
       });
+      if (deployTxData.status !== SucceedEntirely) {
+        return yield* Effect.fail(
+          new ContractError({
+            cause: deployTxData,
+            message: `Deploy tx ${String(txId)} for ${address} landed with status '${String(deployTxData.status)}'`,
+          }),
+        );
+      }
     } else {
       yield* Effect.logDebug('Skipping finalization watch (skipFinalization: true)');
     }
 
     yield* Effect.logDebug(`Contract deployed at: ${address}${skipFinalization ? ' (finalization skipped)' : ''}`);
 
-    // When skipFinalization is set, stub watchForTxData so all subsequent callTx
-    // calls also return immediately after submission without waiting for finalization.
-    const callProviders = skipFinalization
-      ? {
-          ...instrumentedProviders,
-          publicDataProvider: {
-            ...instrumentedProviders.publicDataProvider,
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            watchForTxData: async (txId: any) => ({ txId, status: 'submitted' }) as any,
-          },
-        }
-      : instrumentedProviders;
-
-    // Build the deployed contract handle (same shape as deployContract returns)
+    // Calls always wait for their own finalization: midnight-js rejects any call
+    // whose watched status is not SucceedEntirely, so a stubbed watcher would
+    // make every call after a skipFinalization deploy fail.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const callTx = createCircuitCallTxInterface(callProviders as any, module.compiledContract as any, address as any, module.privateStateId);
+    const callTx = createCircuitCallTxInterface(instrumentedProviders as any, module.compiledContract as any, address as any, module.privateStateId);
 
     return {
       address,
