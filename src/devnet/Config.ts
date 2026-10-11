@@ -115,7 +115,7 @@ export interface ResolvedDevNetConfig {
  * @category constants
  */
 export const DEFAULT_NODE_CONFIG: Required<NodeConfig> = {
-  image: 'midnightntwrk/midnight-node:0.22.5',
+  image: 'midnightntwrk/midnight-node:1.0.400',
   port: 9944,
   cfgPreset: 'dev',
 } as const;
@@ -127,7 +127,7 @@ export const DEFAULT_NODE_CONFIG: Required<NodeConfig> = {
  * @category constants
  */
 export const DEFAULT_INDEXER_CONFIG: Required<IndexerConfig> = {
-  image: 'midnightntwrk/indexer-standalone:4.0.0',
+  image: 'midnightntwrk/indexer-standalone:4.3.7',
   port: 8088,
   logLevel: 'info',
 } as const;

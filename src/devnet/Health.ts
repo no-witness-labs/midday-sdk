@@ -228,7 +228,41 @@ function waitForNodeEffect(
   options: HealthCheckOptions = {},
 ): Effect.Effect<void, HealthCheckError> {
   const url = `http://localhost:${port}/health`;
-  return waitForHttpEffect(url, { timeout: 90000, ...options });
+  return waitForHttpEffect(url, { timeout: 90000, ...options }).pipe(
+    Effect.zipRight(waitForFirstBlockEffect(port, { timeout: 90000, ...options })),
+  );
+}
+
+// Indexer 4.3+ exits ("block number 1 not found") if started before the node
+// has produced its first block, so node readiness includes block #1.
+function waitForFirstBlockEffect(
+  port: number,
+  options: HealthCheckOptions = {},
+): Effect.Effect<void, HealthCheckError> {
+  const url = `http://localhost:${port}`;
+  return Effect.tryPromise({
+    try: async () => {
+      const { timeout = 90000, interval = 1000 } = options;
+      const startTime = Date.now();
+      while (Date.now() - startTime < timeout) {
+        try {
+          const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ id: 1, jsonrpc: '2.0', method: 'chain_getHeader', params: [] }),
+            signal: AbortSignal.timeout(5000),
+          });
+          const body = (await response.json()) as { result?: { number?: string } };
+          if (body.result?.number !== undefined && Number.parseInt(body.result.number, 16) >= 1) return;
+        } catch {
+          // Node not answering RPC yet
+        }
+        await sleep(interval);
+      }
+      throw new Error(`Node at ${url} produced no block within ${timeout}ms`);
+    },
+    catch: (cause: unknown) => new HealthCheckError({ service: url, cause }),
+  });
 }
 
 /**
@@ -352,9 +386,10 @@ function waitForProofServerEffect(
   port: number,
   options: HealthCheckOptions = {},
 ): Effect.Effect<void, HealthCheckError> {
-  // Proof server exposes gRPC, we'll check if the port is open
-  // Just check if we can connect (proof server may not have HTTP health endpoint)
-  return waitForPortEffect(port, { timeout: 60000, ...options });
+  // An open host port proves nothing (Docker's proxy accepts before the server
+  // listens), and the server fetches proving params before listening; /ready
+  // answers only once it can prove.
+  return waitForHttpEffect(`http://localhost:${port}/ready`, { timeout: 180000, ...options });
 }
 
 /**
@@ -368,55 +403,6 @@ export async function waitForProofServer(
   options: HealthCheckOptions = {},
 ): Promise<void> {
   return Effect.runPromise(waitForProofServerEffect(port, options));
-}
-
-// Internal Effect implementation for port checking
-function waitForPortEffect(
-  port: number,
-  options: HealthCheckOptions = {},
-): Effect.Effect<void, HealthCheckError> {
-  return Effect.gen(function* () {
-    yield* Effect.tryPromise({
-      try: async () => {
-        const { timeout = 60000, interval = 1000 } = options;
-        const startTime = Date.now();
-
-        const { createConnection } = await import('net');
-
-        while (Date.now() - startTime < timeout) {
-          const connected = await new Promise<boolean>((resolve) => {
-            const socket = createConnection({ port, host: 'localhost' }, () => {
-              socket.destroy();
-              resolve(true);
-            });
-
-            socket.on('error', () => {
-              socket.destroy();
-              resolve(false);
-            });
-
-            socket.setTimeout(2000, () => {
-              socket.destroy();
-              resolve(false);
-            });
-          });
-
-          if (connected) {
-            return;
-          }
-
-          await sleep(interval);
-        }
-
-        throw new Error(`Port check timed out after ${timeout}ms for port ${port}`);
-      },
-      catch: (cause: unknown) =>
-        new HealthCheckError({
-          service: `port ${port}`,
-          cause,
-        }),
-    });
-  });
 }
 
 function sleep(ms: number): Promise<void> {

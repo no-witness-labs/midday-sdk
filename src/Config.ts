@@ -34,10 +34,13 @@ export const NETWORKS: Record<string, NetworkConfig> = {
     node: 'ws://localhost:9944',
     proofServer: 'http://localhost:6300',
   },
+  // /api/v4 is the documented path. Checked 2026-10-10 against midnight-js 4.1.1
+  // and wallet-sdk 4.x: same GraphQL schema as /api/v3 (identical introspection),
+  // and contract queries, contract-state subscriptions and wallet sync all work.
   preview: {
     networkId: 'preview',
-    indexer: 'https://indexer.preview.midnight.network/api/v3/graphql',
-    indexerWS: 'wss://indexer.preview.midnight.network/api/v3/graphql/ws',
+    indexer: 'https://indexer.preview.midnight.network/api/v4/graphql',
+    indexerWS: 'wss://indexer.preview.midnight.network/api/v4/graphql/ws',
     node: 'wss://rpc.preview.midnight.network',
     proofServer: 'http://localhost:6300',
   },
