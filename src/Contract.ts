@@ -65,7 +65,7 @@ export class ContractError extends Data.TaggedError('ContractError')<{
  * An operation exceeded its configured timeout. One class for the whole SDK:
  * `operation` is `'deploy'`, `'join'` or `'waitForTx'`; `txHash` is set when known.
  *
- * @since 0.10.0
+ * @since 0.2.14
  * @category errors
  */
 export class TxTimeoutError extends Data.TaggedError('TxTimeoutError')<{
@@ -159,7 +159,6 @@ export type InferCircuits<M> = M extends {
  * // InferActions<M> = { increment(amount: bigint): Promise<CallResult>; decrement(): Promise<CallResult> }
  * ```
  *
- * @since 0.8.0
  * @category type
  */
  
@@ -182,7 +181,7 @@ export type InferActions<M> = M extends {
  * let loaded: LoadedContractFor<typeof CounterContract>;
  * ```
  *
- * @since 0.12.0
+ * @since 0.3.0
  * @category type
  */
 export type LoadedContractFor<M extends ContractModule> =
@@ -198,7 +197,7 @@ export type LoadedContractFor<M extends ContractModule> =
  * // contract.ledgerState() returns Promise<{ counter: bigint }>
  * ```
  *
- * @since 0.12.0
+ * @since 0.3.0
  * @category type
  */
 export type DeployedContractFor<M extends ContractModule> =
@@ -207,7 +206,6 @@ export type DeployedContractFor<M extends ContractModule> =
 /**
  * Convert Promise-based actions to Effect-based actions.
  *
- * @since 0.8.0
  * @category type
  */
 export type ToEffectActions<T> = {
@@ -436,7 +434,7 @@ export interface DeployedContract<
    * await contract.actions.increment(5n);
    * ```
    *
-   * @since 0.8.0
+   * @since 0.6.0
    */
   readonly actions: TActions;
 
@@ -471,7 +469,7 @@ export interface DeployedContract<
    * // later: unsub();
    * ```
    *
-   * @since 0.9.0
+   * @since 0.2.14
    */
   onStateChange(callback: (state: TLedger) => void, options?: WatchOptions): Unsubscribe;
 
@@ -486,7 +484,7 @@ export interface DeployedContract<
    * }
    * ```
    *
-   * @since 0.9.0
+   * @since 0.2.14
    */
   watchState(options?: WatchOptions): AsyncIterableIterator<TLedger>;
 
@@ -520,7 +518,7 @@ export interface DeployedContract<
  *
  * @typeParam TLedger - The ledger state type (inferred from module)
  *
- * @since 0.8.0
+ * @since 0.2.14
  * @category model
  */
 export interface ReadonlyContract<TLedger = unknown> {
@@ -1031,7 +1029,6 @@ function ledgerStateAtEffect(
  * Avoids requiring users to import the Midnight indexer package directly.
  * Create one via `Config.publicDataProvider(networkConfig)`.
  *
- * @since 0.8.0
  * @category model
  */
 export type PublicDataProvider = ReturnType<typeof indexerPublicDataProvider>;
@@ -1041,7 +1038,6 @@ export type PublicDataProvider = ReturnType<typeof indexerPublicDataProvider>;
  *
  * Every compiled Compact contract exports a `ledger()` function matching this signature.
  *
- * @since 0.8.0
  * @category model
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1050,7 +1046,6 @@ export type LedgerParser<TLedger> = (state: any) => TLedger;
 /**
  * Function returned by callback-style watch methods. Call it to stop watching.
  *
- * @since 0.9.0
  * @category model
  */
 export type Unsubscribe = () => void;
@@ -1061,7 +1056,6 @@ export type Unsubscribe = () => void;
  * Controls where the subscription stream starts from. Maps to the indexer's
  * `ContractStateObservableConfig` under the hood.
  *
- * @since 0.9.0
  * @category model
  */
 export type WatchOptions =
@@ -1150,7 +1144,7 @@ function readStateEffect<TLedger>(
  * console.log(state.counter); // 42n
  * ```
  *
- * @since 0.8.0
+ * @since 0.6.3
  * @category queries
  */
 export async function readState<TLedger>(
@@ -1170,7 +1164,7 @@ export async function readState<TLedger>(
  * @param blockHeight - Block height to query at
  * @returns Parsed ledger state at the given block
  *
- * @since 0.8.0
+ * @since 0.6.3
  * @category queries
  */
 export async function readStateAt<TLedger>(
@@ -1189,7 +1183,7 @@ export async function readStateAt<TLedger>(
  * @param provider - Public data provider
  * @returns Raw contract state data
  *
- * @since 0.8.0
+ * @since 0.6.3
  * @category queries
  */
 export async function readRawState(
@@ -1207,7 +1201,7 @@ export async function readRawState(
  * @param blockHeight - Block height to query at
  * @returns Raw contract state data at the given block
  *
- * @since 0.8.0
+ * @since 0.6.3
  * @category queries
  */
 export async function readRawStateAt(
@@ -1381,7 +1375,7 @@ function streamToAsyncIterator<A>(
 /**
  * Watch parsed contract state changes. Returns an unsubscribe function.
  *
- * @since 0.9.0
+ * @since 0.2.14
  * @category subscriptions
  */
 export function watchState<TLedger>(
@@ -1397,7 +1391,6 @@ export function watchState<TLedger>(
 /**
  * Watch raw contract state changes. Returns an unsubscribe function.
  *
- * @since 0.9.0
  * @category subscriptions
  */
 export function watchRawState(

@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { describe, expect, it } from 'vitest';
 import * as Client from '../src/Client.js';
 import * as Config from '../src/Config.js';
@@ -38,6 +39,47 @@ describe('Client.create network and seed guards', () => {
     await expect(
       Client.create({ network: 'preview', seed: 'ab'.repeat(32), feeRelay: { url: 'http://relay' }, privateStateProvider }),
     ).rejects.toMatchObject({ message: expect.stringMatching(/feeRelay requires a browser wallet/) });
+  });
+
+  describe('with a connected wallet', () => {
+    const fakeWallet = (networkId: string, networkConfig?: Config.NetworkConfig) =>
+      ({
+        type: 'connected',
+        source: 'browser',
+        networkId,
+        ...(networkConfig ? { networkConfig } : {}),
+        address: 'addr',
+        coinPublicKey: '',
+        encryptionPublicKey: '',
+        effect: { providers: () => Effect.succeed({ walletProvider: {}, midnightProvider: {} }) },
+      }) as never;
+
+    it("uses the wallet's network when none is given", async () => {
+      const client = await Client.create({ wallet: fakeWallet('preview'), privateStateProvider });
+      expect(client.networkConfig.networkId).toBe('preview');
+      expect(client.networkConfig.indexer).toBe(Config.NETWORKS.preview.indexer);
+    });
+
+    it("prefers the wallet's own endpoints when it carries them", async () => {
+      const custom = { ...Config.NETWORKS.local, indexer: 'http://custom:8088/api/v3/graphql' };
+      const client = await Client.create({ wallet: fakeWallet('undeployed', custom), privateStateProvider });
+      expect(client.networkConfig.indexer).toBe('http://custom:8088/api/v3/graphql');
+    });
+
+    it('rejects a preset or config that disagrees with the wallet', async () => {
+      await expect(Client.create({ wallet: fakeWallet('preview'), network: 'local', privateStateProvider })).rejects.toMatchObject({
+        message: expect.stringMatching(/wallet is on 'preview'/),
+      });
+      await expect(
+        Client.create({ wallet: fakeWallet('preview'), networkConfig: preprod, privateStateProvider }),
+      ).rejects.toMatchObject({ message: expect.stringMatching(/wallet is on 'preview'/) });
+    });
+
+    it('asks for a config when the wallet is on a network without a preset', async () => {
+      await expect(Client.create({ wallet: fakeWallet('preprod'), privateStateProvider })).rejects.toMatchObject({
+        message: expect.stringMatching(/Config\.blockfrost\('preprod'/),
+      });
+    });
   });
 
   it('exposes one TxTimeoutError class under one tag', () => {

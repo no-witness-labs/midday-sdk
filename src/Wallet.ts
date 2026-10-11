@@ -582,7 +582,7 @@ export interface ProvidersOptions extends BalanceOptions {
 /**
  * Dust token balance with cap information.
  *
- * @since 0.11.0
+ * @since 0.2.14
  * @category model
  */
 export interface DustBalance {
@@ -638,6 +638,10 @@ export interface ConnectedWallet {
   readonly type: 'connected';
   /** How this wallet was created */
   readonly source: 'seed' | 'browser';
+  /** Network this wallet is connected to (`undeployed`, `preview`, `preprod`, ...). */
+  readonly networkId: string;
+  /** Full endpoints when known (seed wallets); browser wallets expose only `networkId`. */
+  readonly networkConfig?: NetworkConfig;
   /** Primary wallet address */
   readonly address: string;
   /** ZK coin public key (for receiving shielded transfers) */
@@ -1715,7 +1719,10 @@ function fromSeedEffect(
     const encryptionPublicKey = String(walletContext.shieldedSecretKeys.encryptionPublicKey);
     const backend: WalletBackend = { type: 'seed', context: walletContext };
 
-    return createConnectedWalletHandle(backend, address, { coinPublicKey, encryptionPublicKey });
+    return createConnectedWalletHandle(backend, address, { coinPublicKey, encryptionPublicKey }, {
+      networkId: networkConfig.networkId,
+      networkConfig,
+    });
   });
 }
 
@@ -1729,7 +1736,7 @@ function fromBrowserEffect(
     const encryptionPublicKey = connection.encryptionPublicKey;
     const backend: WalletBackend = { type: 'browser', connection };
 
-    return createConnectedWalletHandle(backend, address, { coinPublicKey, encryptionPublicKey });
+    return createConnectedWalletHandle(backend, address, { coinPublicKey, encryptionPublicKey }, { networkId });
   });
 }
 
@@ -1737,6 +1744,7 @@ function createConnectedWalletHandle(
   backend: WalletBackend,
   address: string,
   keys: { coinPublicKey: string; encryptionPublicKey: string },
+  network: { networkId: string; networkConfig?: NetworkConfig },
 ): ConnectedWallet {
   const getBalanceEff = (): Effect.Effect<WalletBalance, WalletError> =>
     backend.type === 'seed'
@@ -1804,6 +1812,8 @@ function createConnectedWalletHandle(
   return {
     type: 'connected',
     source: backend.type === 'seed' ? 'seed' : 'browser',
+    networkId: network.networkId,
+    ...(network.networkConfig ? { networkConfig: network.networkConfig } : {}),
     address,
     coinPublicKey: keys.coinPublicKey,
     encryptionPublicKey: keys.encryptionPublicKey,

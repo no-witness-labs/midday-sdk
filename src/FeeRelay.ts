@@ -7,7 +7,6 @@
  * Used internally by {@link Client} — not part of the public API.
  *
  * @internal
- * @since 0.11.0
  * @module
  */
 

@@ -60,7 +60,7 @@ export class ClientError extends Data.TaggedError('ClientError')<{
  * `catchTag('TxTimeoutError')` behaves the same whichever module raised it.
  * `waitForTx` sets `operation: 'waitForTx'` and `txHash`.
  *
- * @since 0.10.0
+ * @since 0.2.14
  * @category errors
  */
 export const TxTimeoutError = Contract.TxTimeoutError;
@@ -73,7 +73,6 @@ export type TxTimeoutError = Contract.TxTimeoutError;
 /**
  * Options for waiting on a transaction.
  *
- * @since 0.10.0
  * @category model
  */
 export interface WaitForTxOptions {
@@ -133,11 +132,15 @@ export interface CreateBaseProvidersOptions {
  * @category model
  */
 export interface ClientConfig {
-  /** Built-in network preset (default: 'local'). Must agree with `networkConfig` when both are given. */
+  /**
+   * Built-in network preset. Default: the connected wallet's network when
+   * `wallet` is given, otherwise 'local'. Must agree with `networkConfig` and
+   * with the wallet when either is given.
+   */
   network?: string;
-  /** Custom network configuration, for example from `Config.blockfrost`. Takes precedence over `network`. */
+  /** Custom network configuration, for example from `Config.blockfrost`. Takes precedence over `network`; must match the wallet's network. */
   networkConfig?: Config.NetworkConfig;
-  /** Pre-created wallet (from Wallet.fromSeed or Wallet.fromBrowser) */
+  /** Pre-created wallet (from Wallet.fromSeed or Wallet.fromBrowser). Its network becomes the client's unless overridden. */
   wallet?: Wallet.ConnectedWallet;
   /**
    * Wallet seed. Required unless `wallet` is provided or the built-in `local`
@@ -168,7 +171,6 @@ export interface ClientConfig {
  *
  * Only requires network configuration — no wallet, seed, or private state needed.
  *
- * @since 0.8.0
  * @category model
  */
 export interface ReadonlyClientConfig {
@@ -187,7 +189,7 @@ export interface ReadonlyClientConfig {
 /**
  * Configuration for creating a client from a wallet connection.
  *
- * @since 0.11.0
+ * @since 0.3.0
  * @category model
  */
 export interface FromWalletConfig {
@@ -214,7 +216,6 @@ export interface FromWalletConfig {
  * `Client.createReadonly()`. Ideal for dashboards, explorers, and
  * monitoring tools.
  *
- * @since 0.8.0
  * @category model
  */
 export interface ReadonlyClient {
@@ -459,10 +460,44 @@ function resolveNetworkConfig(network: string, custom: Config.NetworkConfig | un
   return custom;
 }
 
+/**
+ * The network for a client built on a connected wallet: the wallet's own, unless
+ * the caller names a preset or passes a config, which must then match it.
+ */
+function networkForWallet(
+  wallet: Wallet.ConnectedWallet,
+  network: string | undefined,
+  custom: Config.NetworkConfig | undefined,
+): Config.NetworkConfig {
+  const mismatch = (what: string, got: string): ClientError =>
+    new ClientError({
+      cause: new Error('Network mismatch'),
+      message: `${what} is '${got}' but the wallet is on '${wallet.networkId}'. Use a wallet connected to the same network.`,
+    });
+  if (custom) {
+    if (custom.networkId !== wallet.networkId) throw mismatch('networkConfig.networkId', custom.networkId);
+    return custom;
+  }
+  if (network !== undefined) {
+    const preset = resolveNetworkConfig(network, undefined);
+    if (preset.networkId !== wallet.networkId) throw mismatch(`network '${network}'`, preset.networkId);
+    return preset;
+  }
+  if (wallet.networkConfig) return wallet.networkConfig;
+  const preset = Object.values(Config.NETWORKS).find((c) => c.networkId === wallet.networkId);
+  if (!preset) {
+    throw new ClientError({
+      cause: new Error('No preset for network'),
+      message: `The wallet is on '${wallet.networkId}', which has no built-in preset. Pass networkConfig, for example Config.blockfrost('${wallet.networkId}', projectId).`,
+    });
+  }
+  return preset;
+}
+
 function createEffect(config: ClientConfig): Effect.Effect<MiddayClient, ClientError> {
   return Effect.gen(function* () {
     const {
-      network = 'local',
+      network,
       networkConfig: customNetworkConfig,
       wallet: connectedWallet,
       seed,
@@ -473,13 +508,16 @@ function createEffect(config: ClientConfig): Effect.Effect<MiddayClient, ClientE
       balance,
     } = config;
 
-    const networkConfig = yield* Effect.try({
-      try: () => resolveNetworkConfig(network, customNetworkConfig),
-      catch: (e) => (e instanceof ClientError ? e : new ClientError({ cause: e, message: String(e) })),
-    });
+    const asClientError = (e: unknown): ClientError =>
+      e instanceof ClientError ? e : new ClientError({ cause: e, message: String(e) });
 
-    // Path 1: Pre-created ConnectedWallet
+    // Path 1: Pre-created ConnectedWallet. The wallet knows its network, so the
+    // client follows it; an explicit preset or config must agree with it.
     if (connectedWallet) {
+      const networkConfig = yield* Effect.try({
+        try: () => networkForWallet(connectedWallet, network, customNetworkConfig),
+        catch: asClientError,
+      });
       const providers = yield* createConnectedWalletProviders(
         connectedWallet, networkConfig, privateStateProvider, { txTtlMs, feeRelay, ...balance },
       );
@@ -491,6 +529,11 @@ function createEffect(config: ClientConfig): Effect.Effect<MiddayClient, ClientE
     }
 
     // Path 2: Seed-based initialization. Seed wallets pay their own fees.
+    const presetName = network ?? 'local';
+    const networkConfig = yield* Effect.try({
+      try: () => resolveNetworkConfig(presetName, customNetworkConfig),
+      catch: asClientError,
+    });
     if (feeRelay) {
       return yield* Effect.fail(
         new ClientError({
@@ -501,7 +544,7 @@ function createEffect(config: ClientConfig): Effect.Effect<MiddayClient, ClientE
     }
     // The development seed is public, so it
     // is only ever implied for the built-in local preset and refused elsewhere.
-    const isLocalPreset = customNetworkConfig === undefined && network === 'local';
+    const isLocalPreset = customNetworkConfig === undefined && presetName === 'local';
     const walletSeed = seed ?? (isLocalPreset ? Config.DEV_WALLET_SEED : undefined);
     if (!walletSeed) {
       return yield* Effect.fail(
@@ -729,7 +772,6 @@ export async function create(config: ClientConfig): Promise<MiddayClient> {
  * console.log(state.counter); // 42n
  * ```
  *
- * @since 0.8.0
  * @category constructors
  */
 export function createReadonly(config: ReadonlyClientConfig = {}): ReadonlyClient {
