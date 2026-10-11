@@ -133,7 +133,8 @@ const wallet = await Midday.Wallet.fromBrowser('preview');
 const client = await Midday.Client.create({
   wallet,
   privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
-    privateStateStoreName: 'my-app',
+    accountId: wallet.address,
+    password: () => promptForPrivateStatePassword(), // ≥ 16 chars, never public data
   }),
 });
 

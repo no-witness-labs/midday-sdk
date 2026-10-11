@@ -86,17 +86,6 @@ export interface WaitForTxOptions {
 // =============================================================================
 
 /**
- * Storage configuration.
- *
- * @since 0.2.0
- * @category model
- */
-export interface StorageConfig {
-  /** Storage password */
-  password?: string;
-}
-
-/**
  * Base providers without zkConfig and proofProvider (shared at client level).
  * zkConfig and proofProvider are per-contract, added when loading a contract.
  *
@@ -123,8 +112,6 @@ export interface CreateBaseProvidersOptions {
   networkConfig: Config.NetworkConfig;
   /** Private state provider */
   privateStateProvider: PrivateStateProvider;
-  /** Storage configuration */
-  storageConfig?: StorageConfig;
   /** Transaction TTL in milliseconds (default: 30 minutes) */
   txTtlMs?: number;
   /** Wallet pools available for transaction inputs and fees. */
@@ -160,8 +147,6 @@ export interface ClientConfig {
   seed?: string;
   /** Private state provider (required) */
   privateStateProvider: PrivateStateProvider;
-  /** Storage configuration */
-  storage?: StorageConfig;
   /** Enable logging (default: true) */
   logging?: boolean;
   /**
@@ -482,7 +467,6 @@ function createEffect(config: ClientConfig): Effect.Effect<MiddayClient, ClientE
       wallet: connectedWallet,
       seed,
       privateStateProvider,
-      storage,
       logging = true,
       feeRelay,
       txTtlMs,
@@ -541,7 +525,6 @@ function createEffect(config: ClientConfig): Effect.Effect<MiddayClient, ClientE
     const providers = yield* createBaseProvidersEffect(walletContext, {
       networkConfig,
       privateStateProvider,
-      storageConfig: storage,
       txTtlMs,
       balance,
     });
