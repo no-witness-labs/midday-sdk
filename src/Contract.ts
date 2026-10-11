@@ -44,6 +44,7 @@ import { SucceedEntirely } from '@midnight-ntwrk/midnight-js-types';
 import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
 
 import { runEffectWithLogging } from './Runtime.js';
+import * as PrivateState from './PrivateState.js';
 
 // =============================================================================
 // Errors
@@ -760,6 +761,8 @@ function deployContractEffect(
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const address = (unprovenDeployTxData as any).public.contractAddress as string;
+    const boundPrivateState = PrivateState.boundToContract(providers.privateStateProvider, address);
+    const boundProviders = { ...providers, privateStateProvider: boundPrivateState };
     yield* Effect.logDebug(`Contract address: ${address}`);
 
     // Step 2: Prove, balance, and submit (non-blocking — no watchForTxData)
@@ -786,14 +789,16 @@ function deployContractEffect(
 
     // Step 3: Save private state
     yield* Effect.promise(async () => {
+      // Bound view: later accesses cannot be redirected by another contract
+      // sharing this provider (see PrivateState.boundToContract).
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      providers.privateStateProvider.setContractAddress(address as any);
+      boundPrivateState.setContractAddress(address as any);
       if (module.privateStateId) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await providers.privateStateProvider.set(module.privateStateId, (unprovenDeployTxData as any).private.initialPrivateState);
+        await boundPrivateState.set(module.privateStateId, (unprovenDeployTxData as any).private.initialPrivateState);
       }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await providers.privateStateProvider.setSigningKey(address as any, (unprovenDeployTxData as any).private.signingKey);
+      await boundPrivateState.setSigningKey(address as any, (unprovenDeployTxData as any).private.signingKey);
     });
 
     // Step 4: Wait for finalization (optional) and require on-chain success:
@@ -825,13 +830,13 @@ function deployContractEffect(
     // whose watched status is not SucceedEntirely, so a stubbed watcher would
     // make every call after a skipFinalization deploy fail.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const callTx = createCircuitCallTxInterface(instrumentedProviders as any, module.compiledContract as any, address as any, module.privateStateId);
+    const callTx = createCircuitCallTxInterface((logging ? instrumentProviders(boundProviders) : boundProviders) as any, module.compiledContract as any, address as any, module.privateStateId);
 
     return {
       address,
       instance: { callTx } as unknown as DeployedContractInstance,
       module,
-      providers,
+      providers: boundProviders,
       logging,
     };
   });
@@ -858,7 +863,11 @@ function joinContractEffect(
 ): Effect.Effect<DeployedContractData, ContractError | TxTimeoutError> {
   const base = Effect.gen(function* () {
     const { initialPrivateState = {} } = options ?? {};
-    const { module, providers, logging } = contractData;
+    const { module, providers: sharedProviders, logging } = contractData;
+    const providers = {
+      ...sharedProviders,
+      privateStateProvider: PrivateState.boundToContract(sharedProviders.privateStateProvider, address),
+    };
 
     yield* Effect.logDebug(`Joining contract at ${address}...`);
 
