@@ -60,7 +60,8 @@ export class ContractError extends Data.TaggedError('ContractError')<{
 }> {}
 
 /**
- * Error when a contract operation exceeds the configured timeout.
+ * An operation exceeded its configured timeout. One class for the whole SDK:
+ * `operation` is `'deploy'`, `'join'` or `'waitForTx'`; `txHash` is set when known.
  *
  * @since 0.10.0
  * @category errors
@@ -69,6 +70,7 @@ export class TxTimeoutError extends Data.TaggedError('TxTimeoutError')<{
   readonly operation: string;
   readonly timeout: number;
   readonly message: string;
+  readonly txHash?: string;
 }> {}
 
 /**

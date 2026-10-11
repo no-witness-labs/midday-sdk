@@ -56,16 +56,15 @@ export class ClientError extends Data.TaggedError('ClientError')<{
 }> {}
 
 /**
- * Error when a transaction wait exceeds the configured timeout.
+ * The SDK's single timeout error, shared with {@link Contract.TxTimeoutError} so
+ * `catchTag('TxTimeoutError')` behaves the same whichever module raised it.
+ * `waitForTx` sets `operation: 'waitForTx'` and `txHash`.
  *
  * @since 0.10.0
  * @category errors
  */
-export class TxTimeoutError extends Data.TaggedError('TxTimeoutError')<{
-  readonly txHash: string;
-  readonly timeout: number;
-  readonly message: string;
-}> {}
+export const TxTimeoutError = Contract.TxTimeoutError;
+export type TxTimeoutError = Contract.TxTimeoutError;
 
 // =============================================================================
 // Transaction Types
@@ -165,13 +164,15 @@ export interface ClientConfig {
   storage?: StorageConfig;
   /** Enable logging (default: true) */
   logging?: boolean;
-  /** Fee relay — delegate fee payment to a remote HTTP relay server.
+  /**
+   * Fee relay — delegate fee payment to a remote HTTP relay server.
    *
-   * The relay pays dust (tx fees) while the user's wallet provides value inputs.
-   * User's wallet balances with `{ payFees: false }`, relay adds dust only.
+   * The wallet balances value inputs with `{ payFees: false }` and the relay adds
+   * dust (fees) and submits. Requires a browser wallet (`Wallet.fromBrowser`);
+   * seed wallets pay their own fees and reject this option.
    */
   feeRelay?: { url: string };
-  /** Transaction TTL in milliseconds (default: 30 minutes). Used as the fallback when no per-call TTL is provided to `balanceTx`. */
+  /** Fallback transaction TTL in milliseconds when `balanceTx` is given none (default: 30 minutes). Applies to seed wallets; browser wallets set their own. */
   txTtlMs?: number;
   /** Seed-wallet balancing policy, for example `['unshielded', 'dust']`. */
   balance?: Wallet.BalanceOptions;
@@ -209,10 +210,12 @@ export interface FromWalletConfig {
   privateStateProvider: PrivateStateProvider;
   /** Enable logging (default: true) */
   logging?: boolean;
-  /** Fee relay — delegate fee payment to a remote HTTP relay server. */
+  /** Fee relay — delegate fee payment to a remote HTTP relay server.
+   *
+   * The relay pays dust (tx fees) while the user's wallet provides value inputs.
+   * The wallet balances with `{ payFees: false }`, the relay adds dust only.
+   */
   feeRelay?: { url: string };
-  /** Transaction TTL in milliseconds (default: 30 minutes). */
-  txTtlMs?: number;
 }
 
 // =============================================================================
@@ -405,12 +408,12 @@ function createConnectedWalletProviders(
   connectedWallet: Wallet.ConnectedWallet,
   networkConfig: Config.NetworkConfig,
   privateStateProvider: PrivateStateProvider,
-  balance?: Wallet.BalanceOptions,
+  options?: Wallet.ProvidersOptions,
 ): Effect.Effect<BaseProviders, ClientError> {
   return Effect.gen(function* () {
     yield* Effect.logDebug('Using pre-created wallet...');
 
-    const { walletProvider, midnightProvider } = yield* connectedWallet.effect.providers(balance).pipe(
+    const { walletProvider, midnightProvider } = yield* connectedWallet.effect.providers(options).pipe(
       Effect.mapError(
         (e) =>
           new ClientError({
@@ -481,6 +484,7 @@ function createEffect(config: ClientConfig): Effect.Effect<MiddayClient, ClientE
       privateStateProvider,
       storage,
       logging = true,
+      feeRelay,
       txTtlMs,
       balance,
     } = config;
@@ -493,7 +497,7 @@ function createEffect(config: ClientConfig): Effect.Effect<MiddayClient, ClientE
     // Path 1: Pre-created ConnectedWallet
     if (connectedWallet) {
       const providers = yield* createConnectedWalletProviders(
-        connectedWallet, networkConfig, privateStateProvider, balance,
+        connectedWallet, networkConfig, privateStateProvider, { txTtlMs, feeRelay, ...balance },
       );
       return buildClient({
         networkConfig,
@@ -502,7 +506,16 @@ function createEffect(config: ClientConfig): Effect.Effect<MiddayClient, ClientE
       });
     }
 
-    // Path 2: Seed-based initialization. The development seed is public, so it
+    // Path 2: Seed-based initialization. Seed wallets pay their own fees.
+    if (feeRelay) {
+      return yield* Effect.fail(
+        new ClientError({
+          cause: new Error('feeRelay with a seed wallet'),
+          message: 'feeRelay requires a browser wallet (Wallet.fromBrowser); seed wallets pay their own fees.',
+        }),
+      );
+    }
+    // The development seed is public, so it
     // is only ever implied for the built-in local preset and refused elsewhere.
     const isLocalPreset = customNetworkConfig === undefined && network === 'local';
     const walletSeed = seed ?? (isLocalPreset ? Config.DEV_WALLET_SEED : undefined);
@@ -632,6 +645,7 @@ function buildClient(args: {
         duration: Duration.millis(options.timeout),
         onTimeout: () =>
           new TxTimeoutError({
+            operation: 'waitForTx',
             txHash,
             timeout: options.timeout!,
             message: `Transaction ${txHash} was not finalized within ${options.timeout}ms`,

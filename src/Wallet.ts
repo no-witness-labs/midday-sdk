@@ -46,6 +46,7 @@ import type { WalletProvider, MidnightProvider, UnboundTransaction } from '@midn
 import { DEFAULT_TX_TTL_MS, type NetworkConfig } from './Config.js';
 import { hexToBytes, bytesToHex } from './Utils.js';
 import { runEffect, runEffectPromise } from './Runtime.js';
+import * as FeeRelay from './FeeRelay.js';
 
 // =============================================================================
 // Errors
@@ -561,6 +562,19 @@ export interface BalanceOptions {
   readonly tokenKindsToBalance?: 'all' | TokenKindToBalance[];
 }
 
+/**
+ * Options for {@link ConnectedWallet.providers}.
+ *
+ * @since 0.7.0
+ * @category model
+ */
+export interface ProvidersOptions extends BalanceOptions {
+  /** Fallback transaction TTL in milliseconds when `balanceTx` is given none (default 30 minutes). Browser wallets apply their own TTL and ignore this. */
+  readonly txTtlMs?: number;
+  /** Fee relay: the wallet balances with `{ payFees: false }`, the relay adds dust and submits. Browser wallets only. */
+  readonly feeRelay?: { url: string };
+}
+
 // =============================================================================
 // Types — Unified Wallet
 // =============================================================================
@@ -638,7 +652,7 @@ export interface ConnectedWallet {
    * Balance options are supported only by seed-backed wallets because the
    * browser connector does not expose pool selection.
    */
-  providers(options?: BalanceOptions): WalletProviders;
+  providers(options?: ProvidersOptions): WalletProviders;
   /**
    * Move NIGHT (or any token) from the unshielded pool into the shielded pool
    * of *this same wallet*. Required before interacting with shielded contracts
@@ -688,7 +702,7 @@ export interface ConnectedWallet {
   /** Effect versions of wallet operations. */
   readonly effect: {
     getBalance(): Effect.Effect<WalletBalance, WalletError>;
-    providers(options?: BalanceOptions): Effect.Effect<WalletProviders, WalletError>;
+    providers(options?: ProvidersOptions): Effect.Effect<WalletProviders, WalletError>;
     shield(amount: bigint, options?: ShieldOptions): Effect.Effect<ShieldResult, WalletError | LaceUnavailableError>;
     unshield(amount: bigint, options?: ShieldOptions): Effect.Effect<ShieldResult, WalletError | LaceUnavailableError>;
     registerDust(options?: RegisterDustOptions): Effect.Effect<RegisterDustResult, WalletError | DustRegistrationError>;
@@ -861,9 +875,17 @@ export async function balanceAndFinalize(
  */
 function providersEffect(
   walletContext: WalletContext,
-  options?: { txTtlMs?: number } & BalanceOptions,
+  options?: ProvidersOptions,
 ): Effect.Effect<WalletProviders, WalletError> {
   const defaultTtlMs = options?.txTtlMs ?? DEFAULT_TX_TTL_MS;
+  if (options?.feeRelay) {
+    return Effect.fail(
+      new WalletError({
+        cause: undefined,
+        message: 'feeRelay requires a browser wallet (Wallet.fromBrowser); seed wallets pay their own fees.',
+      }),
+    );
+  }
   return Effect.try({
     try: () => {
       const walletProvider: WalletProvider = {
@@ -872,8 +894,14 @@ function providersEffect(
         getEncryptionPublicKey: () =>
           walletContext.shieldedSecretKeys.encryptionPublicKey as unknown as ledger.EncPublicKey,
         balanceTx: async (tx: UnboundTransaction, ttl?: Date): Promise<ledger.FinalizedTransaction> => {
-          const txTtl = ttl ?? new Date(Date.now() + defaultTtlMs);
+          // Anchor the TTL after the sync wait: a slow sync (hours on a fresh
+          // Preprod wallet) would otherwise consume it before balancing and the
+          // node rejects the expired intent (error 182) after proving.
           await walletContext.wallet.waitForSyncedState();
+          const txTtl = ttl ?? new Date(Date.now() + defaultTtlMs);
+          if (txTtl.getTime() <= Date.now()) {
+            throw new Error(`Transaction TTL ${txTtl.toISOString()} expired while waiting for the wallet to sync`);
+          }
           return balanceAndFinalize(walletContext, tx, txTtl, options);
         },
       };
@@ -1698,7 +1726,7 @@ function createConnectedWalletHandle(
       ? getBalanceFromSeedEffect(backend.context)
       : getBalanceFromBrowserEffect(backend.connection);
 
-  const providersEff = (options?: BalanceOptions): Effect.Effect<WalletProviders, WalletError> =>
+  const providersEff = (options?: ProvidersOptions): Effect.Effect<WalletProviders, WalletError> =>
     backend.type === 'seed'
       ? providersEffect(backend.context, options)
       : options?.tokenKindsToBalance !== undefined
@@ -1709,7 +1737,16 @@ function createConnectedWalletHandle(
             }),
           )
         : Effect.try({
-            try: () => createWalletProviders(backend.connection.wallet, backend.connection.addresses),
+            try: () => {
+              const { connection } = backend;
+              const base = createWalletProviders(connection.wallet, connection.addresses);
+              if (!options?.feeRelay) return base;
+              // Same wiring as Client.fromWallet: the wallet pays value, the relay pays dust.
+              return {
+                walletProvider: { ...base.walletProvider, balanceTx: (tx) => balanceWithoutFees(connection.wallet, tx) },
+                midnightProvider: FeeRelay.createRelayProvider(options.feeRelay.url),
+              };
+            },
             catch: (cause) =>
               new WalletError({
                 cause,

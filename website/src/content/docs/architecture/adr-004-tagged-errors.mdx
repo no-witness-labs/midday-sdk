@@ -36,11 +36,8 @@ export class ClientError extends Data.TaggedError('ClientError')<{
   readonly message: string;
 }> {}
 
-export class TxTimeoutError extends Data.TaggedError('TxTimeoutError')<{
-  readonly txHash: string;
-  readonly timeout: number;
-  readonly message: string;
-}> {}
+// One timeout class for the whole SDK; waitForTx sets operation: 'waitForTx' and txHash.
+export const TxTimeoutError = Contract.TxTimeoutError;
 ```
 
 ```typescript
@@ -51,8 +48,10 @@ export class ContractError extends Data.TaggedError('ContractError')<{
 }> {}
 
 export class TxTimeoutError extends Data.TaggedError('TxTimeoutError')<{
-  readonly operation: string;
+  readonly operation: string; // 'deploy' | 'join' | 'waitForTx'
+  readonly timeout: number;
   readonly message: string;
+  readonly txHash?: string;
 }> {}
 ```
 
@@ -85,9 +84,8 @@ export class WalletError extends Data.TaggedError('WalletError')<{
 ```
 SDK Errors
 ├── ClientError           # Client creation/configuration failures
-├── Client.TxTimeoutError # waitForTx exceeded timeout (has txHash)
 ├── ContractError         # Contract deployment/call failures
-├── Contract.TxTimeoutError # Deploy/join exceeded timeout (has operation)
+├── TxTimeoutError        # deploy/join/waitForTx exceeded timeout (operation, txHash when known)
 ├── WalletError           # Wallet initialization/sync failures
 ├── ZkConfigError         # ZK configuration loading failures
 └── PrivateStateError     # Private state storage failures
