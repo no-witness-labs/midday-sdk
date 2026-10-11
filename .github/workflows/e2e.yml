@@ -39,6 +39,9 @@ jobs:
 
       - name: Run E2E tests
         run: pnpm test:e2e
+
+      - name: Helper-server images (faucet, fee relay) built from this SDK
+        run: pnpm vitest run test/devnet.servers.integration.test.ts
         env:
           # Ensure Docker socket is available
           DOCKER_HOST: unix:///var/run/docker.sock

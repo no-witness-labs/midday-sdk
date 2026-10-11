@@ -5,6 +5,9 @@
  * @module
  */
 
+import { createRequire } from 'module';
+import { dirname, resolve } from 'path';
+import { fileURLToPath } from 'url';
 import Docker from 'dockerode';
 import { execSync } from 'child_process';
 
@@ -102,9 +105,32 @@ export async function pull(imageName: string): Promise<void> {
  * @since 0.3.0
  * @category management
  */
-export function build(imageName: string, contextPath: string): void {
-  console.log(`[Devnet] Building ${imageName} Docker image (first time only)...`);
-  execSync(`docker build -t ${imageName} .`, { cwd: contextPath, stdio: 'pipe' });
+/** Devnet helper servers shipped as images built from this SDK. */
+export type ServerImage = 'faucet' | 'fee-relay';
+
+const SDK_VERSION: string = (createRequire(import.meta.url)('../../package.json') as { version: string }).version;
+
+/**
+ * Default image tag for a helper server: `midday-<server>:<sdk version>`.
+ * Tagging by SDK version means a new SDK release is never served by a stale
+ * image left over from a previous one.
+ */
+export function serverImage(server: ServerImage): string {
+  return `midday-${server}:${SDK_VERSION}`;
+}
+
+/**
+ * Builds a helper-server image from this SDK's own sources (`docker/Dockerfile`
+ * with `--build-arg SERVER=<server>`), so the container runs the same code and
+ * dependency cohort as the in-process devnet.
+ */
+export function buildServerImage(server: ServerImage, imageName: string = serverImage(server)): void {
+  const sdkRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+  console.log(`[Devnet] Building ${imageName} from ${sdkRoot} (first time only)...`);
+  execSync(`docker build -f docker/Dockerfile --build-arg SERVER=${server} -t ${imageName} .`, {
+    cwd: sdkRoot,
+    stdio: 'pipe',
+  });
   console.log(`[Devnet] ✓ Image built: ${imageName}`);
 }
 

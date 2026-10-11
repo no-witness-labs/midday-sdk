@@ -367,7 +367,7 @@ export function startServer(networkConfig: NetworkConfig, options: ServerOptions
 export interface DockerOptions {
   /** Port to expose (default: 3002) */
   port?: number;
-  /** Docker image (default: midday-fee-relay:latest) */
+  /** Docker image (default: `midday-fee-relay:<sdk version>`, built from this SDK on first use) */
   image?: string;
   /** Cluster name for network (default: midday-devnet) */
   clusterName?: string;
@@ -405,18 +405,11 @@ export async function startDocker(
 ): Promise<string> {
   const {
     port = 3002,
-    image = 'midday-fee-relay:latest',
+    image = Images.serverImage('fee-relay'),
     clusterName = 'midday-devnet',
   } = options;
 
-  // Auto-build image if not available
-  const available = await Images.isAvailable(image);
-  if (!available) {
-    const { resolve, dirname } = await import('path');
-    const { fileURLToPath } = await import('url');
-    const sdkRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-    Images.build(image, resolve(sdkRoot, 'docker/fee-relay'));
-  }
+  if (!(await Images.isAvailable(image))) Images.buildServerImage('fee-relay', image);
 
   const Docker = (await import('dockerode')).default;
   const docker = new Docker();
