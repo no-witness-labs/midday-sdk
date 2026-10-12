@@ -199,8 +199,10 @@ export function inMemoryPrivateStateProvider(): PrivateStateProvider<string, unk
  * a request and the address, so with several contracts on one provider an
  * access can land under another contract's address. Views on the same
  * underlying provider therefore take turns: each operation re-binds its own
- * address and runs to completion before the next one starts. The view also
- * refuses to be switched to another address.
+ * address and runs to completion before the next one starts. Nothing outside
+ * the queue touches the shared address: the view's own `setContractAddress`
+ * only checks the requested address, since midnight-js calls it right before
+ * an access and a real switch there could land under another contract.
  *
  * @since 0.7.0
  * @category combinators
@@ -223,7 +225,6 @@ export function boundToContract(
           message: `Private state provider is bound to contract ${address}; refusing to switch to ${requested}`,
         });
       }
-      provider.setContractAddress(address);
     },
     get: (id) => run(() => provider.get(id)),
     set: (id, state) => run(() => provider.set(id, state)),

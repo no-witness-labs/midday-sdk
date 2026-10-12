@@ -72,6 +72,31 @@ describe('persistent private state provider (level)', () => {
     expect(await a.get('contract')).toBe('A-after');
   });
 
+  it('is not redirected by setContractAddress on another view while an operation awaits upstream', async () => {
+    // Shaped like the level provider: set() awaits (a rotation lock there) and
+    // only then reads the current address. The await is controlled here so the
+    // interleaving is deterministic.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const writes: Array<[string, unknown]> = [];
+    let current: string | null = null;
+    const fake = {
+      ...PrivateState.inMemoryPrivateStateProvider(),
+      setContractAddress(address: string) { current = address; },
+      async set(id: string, state: unknown) { await gate; writes.push([`${current}:${id}`, state]); },
+    };
+    const a = PrivateState.boundToContract(fake, A);
+    const b = PrivateState.boundToContract(fake, B);
+
+    const writing = a.set('contract', 'A-after');
+    await Promise.resolve(); // a's turn has started and is parked on the await
+    b.setContractAddress(B); // what midnight-js does right before accessing b
+    release();
+    await writing;
+
+    expect(writes).toEqual([[`${A}:contract`, 'A-after']]);
+  });
+
   it('requires an account id and a password', () => {
     expect(() => PrivateState.indexedDBPrivateStateProvider({ accountId: '', password })).toThrow(/accountId/);
     expect(() => PrivateState.indexedDBPrivateStateProvider({ accountId: 'acct', password: '' })).toThrow(/password/);
