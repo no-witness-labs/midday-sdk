@@ -27,7 +27,7 @@
  * });
  * const deployed = await loaded.deploy();
  * await deployed.actions.increment();
- * const state = await deployed.ledgerState();
+ * const state = await deployed.readState();
  * ```
  *
  * @example
@@ -50,7 +50,7 @@
  *   });
  *   const deployed = yield* loaded.effect.deploy();
  *   yield* deployed.effect.actions.increment();
- *   const state = yield* deployed.effect.ledgerState();
+ *   const state = yield* deployed.effect.readState();
  *
  *   return state;
  * });

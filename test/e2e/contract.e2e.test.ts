@@ -110,7 +110,7 @@ describe('Contract E2E Tests', () => {
       expect(result.blockHeight).toBeGreaterThan(0);
 
       // Read ledger state via contract handle
-      const state = await contract.ledgerState();
+      const state = await contract.readState();
       expect(state).toBeDefined();
     });
 
@@ -122,7 +122,7 @@ describe('Contract E2E Tests', () => {
       expect(result).toBeDefined();
       expect(result.txHash).toBeDefined();
 
-      const state = await contract.ledgerState();
+      const state = await contract.readState();
       expect(state).toBeDefined();
     });
 
@@ -149,7 +149,7 @@ describe('Contract E2E Tests', () => {
         expect(joinedContract.address).toBe(contractAddress);
 
         // Read state via joined contract handle
-        const state = await joinedContract.ledgerState();
+        const state = await joinedContract.readState();
         expect(state).toBeDefined();
       });
     });
@@ -162,7 +162,7 @@ describe('Contract E2E Tests', () => {
       expect(result).toBeDefined();
       expect(result.txHash).toBeDefined();
 
-      const state = await contract.ledgerState();
+      const state = await contract.readState();
       expect(state).toBeDefined();
     });
 

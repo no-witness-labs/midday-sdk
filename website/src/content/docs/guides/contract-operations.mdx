@@ -25,7 +25,7 @@ const loaded = await client.loadContract({
 The SDK uses two distinct contract types:
 
 - **`LoadedContract`** — Contract module loaded, ready for `deploy()` or `join()`. Has no address.
-- **`DeployedContract`** — Connected to the network with a known address. Has `call()`, `actions`, `ledgerState()`, state watching, etc.
+- **`DeployedContract`** — Connected to the network with a known address. Has `call()`, `actions`, `readState()`, state watching, etc.
 
 `deploy()` and `join()` return a **new** `DeployedContract` handle — they don't mutate the loaded contract:
 
@@ -34,7 +34,7 @@ const loaded = await client.loadContract({ module, zkConfig, privateStateId: 'my
 // loaded has: deploy(), join(), effect.deploy(), effect.join()
 
 const deployed = await loaded.deploy();
-// deployed has: address, actions, call(), ledgerState(), onStateChange(), etc.
+// deployed has: address, actions, call(), readState(), onStateChange(), etc.
 
 console.log(deployed.address); // '0x1234...abcd'
 ```
@@ -147,18 +147,18 @@ console.log(`Block: ${result.blockHeight}`);
 
 ```typescript
 // Parsed ledger state
-const state = await deployed.ledgerState();
+const state = await deployed.readState();
 console.log(state.counter);
 
 // Raw state
-const raw = await deployed.getState();
+const raw = await deployed.readStateValue();
 ```
 
 ### Historical State
 
 ```typescript
-const historicalState = await deployed.ledgerStateAt(blockHeight);
-const historicalRaw = await deployed.getStateAt(blockHeight);
+const historicalState = await deployed.readStateAt(blockHeight);
+const historicalRaw = await deployed.readStateValueAt(blockHeight);
 ```
 
 ## Watching State Changes
@@ -184,11 +184,11 @@ for await (const state of deployed.watchState()) {
 ### Raw State Watching
 
 ```typescript
-const unsub = deployed.onRawStateChange((raw) => {
+const unsub = deployed.onStateValueChange((raw) => {
   console.log('Raw state changed:', raw);
 });
 
-for await (const raw of deployed.watchRawState()) {
+for await (const raw of deployed.watchStateValue()) {
   console.log('Raw:', raw);
   break;
 }
@@ -199,7 +199,7 @@ for await (const raw of deployed.watchRawState()) {
 ```typescript
 // For Effect users — returns a Stream
 const stream = deployed.effect.watchState();
-const rawStream = deployed.effect.watchRawState();
+const rawStream = deployed.effect.watchStateValue();
 ```
 
 ## Read-Only Contract
@@ -238,7 +238,7 @@ console.log(state.counter); // 42n
 
     const deployed = await loaded.deploy();
     await deployed.actions.increment();
-    const state = await deployed.ledgerState();
+    const state = await deployed.readState();
     console.log(`Counter: ${state.counter}`);
     ```
   </TabItem>
@@ -263,7 +263,7 @@ console.log(state.counter); // 42n
 
       const deployed = yield* loaded.effect.deploy();
       yield* deployed.effect.actions.increment();
-      const state = yield* deployed.effect.ledgerState();
+      const state = yield* deployed.effect.readState();
 
       return state;
     });

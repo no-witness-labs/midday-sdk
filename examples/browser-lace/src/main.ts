@@ -57,7 +57,7 @@ async function connectWallet() {
 
     client = await Midday.Client.create({
       wallet,
-      privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
+      privateStateProvider: Midday.PrivateState.persistentPrivateStateProvider({
         privateStateStoreName: 'lace-example',
         accountId: wallet.address,
         password: () => {
@@ -173,7 +173,7 @@ async function readState() {
 
   try {
     updateStatus('Reading state...');
-    const state = (await contract.ledgerState()) as { counter: bigint };
+    const state = (await contract.readState()) as { counter: bigint };
     updateCounter(state.counter.toString());
     updateStatus(`Counter value: ${state.counter}`);
   } catch (error) {

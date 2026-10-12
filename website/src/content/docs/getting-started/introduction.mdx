@@ -30,7 +30,7 @@ The simplest approach, ideal for quick prototypes or developers unfamiliar with 
 const loaded = await client.loadContract({ module: CounterContract, zkConfig, privateStateId: 'my-id' });
 const deployed = await loaded.deploy();
 await deployed.actions.increment();
-const state = await deployed.ledgerState();
+const state = await deployed.readState();
 ```
 
 ### Effect API
@@ -41,7 +41,7 @@ const program = Effect.gen(function* () {
   const loaded = yield* client.effect.loadContract({ module, zkConfig, privateStateId: 'my-id' });
   const deployed = yield* loaded.effect.deploy();
   yield* deployed.effect.actions.increment();
-  return yield* deployed.effect.ledgerState();
+  return yield* deployed.effect.readState();
 });
 ```
 
@@ -54,7 +54,7 @@ const program = Effect.gen(function* () {
   const loaded = yield* client.effect.loadContract({ module, zkConfig, privateStateId: 'my-id' });
   const deployed = yield* loaded.effect.deploy();
   yield* deployed.effect.actions.increment();
-  return yield* deployed.effect.ledgerState();
+  return yield* deployed.effect.readState();
 });
 ```
 

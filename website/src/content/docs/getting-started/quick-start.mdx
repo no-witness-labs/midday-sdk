@@ -56,7 +56,7 @@ The simplest way to get started. The SDK uses a **Client-centric hub pattern** â
 6. **Read contract state**
 
    ```typescript
-   const state = await deployed.ledgerState();
+   const state = await deployed.readState();
    console.log(state.counter);
    ```
 
@@ -93,7 +93,7 @@ const program = Effect.gen(function* () {
   yield* deployed.effect.actions.increment();
 
   // Read state
-  const state = yield* deployed.effect.ledgerState();
+  const state = yield* deployed.effect.readState();
 
   return state;
 });
@@ -131,7 +131,7 @@ const program = Effect.gen(function* () {
   // Deploy and interact
   const deployed = yield* loaded.effect.deploy();
   yield* deployed.effect.actions.increment();
-  const state = yield* deployed.effect.ledgerState();
+  const state = yield* deployed.effect.readState();
 
   return state;
 });

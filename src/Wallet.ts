@@ -634,7 +634,7 @@ export interface WalletBalance {
  * @category model
  */
 export interface ConnectedWallet {
-  /** Discriminator for `MidnightWallet` union */
+  /** Discriminator: a connected wallet (seed or browser) */
   readonly type: 'connected';
   /** How this wallet was created */
   readonly source: 'seed' | 'browser';
@@ -770,38 +770,6 @@ export interface RegisterDustResult {
   count: number;
 }
 
-/**
- * A read-only wallet — address only, no signing capability.
- *
- * Created via `Wallet.fromAddress()`. Useful for querying contract state
- * or deriving addresses without needing private keys.
- *
- * @since 0.7.0
- * @category model
- */
-export interface ReadonlyWallet {
-  /** Discriminator for `MidnightWallet` union */
-  readonly type: 'readonly';
-  /** How this wallet was created */
-  readonly source: 'address';
-  /** Wallet address */
-  readonly address: string;
-}
-
-/**
- * Union type for any wallet (connected or read-only).
- *
- * Use `wallet.type` to discriminate:
- * ```typescript
- * if (wallet.type === 'connected') {
- *   const balance = await wallet.getBalance();
- * }
- * ```
- *
- * @since 0.7.0
- * @category model
- */
-export type MidnightWallet = ConnectedWallet | ReadonlyWallet;
 
 /**
  * Options for creating a wallet from seed.
@@ -1907,30 +1875,6 @@ export async function fromBrowser(networkId: string = 'testnet'): Promise<Connec
   return runEffectPromise(fromBrowserEffect(networkId));
 }
 
-/**
- * Create a read-only wallet from an address string.
- *
- * Useful for querying contract state or passing an address without needing keys.
- *
- * @param address - Wallet address
- * @returns Read-only wallet handle
- *
- * @example
- * ```typescript
- * const wallet = Midday.Wallet.fromAddress('midnight1...');
- * console.log(wallet.address);
- * ```
- *
- * @since 0.7.0
- * @category constructors
- */
-export function fromAddress(address: string): ReadonlyWallet {
-  return {
-    type: 'readonly',
-    source: 'address',
-    address,
-  };
-}
 
 // =============================================================================
 // Promise API — Seed Wallet

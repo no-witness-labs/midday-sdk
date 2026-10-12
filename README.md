@@ -40,7 +40,7 @@ await deployed.actions.increment();
 await deployed.call('increment');
 
 // Read state
-const state = await deployed.ledgerState();
+const state = await deployed.readState();
 console.log(state.counter);
 ```
 
@@ -65,7 +65,7 @@ const program = Effect.gen(function* () {
   });
   const deployed = yield* loaded.effect.deploy();
   yield* deployed.effect.actions.increment();
-  const state = yield* deployed.effect.ledgerState();
+  const state = yield* deployed.effect.readState();
 
   return state;
 });
@@ -105,7 +105,7 @@ const program = Effect.gen(function* () {
   });
   const deployed = yield* loaded.effect.deploy();
   yield* deployed.effect.actions.increment();
-  return yield* deployed.effect.ledgerState();
+  return yield* deployed.effect.readState();
 });
 
 // Zero lifecycle code — cleanup is automatic (LIFO: client closes → cluster removes)
@@ -135,7 +135,7 @@ const wallet = await Midday.Wallet.fromBrowser('preview');
 // Create client with connected wallet; the client uses the wallet's network
 const client = await Midday.Client.create({
   wallet,
-  privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
+  privateStateProvider: Midday.PrivateState.persistentPrivateStateProvider({
     accountId: wallet.address,
     password: () => promptForPrivateStatePassword(), // ≥ 16 chars, never public data
   }),
@@ -167,9 +167,7 @@ const resumed = await Midday.Wallet.fromSeed(seed, networkConfig, { restoreState
 const wallet = await Midday.Wallet.fromBrowser('preview');
 const balance = await wallet.getBalance();
 
-// Read-only (address only, no signing)
-const wallet = Midday.Wallet.fromAddress('0x...');
-console.log(wallet.address);
+// Reading contracts without a wallet: see "Read-Only Client" below
 ```
 
 ## Read-Only Client
@@ -278,13 +276,13 @@ console.log(`Block: ${result.blockHeight}`);
 
 ```typescript
 // Parsed state via ledger
-const state = await deployed.ledgerState();
+const state = await deployed.readState();
 
 // State at specific block
-const historicalState = await deployed.ledgerStateAt(blockHeight);
+const historicalState = await deployed.readStateAt(blockHeight);
 
 // Raw state
-const raw = await deployed.getState();
+const raw = await deployed.readStateValue();
 ```
 
 ### Watch State Changes
@@ -323,7 +321,7 @@ const deployed = await loaded.deploy({ timeout: 60_000 });
 - `Midday.Client` — Client creation, contract loading, read-only client, fee relay
 - `Midday.Contract` — Contract types (`LoadedContract`, `DeployedContract`, `ReadonlyContract`)
 - `Midday.Config` — Network configuration presets and constants
-- `Midday.Wallet` — Wallet factories (`fromSeed`, `fromBrowser`, `fromAddress`)
+- `Midday.Wallet` — Wallet factories (`fromSeed`, `fromBrowser`)
 - `Midday.PrivateState` — Private state providers (in-memory, IndexedDB)
 - `Midday.ZkConfig` — ZK configuration providers (`fromPath`, `HttpZkConfigProvider`)
 - `Midday.Hash` — Cryptographic hash utilities
@@ -359,7 +357,6 @@ import type {
 
   // Wallet
   ConnectedWallet,
-  ReadonlyWallet,
   WalletConnection,
   WalletBalance,
   DustBalance,
@@ -417,7 +414,7 @@ Check with `pnpm why @midnight-ntwrk/onchain-runtime-v3`: exactly one version sh
 ## Upgrading to 0.7
 
 - `NETWORKS.preprod` is gone; Preprod and mainnet are served by Blockfrost: use `Config.blockfrost(network, projectId)`. Keep the project id out of browser bundles.
-- `PrivateState.indexedDBPrivateStateProvider` now requires `accountId` (the wallet address) and `password` (≥ 16 characters, a string or a function returning one). It is midnight-js's encrypted level provider; state written by the previous store is not migrated.
+- `PrivateState.persistentPrivateStateProvider` now requires `accountId` (the wallet address) and `password` (≥ 16 characters, a string or a function returning one). It is midnight-js's encrypted level provider; state written by the previous store is not migrated.
 - `Client.create({ wallet })` follows the wallet's network; a `network`/`networkConfig` that disagrees with the wallet is rejected. The development seed is only implied for the `local` preset.
 - `feeRelay` on `Client.create` now applies to browser wallets and is rejected for seed wallets; `FromWalletConfig.txTtlMs` and the unused `storage` option are removed.
 - `Client.TxTimeoutError` is the same class as `Contract.TxTimeoutError`.

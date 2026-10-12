@@ -31,7 +31,7 @@ Midday SDK supports browser environments with integration for the [Lace wallet](
    ```typescript
    const client = await Midday.Client.create({
      wallet,
-     privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
+     privateStateProvider: Midday.PrivateState.persistentPrivateStateProvider({
        accountId: wallet.address,
        password: () => promptForPrivateStatePassword(), // ≥ 16 chars, never public data
      }),
@@ -65,7 +65,7 @@ async function main() {
   // Create client with connected wallet
   const client = await Midday.Client.create({
     wallet,
-    privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
+    privateStateProvider: Midday.PrivateState.persistentPrivateStateProvider({
       accountId: wallet.address,
       password: () => promptForPrivateStatePassword(), // ≥ 16 chars, never public data
     }),
@@ -83,7 +83,7 @@ async function main() {
   await deployed.actions.increment();
 
   // Read state
-  const state = await deployed.ledgerState();
+  const state = await deployed.readState();
   console.log('Counter:', state.counter);
 }
 ```
@@ -95,7 +95,7 @@ For apps where users don't need to hold dust tokens, enable fee relay:
 ```typescript
 const client = await Midday.Client.create({
   wallet,
-  privateStateProvider: Midday.PrivateState.indexedDBPrivateStateProvider({
+  privateStateProvider: Midday.PrivateState.persistentPrivateStateProvider({
     accountId: wallet.address,
     password: () => promptForPrivateStatePassword(), // ≥ 16 chars, never public data
   }),
@@ -110,7 +110,7 @@ const client = await Midday.Client.create({
 In browsers, use IndexedDB for persistent private state:
 
 ```typescript
-const privateStateProvider = Midday.PrivateState.indexedDBPrivateStateProvider({
+const privateStateProvider = Midday.PrivateState.persistentPrivateStateProvider({
   privateStateStoreName: 'my-app-private-state',
 });
 ```

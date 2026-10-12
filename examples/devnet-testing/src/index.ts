@@ -68,7 +68,7 @@ async function main() {
     console.log('   - Load contract: client.loadContract({ module, zkConfig })');
     console.log('   - Deploy: const deployed = await contract.deploy()');
     console.log('   - Call action: await deployed.actions.increment()');
-    console.log('   - Read state: await deployed.ledgerState()');
+    console.log('   - Read state: await deployed.readState()');
 
     console.log('\n=== Devnet ready for testing ===');
     console.log('Faucet available at http://localhost:3001/faucet');
