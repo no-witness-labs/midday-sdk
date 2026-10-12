@@ -200,7 +200,7 @@ The `PASSWORD_HASH` is stored on-chain. The actual password (`SECRET_PASSWORD`) 
 ```typescript
 await deployed.call('increment', 5n);
 
-const state = await deployed.ledgerState();
+const state = await deployed.readState();
 console.log(`Counter: ${state.counter}`); // 5n
 ```
 
@@ -209,7 +209,7 @@ console.log(`Counter: ${state.counter}`); // 5n
 ```typescript
 await deployed.call('decrement', 2n);
 
-const state = await deployed.ledgerState();
+const state = await deployed.readState();
 console.log(`Counter: ${state.counter}`); // 3n
 ```
 

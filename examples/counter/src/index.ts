@@ -68,7 +68,7 @@ async function main() {
 
     // Step 6: Read state
     console.log('6. Reading ledger state...');
-    const state1 = await deployed.ledgerState();
+    const state1 = await deployed.readState();
     console.log(`   Counter value: ${state1.counter}\n`);
 
     // Step 7: Call increment again
@@ -78,7 +78,7 @@ async function main() {
 
     // Step 8: Read state again
     console.log('8. Reading ledger state...');
-    const state2 = await deployed.ledgerState();
+    const state2 = await deployed.readState();
     console.log(`   Counter value: ${state2.counter}\n`);
 
     console.log('=== Example complete ===');

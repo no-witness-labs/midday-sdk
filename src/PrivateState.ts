@@ -7,7 +7,7 @@
  * `${contractAddress}:${privateStateId}`, so two contracts that share a
  * provider cannot read or overwrite each other's state.
  *
- * - {@link indexedDBPrivateStateProvider}: persistent and encrypted
+ * - {@link persistentPrivateStateProvider}: persistent and encrypted
  *   (midnight-js `levelPrivateStateProvider`: AES-GCM under a PBKDF2-derived
  *   key, scoped per account). IndexedDB in browsers, LevelDB on disk in Node.
  * - {@link inMemoryPrivateStateProvider}: ephemeral, for tests and scripts.
@@ -16,7 +16,7 @@
  * ```typescript
  * import * as Midday from '@no-witness-labs/midday-sdk';
  *
- * const psp = Midday.PrivateState.indexedDBPrivateStateProvider({
+ * const psp = Midday.PrivateState.persistentPrivateStateProvider({
  *   accountId: wallet.address,
  *   password: () => askUserForPassword(), // ≥ 16 characters, kept secret
  * });
@@ -67,12 +67,12 @@ type ContractAddress = string;
 type SigningKey = string;
 
 /**
- * Configuration for {@link indexedDBPrivateStateProvider}.
+ * Configuration for {@link persistentPrivateStateProvider}.
  *
  * @since 0.2.0
  * @category model
  */
-export interface IndexedDBPrivateStateConfig {
+export interface PersistentPrivateStateConfig {
   /**
    * Scopes storage to one account so two wallets on one machine never see
    * each other's state. Use the wallet address. Hashed before use.
@@ -113,13 +113,13 @@ const unsupported = (what: string) => async (): Promise<never> => {
  * @since 0.2.0
  * @category constructors
  */
-export function indexedDBPrivateStateProvider(config: IndexedDBPrivateStateConfig): PrivateStateProvider<string, unknown> {
+export function persistentPrivateStateProvider(config: PersistentPrivateStateConfig): PrivateStateProvider<string, unknown> {
   const { accountId, password, privateStateStoreName, signingKeyStoreName, dbName } = config;
   if (!accountId?.trim()) {
-    throw new PrivateStateError({ cause: undefined, message: 'indexedDBPrivateStateProvider: accountId is required (use the wallet address)' });
+    throw new PrivateStateError({ cause: undefined, message: 'persistentPrivateStateProvider: accountId is required (use the wallet address)' });
   }
   if (!password) {
-    throw new PrivateStateError({ cause: undefined, message: 'indexedDBPrivateStateProvider: password is required (≥ 16 characters, kept secret)' });
+    throw new PrivateStateError({ cause: undefined, message: 'persistentPrivateStateProvider: password is required (≥ 16 characters, kept secret)' });
   }
   return levelPrivateStateProvider<string, unknown>({
     accountId,

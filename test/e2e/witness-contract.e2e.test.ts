@@ -106,7 +106,7 @@ describe('Witness Contract E2E Tests', () => {
         const initResult = await contract.actions.init(PASSWORD_HASH);
         expect(initResult.txHash).toBeDefined();
 
-        const state = await contract.ledgerState();
+        const state = await contract.readState();
         expect(state.password_hash).toEqual(PASSWORD_HASH);
         expect(state.initialized).toBe(true);
 
@@ -161,7 +161,7 @@ describe('Witness Contract E2E Tests', () => {
         const contract = await loaded.deploy();
         await contract.actions.init(new Uint8Array(32));
         await expect(contract.actions.init(PASSWORD_HASH)).rejects.toThrow(/already initialized/);
-        expect((await contract.ledgerState()).password_hash).toEqual(new Uint8Array(32));
+        expect((await contract.readState()).password_hash).toEqual(new Uint8Array(32));
       });
     });
 
@@ -188,7 +188,7 @@ describe('Witness Contract E2E Tests', () => {
         const incrResult = await contract.actions.increment(5n);
         expect(incrResult.txHash).toBeDefined();
 
-        const state = await contract.ledgerState();
+        const state = await contract.readState();
         expect(state.counter).toBe(5n);
       });
     });
@@ -219,7 +219,7 @@ describe('Witness Contract E2E Tests', () => {
         const decrResult = await contract.actions.decrement(3n);
         expect(decrResult.txHash).toBeDefined();
 
-        const state = await contract.ledgerState();
+        const state = await contract.readState();
         expect(state.counter).toBe(7n);
       });
     });

@@ -741,7 +741,7 @@ function createReadonlyHandle(
  * });
  * const deployed = await loaded.deploy();
  * await deployed.actions.increment();
- * const state = await deployed.ledgerState();
+ * const state = await deployed.readState();
  * ```
  *
  * **Constraint:** Only one network ID is supported per process — see {@link ClientConfig}.

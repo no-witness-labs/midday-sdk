@@ -61,7 +61,7 @@ const program = Effect.gen(function* () {
 
   // Read state using Effect API
   yield* Effect.log('Reading ledger state...');
-  const state = yield* deployed.effect.ledgerState();
+  const state = yield* deployed.effect.readState();
   yield* Effect.log(`Counter value: ${state.counter}`);
 
   yield* Effect.log('=== Effect DI Example complete ===');

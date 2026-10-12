@@ -53,7 +53,7 @@ describe('persistent private state provider (level)', () => {
 
   it('keeps interleaved writes from bound views under their own contracts', async () => {
     const dbName = join(await mkdtemp(join(tmpdir(), 'psp-')), 'db');
-    const shared = PrivateState.indexedDBPrivateStateProvider({ accountId: 'acct', password, dbName });
+    const shared = PrivateState.persistentPrivateStateProvider({ accountId: 'acct', password, dbName });
     const a = PrivateState.boundToContract(shared, A);
     const b = PrivateState.boundToContract(shared, B);
     await a.set('contract', 'A-before');
@@ -99,7 +99,7 @@ describe('persistent private state provider (level)', () => {
 
   it('scopes export to the bound contract and refuses clear() on a view', async () => {
     const dbName = join(await mkdtemp(join(tmpdir(), 'psp-')), 'db');
-    const shared = PrivateState.indexedDBPrivateStateProvider({ accountId: 'acct', password, dbName });
+    const shared = PrivateState.persistentPrivateStateProvider({ accountId: 'acct', password, dbName });
     const a = PrivateState.boundToContract(shared, A);
     const b = PrivateState.boundToContract(shared, B);
     await a.set('contract', 'A');
@@ -110,7 +110,7 @@ describe('persistent private state provider (level)', () => {
 
     const backup = await a.exportPrivateStates({ password });
     const freshDb = join(await mkdtemp(join(tmpdir(), 'psp-')), 'db');
-    const fresh = PrivateState.indexedDBPrivateStateProvider({ accountId: 'acct', password, dbName: freshDb });
+    const fresh = PrivateState.persistentPrivateStateProvider({ accountId: 'acct', password, dbName: freshDb });
     fresh.setContractAddress(A);
     await fresh.importPrivateStates(backup, { password });
     expect(await PrivateState.boundToContract(fresh, A).get('contract')).toBe('A');
@@ -118,27 +118,27 @@ describe('persistent private state provider (level)', () => {
   });
 
   it('requires an account id and a password', () => {
-    expect(() => PrivateState.indexedDBPrivateStateProvider({ accountId: '', password })).toThrow(/accountId/);
-    expect(() => PrivateState.indexedDBPrivateStateProvider({ accountId: 'acct', password: '' })).toThrow(/password/);
+    expect(() => PrivateState.persistentPrivateStateProvider({ accountId: '', password })).toThrow(/accountId/);
+    expect(() => PrivateState.persistentPrivateStateProvider({ accountId: 'acct', password: '' })).toThrow(/password/);
   });
 
   it('round-trips encrypted state per contract and per account', async () => {
     const dbName = join(await mkdtemp(join(tmpdir(), 'psp-')), 'db');
-    const one = PrivateState.indexedDBPrivateStateProvider({ accountId: 'acct-1', password, dbName });
+    const one = PrivateState.persistentPrivateStateProvider({ accountId: 'acct-1', password, dbName });
     one.setContractAddress(A);
     await one.set('contract', { secret: new Uint8Array([1, 2, 3]), big: 7n });
     expect(await one.get('contract')).toEqual({ secret: new Uint8Array([1, 2, 3]), big: 7n });
     one.setContractAddress(B);
     expect(await one.get('contract')).toBeNull();
 
-    const other = PrivateState.indexedDBPrivateStateProvider({ accountId: 'acct-2', password, dbName });
+    const other = PrivateState.persistentPrivateStateProvider({ accountId: 'acct-2', password, dbName });
     other.setContractAddress(A);
     expect(await other.get('contract')).toBeNull();
   });
 
   it('rejects a weak password on first use', async () => {
     const dbName = join(await mkdtemp(join(tmpdir(), 'psp-')), 'db');
-    const p = PrivateState.indexedDBPrivateStateProvider({ accountId: 'acct', password: 'short', dbName });
+    const p = PrivateState.persistentPrivateStateProvider({ accountId: 'acct', password: 'short', dbName });
     p.setContractAddress(A);
     await expect(p.set('contract', 1)).rejects.toThrow(/shorter than/);
   });
