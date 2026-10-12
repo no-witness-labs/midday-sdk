@@ -102,8 +102,22 @@ console.log(`Deployed at: ${deployed.address}`);
 ### With Timeout
 
 ```typescript
-const deployed = await loaded.deploy({ timeout: 60_000 }); // 60 seconds
+const deployed = await loaded.deploy({ timeout: 60_000 }); // 60 seconds, whole pipeline
 ```
+
+### Submit First, Wait Later
+
+`deploy()` submits and waits. To show progress (address and transaction id) before the
+deployment has landed, submit first:
+
+```typescript
+const submitted = await loaded.submitDeploy();
+console.log(submitted.address, submitted.txId);   // phase: 'submitted'
+const deployed = await submitted.wait({ timeout: 60_000 });
+```
+
+`wait()` resolves only when the transaction lands with status `SucceedEntirely`; a deploy
+that fails on-chain rejects with a `ContractError` naming the address, id and status.
 
 If the timeout is exceeded, a `Contract.TxTimeoutError` is thrown with the `operation` field set to `'deploy'`.
 
@@ -283,7 +297,7 @@ Contract operations can fail for various reasons:
 | `ContractError` | General contract operation failure (deploy, join, call, state read) |
 | `Contract.TxTimeoutError` | Deploy or join exceeded timeout (has `operation` field) |
 | `ClientError` | Client initialization or configuration error |
-| `Client.TxTimeoutError` | `waitForTx` exceeded timeout (has `txHash` field) |
+| `Client.TxTimeoutError` | `waitForTx` exceeded timeout (same class; `operation: 'waitForTx'`, has `txId`) |
 
 With the Effect API, errors are typed and can be handled explicitly:
 
@@ -302,9 +316,9 @@ If you need to wait for a specific transaction to be finalized:
 
 ```typescript
 const result = await deployed.call('increment');
-const finalized = await client.waitForTx(result.txHash);
+const finalized = await client.waitForTx(result.txId);
 console.log(`Finalized at block: ${finalized.blockHeight}`);
 
 // With timeout
-const finalized = await client.waitForTx(result.txHash, { timeout: 30_000 });
+const finalized = await client.waitForTx(result.txId, { timeout: 30_000 });
 ```

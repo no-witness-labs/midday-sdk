@@ -63,7 +63,7 @@ export class ContractError extends Data.TaggedError('ContractError')<{
 
 /**
  * An operation exceeded its configured timeout. One class for the whole SDK:
- * `operation` is `'deploy'`, `'join'` or `'waitForTx'`; `txHash` is set when known.
+ * `operation` is `'deploy'`, `'join'` or `'waitForTx'`; `txId` is set when known.
  *
  * @since 0.2.14
  * @category errors
@@ -72,7 +72,7 @@ export class TxTimeoutError extends Data.TaggedError('TxTimeoutError')<{
   readonly operation: string;
   readonly timeout: number;
   readonly message: string;
-  readonly txHash?: string;
+  readonly txId?: string;
 }> {}
 
 /**
@@ -151,12 +151,12 @@ export type InferCircuits<M> = M extends {
  * Infer typed action methods from a contract module.
  *
  * Strips the runtime `context` first parameter from each circuit function
- * and maps the return type to `Promise<CallResult>`.
+ * and maps the return type to `Promise<FinalizedReceipt>`.
  *
  * @example
  * ```typescript
  * // Given a contract with: increment(ctx, amount: bigint), decrement(ctx)
- * // InferActions<M> = { increment(amount: bigint): Promise<CallResult>; decrement(): Promise<CallResult> }
+ * // InferActions<M> = { increment(amount: bigint): Promise<FinalizedReceipt>; decrement(): Promise<FinalizedReceipt> }
  * ```
  *
  * @category type
@@ -168,9 +168,9 @@ export type InferActions<M> = M extends {
 } ? {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [K in keyof IC]: IC[K] extends (context: any, ...args: infer A) => any
-    ? (...args: A) => Promise<CallResult>
-    : (...args: unknown[]) => Promise<CallResult>;
-} : Record<string, (...args: unknown[]) => Promise<CallResult>>;
+    ? (...args: A) => Promise<FinalizedReceipt>
+    : (...args: unknown[]) => Promise<FinalizedReceipt>;
+} : Record<string, (...args: unknown[]) => Promise<FinalizedReceipt>>;
 
 /**
  * Shorthand for `LoadedContract<InferLedger<M>, InferCircuits<M>, InferActions<M>>`.
@@ -211,7 +211,7 @@ export type DeployedContractFor<M extends ContractModule> =
 export type ToEffectActions<T> = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [K in keyof T]: T[K] extends (...args: infer A) => Promise<any>
-    ? (...args: A) => Effect.Effect<CallResult, ContractError>
+    ? (...args: A) => Effect.Effect<FinalizedReceipt, ContractError>
     : T[K];
 };
 
@@ -284,17 +284,14 @@ export interface LoadContractOptions<M extends ContractModule = ContractModule> 
  * @since 0.2.0
  * @category model
  */
-export interface DeployOptions {
+export interface SubmitDeployOptions {
   /** Initial private state (defaults to {}) */
   initialPrivateState?: unknown;
-  /** Timeout in milliseconds. Throws `TxTimeoutError` if deployment isn't finalized in time. */
+}
+
+export interface DeployOptions extends SubmitDeployOptions {
+  /** Timeout in milliseconds for finalization. Fails with `TxTimeoutError` if the deploy has not landed in time. */
   timeout?: number;
-  /** Callback fired after the tx is submitted but before finalization.
-   *  Receives the contract address and txId so the UI can show progress. */
-  onSubmit?: (info: { address: string; txId: string }) => void;
-  /** Skip waiting for tx finalization. Returns immediately after submission.
-   *  The contract handle is fully functional — calls will work once the deploy tx lands on-chain. */
-  skipFinalization?: boolean;
 }
 
 /**
@@ -319,23 +316,63 @@ export interface JoinOptions {
  * @since 0.2.0
  * @category model
  */
-export interface FinalizedTxData {
-  txHash: string;
-  blockHeight: number;
-  blockHash: string;
+export type TxStatus = 'SucceedEntirely' | 'FailEntirely' | 'FailFallible';
+
+/**
+ * A transaction that has landed on-chain. `txId` is the identifier the SDK
+ * watched (one of `identifiers`); `txHash` is the enclosing transaction's hash,
+ * which can differ when transactions are merged. `status` is the execution
+ * outcome: a finalized transaction can still have failed.
+ *
+ * @since 0.7.0
+ * @category model
+ */
+export interface FinalizedReceipt {
+  readonly phase: 'finalized';
+  readonly txId: string;
+  readonly identifiers: readonly string[];
+  readonly txHash: string;
+  readonly blockHeight: number;
+  readonly blockHash: string;
+  readonly status: TxStatus;
 }
 
 /**
- * Result of a contract call.
+ * A deployment that has been submitted but not yet observed on-chain.
+ * `wait()` resolves to the usable handle once the transaction lands with
+ * `SucceedEntirely`, and fails otherwise.
  *
- * @since 0.2.0
+ * @since 0.7.0
  * @category model
  */
-export interface CallResult {
-  txHash: string;
-  blockHeight: number;
-  status: string;
+export interface SubmittedDeploy<
+  TLedger = unknown,
+  TCircuits extends string = string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  TActions extends Record<string, (...args: any[]) => Promise<FinalizedReceipt>> = Record<string, (...args: unknown[]) => Promise<FinalizedReceipt>>,
+> {
+  readonly phase: 'submitted';
+  readonly address: string;
+  readonly txId: string;
+  wait(options?: WaitOptions): Promise<DeployedContract<TLedger, TCircuits, TActions>>;
+  readonly effect: {
+    wait(options?: WaitOptions): Effect.Effect<DeployedContract<TLedger, TCircuits, TActions>, ContractError | TxTimeoutError>;
+  };
 }
+
+/**
+ * Options for waiting on finalization.
+ *
+ * @since 0.7.0
+ * @category model
+ */
+export interface WaitOptions {
+  /** Timeout in milliseconds. Fails with `TxTimeoutError` if the transaction has not landed in time. */
+  timeout?: number;
+}
+
+/** @deprecated name kept for one release; use {@link FinalizedReceipt}. */
+export type CallResult = FinalizedReceipt;
 
 /**
  * Full providers for a contract (includes zkConfig and proofProvider).
@@ -372,7 +409,7 @@ export interface LoadedContract<
   TLedger = unknown,
   TCircuits extends string = string,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  TActions extends Record<string, (...args: any[]) => Promise<CallResult>> = Record<string, (...args: unknown[]) => Promise<CallResult>>,
+  TActions extends Record<string, (...args: any[]) => Promise<FinalizedReceipt>> = Record<string, (...args: unknown[]) => Promise<FinalizedReceipt>>,
 > {
   /** The loaded contract module */
   readonly module: LoadedContractModule<TLedger, TCircuits>;
@@ -389,6 +426,12 @@ export interface LoadedContract<
   deploy(options?: DeployOptions): Promise<DeployedContract<TLedger, TCircuits, TActions>>;
 
   /**
+   * Submit the deployment and return without waiting for it to land. Use the
+   * result's `address`/`txId` for progress and `wait()` for the usable handle.
+   */
+  submitDeploy(options?: SubmitDeployOptions): Promise<SubmittedDeploy<TLedger, TCircuits, TActions>>;
+
+  /**
    * Join an existing contract at an address.
    *
    * @returns A deployed contract handle ready for calls.
@@ -400,6 +443,7 @@ export interface LoadedContract<
   /** Effect versions of loaded contract methods */
   readonly effect: {
     deploy(options?: DeployOptions): Effect.Effect<DeployedContract<TLedger, TCircuits, TActions>, ContractError | TxTimeoutError>;
+    submitDeploy(options?: SubmitDeployOptions): Effect.Effect<SubmittedDeploy<TLedger, TCircuits, TActions>, ContractError>;
     join(address: string, options?: JoinOptions): Effect.Effect<DeployedContract<TLedger, TCircuits, TActions>, ContractError | TxTimeoutError>;
   };
 }
@@ -420,7 +464,7 @@ export interface DeployedContract<
   TLedger = unknown,
   TCircuits extends string = string,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  TActions extends Record<string, (...args: any[]) => Promise<CallResult>> = Record<string, (...args: unknown[]) => Promise<CallResult>>,
+  TActions extends Record<string, (...args: any[]) => Promise<FinalizedReceipt>> = Record<string, (...args: unknown[]) => Promise<FinalizedReceipt>>,
 > {
   /** The deployed contract address (always known). */
   readonly address: string;
@@ -446,7 +490,7 @@ export interface DeployedContract<
    *
    * Prefer `contract.actions.actionName(...)` for type-safe calls.
    */
-  call(action: TCircuits, ...args: unknown[]): Promise<CallResult>;
+  call(action: TCircuits, ...args: unknown[]): Promise<FinalizedReceipt>;
 
   /** Get raw contract state. */
   readStateValue(): Promise<unknown>;
@@ -501,7 +545,7 @@ export interface DeployedContract<
   readonly effect: {
     /** Type-safe Effect action methods. */
     readonly actions: ToEffectActions<TActions>;
-    call(action: TCircuits, ...args: unknown[]): Effect.Effect<CallResult, ContractError>;
+    call(action: TCircuits, ...args: unknown[]): Effect.Effect<FinalizedReceipt, ContractError>;
     readStateValue(): Effect.Effect<unknown, ContractError | ContractStateNotFoundError>;
     readStateValueAt(blockHeight: number): Effect.Effect<unknown, ContractError | ContractStateNotFoundError>;
     readState(): Effect.Effect<TLedger, ContractError | ContractStateNotFoundError>;
@@ -590,8 +634,35 @@ export interface DeployedContractData extends LoadedContractData {
  * Internal interface for deployed contract instance with callable transaction methods.
  * @internal
  */
+/** The on-chain fields midnight-js reports for a finalized transaction. @internal */
+export interface UpstreamFinalizedTxData {
+  txId: string;
+  identifiers: readonly string[];
+  txHash: string;
+  blockHeight: number;
+  blockHash: string;
+  status: string;
+}
+
+/** @internal */
+export function toReceipt(data: UpstreamFinalizedTxData): FinalizedReceipt {
+  const status = data.status;
+  if (status !== 'SucceedEntirely' && status !== 'FailEntirely' && status !== 'FailFallible') {
+    throw new ContractError({ cause: data, message: `Unknown transaction status '${String(status)}'` });
+  }
+  return {
+    phase: 'finalized',
+    txId: String(data.txId),
+    identifiers: [...data.identifiers].map(String),
+    txHash: String(data.txHash),
+    blockHeight: data.blockHeight,
+    blockHash: String(data.blockHash),
+    status,
+  };
+}
+
 interface DeployedContractInstance {
-  callTx: Record<string, (...args: unknown[]) => Promise<{ public: { txHash: string; blockHeight: number; status: string } }>>;
+  callTx: Record<string, (...args: unknown[]) => Promise<{ public: UpstreamFinalizedTxData }>>;
 }
 
 // =============================================================================
@@ -731,12 +802,23 @@ function instrumentProviders(providers: ContractProviders): ContractProviders {
 // Contract Effects
 // =============================================================================
 
-function deployContractEffect(
+interface SubmittedDeployData {
+  readonly address: string;
+  readonly txId: string;
+  readonly wait: (options?: WaitOptions) => Effect.Effect<DeployedContractData, ContractError | TxTimeoutError>;
+}
+
+/**
+ * Builds, proves, balances and submits the deploy transaction, stores the
+ * private state and signing key, and returns a `wait` stage that resolves to
+ * the deployed data once the transaction lands with `SucceedEntirely`.
+ */
+function submitDeployEffect(
   contractData: LoadedContractData,
-  options?: DeployOptions,
-): Effect.Effect<DeployedContractData, ContractError | TxTimeoutError> {
-  const base = Effect.gen(function* () {
-    const { initialPrivateState = {}, onSubmit, skipFinalization } = options ?? {};
+  options?: SubmitDeployOptions,
+): Effect.Effect<SubmittedDeployData, ContractError> {
+  return Effect.gen(function* () {
+    const { initialPrivateState = {} } = options ?? {};
     const { module, providers, logging } = contractData;
 
     yield* Effect.logDebug('Deploying contract...');
@@ -780,81 +862,94 @@ function deployContractEffect(
           message: `Failed to submit deploy tx: ${cause instanceof Error ? cause.message : String(cause)}`,
         }),
     });
-
     yield* Effect.logDebug(`Deploy tx submitted: ${txId}`);
 
-    // Fire onSubmit callback with address and txId
-    if (onSubmit) {
-      try { onSubmit({ address, txId: String(txId) }); } catch { /* ignore callback errors */ }
-    }
-
-    // Step 3: Save private state
-    yield* Effect.promise(async () => {
-      // Bound view: later accesses cannot be redirected by another contract
-      // sharing this provider (see PrivateState.boundToContract).
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      boundPrivateState.setContractAddress(address as any);
-      if (module.privateStateId) {
+    // Step 3: Save private state and signing key. Written before finalization on
+    // purpose: they are the recovery material for a deploy whose outcome is not
+    // yet known.
+    yield* Effect.tryPromise({
+      try: async () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await boundPrivateState.set(module.privateStateId, (unprovenDeployTxData as any).private.initialPrivateState);
-      }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await boundPrivateState.setSigningKey(address as any, (unprovenDeployTxData as any).private.signingKey);
+        boundPrivateState.setContractAddress(address as any);
+        if (module.privateStateId) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await boundPrivateState.set(module.privateStateId, (unprovenDeployTxData as any).private.initialPrivateState);
+        }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await boundPrivateState.setSigningKey(address as any, (unprovenDeployTxData as any).private.signingKey);
+      },
+      catch: (cause) =>
+        new ContractError({
+          cause,
+          message: `Deploy tx ${String(txId)} submitted (address: ${address}) but storing its private state failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+        }),
     });
 
-    // Step 4: Wait for finalization (optional) and require on-chain success:
-    // a deploy that lands as a failure must not yield a usable handle.
-    if (!skipFinalization) {
-      const deployTxData = yield* Effect.tryPromise({
-        try: () => providers.publicDataProvider.watchForTxData(String(txId)),
-        catch: (cause) =>
-          new ContractError({
-            cause,
-            message: `Deploy tx ${String(txId)} submitted (address: ${address}) but finalization watch failed: ${cause instanceof Error ? cause.message : String(cause)}`,
-          }),
-      });
-      if (deployTxData.status !== SucceedEntirely) {
-        return yield* Effect.fail(
-          new ContractError({
-            cause: deployTxData,
-            message: `Deploy tx ${String(txId)} for ${address} landed with status '${String(deployTxData.status)}'`,
-          }),
-        );
-      }
-    } else {
-      yield* Effect.logDebug('Skipping finalization watch (skipFinalization: true)');
-    }
-
-    yield* Effect.logDebug(`Contract deployed at: ${address}${skipFinalization ? ' (finalization skipped)' : ''}`);
-
-    // Calls always wait for their own finalization: midnight-js rejects any call
-    // whose watched status is not SucceedEntirely, so a stubbed watcher would
-    // make every call after a skipFinalization deploy fail.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const callTx = createCircuitCallTxInterface((logging ? instrumentProviders(boundProviders) : boundProviders) as any, module.compiledContract as any, address as any, module.privateStateId);
-
-    return {
+    const deployed: DeployedContractData = {
       address,
       instance: { callTx } as unknown as DeployedContractInstance,
       module,
       providers: boundProviders,
       logging,
     };
+
+    // Step 4: the wait stage. A deploy that lands as a failure must not yield a usable handle.
+    const wait = (waitOptions?: WaitOptions): Effect.Effect<DeployedContractData, ContractError | TxTimeoutError> => {
+      const base = Effect.gen(function* () {
+        const deployTxData = yield* Effect.tryPromise({
+          try: () => providers.publicDataProvider.watchForTxData(String(txId)),
+          catch: (cause) =>
+            new ContractError({
+              cause,
+              message: `Deploy tx ${String(txId)} submitted (address: ${address}) but finalization watch failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+            }),
+        });
+        if (deployTxData.status !== SucceedEntirely) {
+          return yield* Effect.fail(
+            new ContractError({
+              cause: deployTxData,
+              message: `Deploy tx ${String(txId)} for ${address} landed with status '${String(deployTxData.status)}'`,
+            }),
+          );
+        }
+        yield* Effect.logDebug(`Contract deployed at: ${address}`);
+        return deployed;
+      });
+      if (waitOptions?.timeout == null) return base;
+      return Effect.timeoutFail(base, {
+        duration: Duration.millis(waitOptions.timeout),
+        onTimeout: () =>
+          new TxTimeoutError({
+            operation: 'deploy',
+            txId: String(txId),
+            timeout: waitOptions.timeout!,
+            message: `Deploy tx ${String(txId)} for ${address} was not finalized within ${waitOptions.timeout}ms`,
+          }),
+      });
+    };
+
+    return { address, txId: String(txId), wait };
   });
+}
 
-  if (options?.timeout != null) {
-    return Effect.timeoutFail(base, {
-      duration: Duration.millis(options.timeout),
-      onTimeout: () =>
-        new TxTimeoutError({
-          operation: 'deploy',
-          timeout: options.timeout!,
-          message: `Contract deployment was not finalized within ${options.timeout}ms`,
-        }),
-    });
-  }
-
-  return base;
+/** Submit and wait. `timeout` bounds the whole pipeline (proving, submission and finalization). */
+function deployContractEffect(
+  contractData: LoadedContractData,
+  options?: DeployOptions,
+): Effect.Effect<DeployedContractData, ContractError | TxTimeoutError> {
+  const base = submitDeployEffect(contractData, options).pipe(Effect.flatMap((submitted) => submitted.wait()));
+  if (options?.timeout == null) return base;
+  return Effect.timeoutFail(base, {
+    duration: Duration.millis(options.timeout),
+    onTimeout: () =>
+      new TxTimeoutError({
+        operation: 'deploy',
+        timeout: options.timeout!,
+        message: `Contract deployment was not finalized within ${options.timeout}ms`,
+      }),
+  });
 }
 
 function joinContractEffect(
@@ -933,7 +1028,7 @@ function callContractEffect(
   contractData: DeployedContractData,
   action: string,
   ...args: unknown[]
-): Effect.Effect<CallResult, ContractError> {
+): Effect.Effect<FinalizedReceipt, ContractError> {
   return Effect.gen(function* () {
     yield* Effect.logDebug(`Calling ${action}()...`);
 
@@ -960,11 +1055,10 @@ function callContractEffect(
     yield* Effect.logDebug(`  TX Hash: ${txData.public.txHash}`);
     yield* Effect.logDebug(`  Block: ${txData.public.blockHeight}`);
 
-    return {
-      txHash: txData.public.txHash,
-      blockHeight: txData.public.blockHeight,
-      status: txData.public.status,
-    };
+    return yield* Effect.try({
+      try: () => toReceipt(txData.public),
+      catch: (e) => (e instanceof ContractError ? e : new ContractError({ cause: e, message: String(e) })),
+    });
   });
 }
 
@@ -1544,6 +1638,10 @@ export function createLoadedContractHandle(data: LoadedContractData): LoadedCont
       const deployed = await runEffectWithLogging(deployContractEffect(data, options), data.logging);
       return createDeployedContractHandle(deployed);
     },
+    submitDeploy: async (options) => {
+      const submitted = await runEffectWithLogging(submitDeployEffect(data, options), data.logging);
+      return createSubmittedDeployHandle(submitted, data.logging);
+    },
     join: async (address, options) => {
       const deployed = await runEffectWithLogging(joinContractEffect(data, address, options), data.logging);
       return createDeployedContractHandle(deployed);
@@ -1554,11 +1652,24 @@ export function createLoadedContractHandle(data: LoadedContractData): LoadedCont
         deployContractEffect(data, options).pipe(
           Effect.map(createDeployedContractHandle),
         ),
+      submitDeploy: (options) =>
+        submitDeployEffect(data, options).pipe(Effect.map((submitted) => createSubmittedDeployHandle(submitted, data.logging))),
       join: (address, options) =>
         joinContractEffect(data, address, options).pipe(
           Effect.map(createDeployedContractHandle),
         ),
     },
+  };
+}
+
+function createSubmittedDeployHandle(submitted: SubmittedDeployData, logging: boolean): SubmittedDeploy {
+  const waitEff = (options?: WaitOptions) => submitted.wait(options).pipe(Effect.map(createDeployedContractHandle));
+  return {
+    phase: 'submitted',
+    address: submitted.address,
+    txId: submitted.txId,
+    wait: (options) => runEffectWithLogging(waitEff(options), logging),
+    effect: { wait: waitEff },
   };
 }
 
@@ -1571,8 +1682,8 @@ export function createLoadedContractHandle(data: LoadedContractData): LoadedCont
  */
 export function createDeployedContractHandle(data: DeployedContractData): DeployedContract {
   // Build actions proxy — each key in callTx becomes a direct method
-  const actions: Record<string, (...args: unknown[]) => Promise<CallResult>> = {};
-  const effectActions: Record<string, (...args: unknown[]) => Effect.Effect<CallResult, ContractError>> = {};
+  const actions: Record<string, (...args: unknown[]) => Promise<FinalizedReceipt>> = {};
+  const effectActions: Record<string, (...args: unknown[]) => Effect.Effect<FinalizedReceipt, ContractError>> = {};
 
   for (const key of Object.keys(data.instance.callTx)) {
     actions[key] = (...args) =>

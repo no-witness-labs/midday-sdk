@@ -307,11 +307,22 @@ const stream = deployed.effect.watchState();
 ### Transaction Lifecycle
 
 ```typescript
-// Wait for a transaction with timeout
-await client.waitForTx(txHash, { timeout: 30_000 });
+// Every action resolves to a FinalizedReceipt once the transaction has landed
+const receipt = await deployed.actions.increment(1n);
+receipt.txId;        // what the SDK watched (one of receipt.identifiers)
+receipt.txHash;      // the enclosing transaction's hash
+receipt.status;      // 'SucceedEntirely' | 'FailEntirely' | 'FailFallible'
 
-// Deploy and join support timeout
+// Wait for a transaction by id, with timeout; the receipt carries the status
+await client.waitForTx(receipt.txId, { timeout: 30_000 });
+
+// deploy() submits and waits; `timeout` bounds the whole pipeline
 const deployed = await loaded.deploy({ timeout: 60_000 });
+
+// Or submit first and show progress, then wait for the usable handle
+const submitted = await loaded.submitDeploy();
+console.log(submitted.address, submitted.txId);
+const deployedLater = await submitted.wait({ timeout: 60_000 });
 ```
 
 ## API Reference
@@ -352,7 +363,8 @@ import type {
   ReadonlyContract,
   DeployOptions,
   JoinOptions,
-  CallResult,
+  FinalizedReceipt,
+  SubmittedDeploy,
   ContractProviders,
 
   // Wallet

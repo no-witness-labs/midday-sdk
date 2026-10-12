@@ -99,6 +99,30 @@ describe('Contract E2E Tests', () => {
       expect(contractAddress).toMatch(/^[0-9a-f]+$/i);
     });
 
+    it('submitDeploy returns the submitted phase; wait() yields the handle; waitForTx reports status', { timeout: 240_000 }, async () => {
+      if (setupFailed) return;
+      const loaded = await client.loadContract({
+        module: CounterContract,
+        zkConfig: Midday.ZkConfig.fromPath(COUNTER_CONTRACT_DIR),
+        privateStateId: 'counter-e2e-submit-deploy',
+      });
+      const submitted = await loaded.submitDeploy();
+      expect(submitted.phase).toBe('submitted');
+      expect(submitted.address).toMatch(/^[0-9a-f]+$/i);
+      expect(submitted.txId).toMatch(/^[0-9a-f]+$/i);
+
+      const deployed = await submitted.wait({ timeout: 180_000 });
+      expect(deployed.address).toBe(submitted.address);
+
+      const receipt = await client.waitForTx(submitted.txId, { timeout: 60_000 });
+      expect(receipt.phase).toBe('finalized');
+      expect(receipt.status).toBe('SucceedEntirely');
+      expect(receipt.identifiers).toContain(submitted.txId);
+
+      await deployed.actions.increment();
+      expect((await deployed.readState()).counter).toBe(1n);
+    });
+
     it('should call increment() via typed actions and verify state', { timeout: 120_000 }, async () => {
       if (setupFailed) return; // skip gracefully if deploy failed
 
@@ -108,6 +132,12 @@ describe('Contract E2E Tests', () => {
       expect(result).toBeDefined();
       expect(result.txHash).toBeDefined();
       expect(result.blockHeight).toBeGreaterThan(0);
+      // A full receipt: what was watched, what landed, and how it executed.
+      expect(result.phase).toBe('finalized');
+      expect(result.status).toBe('SucceedEntirely');
+      expect(result.txId).toMatch(/^[0-9a-f]+$/i);
+      expect(result.identifiers).toContain(result.txId);
+      expect(result.blockHash).toMatch(/^[0-9a-f]+$/i);
 
       // Read ledger state via contract handle
       const state = await contract.readState();
