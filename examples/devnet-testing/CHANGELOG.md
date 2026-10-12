@@ -1,5 +1,12 @@
 # @examples/devnet-testing
 
+## 0.0.17
+
+### Patch Changes
+
+- Updated dependencies [642acba]
+  - @no-witness-labs/midday-sdk@0.7.1
+
 ## 0.0.16
 
 ### Patch Changes
