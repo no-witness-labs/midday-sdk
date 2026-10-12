@@ -91,57 +91,6 @@ export function bytesToBase64(bytes: Uint8Array): string {
 // =============================================================================
 
 /**
- * Parsed shielded address containing coin and encryption public keys.
- *
- * @since 0.2.0
- * @category address
- */
-export interface ParsedAddress {
-  /** Coin public key as 64-character hex string */
-  coinPublicKey: string;
-  /** Encryption public key as 64-character hex string */
-  encryptionPublicKey: string;
-}
-
-/**
- * Parse a shielded address from various formats.
- *
- * Supports:
- * - Bech32m format (midnightxxxx...)
- * - Hex string (128 characters = 64 bytes for both keys)
- * - Base64 encoded bytes
- *
- * @param address - Address in any supported format
- * @returns Parsed address with hex-encoded public keys
- * @throws Error if address format is invalid
- *
- * @since 0.2.0
- * @category address
- */
-export function parseShieldedAddress(address: string): ParsedAddress {
-  let bytes: Uint8Array;
-
-  if (address.startsWith('midnight')) {
-    bytes = decodeBech32m(address);
-  } else if (/^[0-9a-fA-F]+$/.test(address)) {
-    bytes = hexToBytes(address);
-  } else if (/^[A-Za-z0-9+/=]+$/.test(address)) {
-    bytes = base64ToBytes(address);
-  } else {
-    throw new Error(`Invalid address format: ${address.slice(0, 20)}...`);
-  }
-
-  if (bytes.length !== 64) {
-    throw new Error(`Invalid address length: expected 64 bytes, got ${bytes.length}`);
-  }
-
-  return {
-    coinPublicKey: bytesToHex(bytes.slice(0, 32)),
-    encryptionPublicKey: bytesToHex(bytes.slice(32, 64)),
-  };
-}
-
-/**
  * Convert a hex public key to Uint8Array for contract calls.
  *
  * @param hex - 64-character hex string (32 bytes)
@@ -158,57 +107,6 @@ export function hexToPublicKey(hex: string): Uint8Array {
   return bytes;
 }
 
-// Bech32m character set
-const BECH32M_CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
-
-function decodeBech32m(bech32: string): Uint8Array {
-  const lower = bech32.toLowerCase();
-  const sepIndex = lower.lastIndexOf('1');
-
-  if (sepIndex < 1) {
-    throw new Error('Invalid bech32m: no separator found');
-  }
-
-  const data = lower.slice(sepIndex + 1);
-
-  const values: number[] = [];
-  for (const char of data) {
-    const value = BECH32M_CHARSET.indexOf(char);
-    if (value === -1) {
-      throw new Error(`Invalid bech32m character: ${char}`);
-    }
-    values.push(value);
-  }
-
-  const dataValues = values.slice(0, -6);
-  const bytes = convertBits(dataValues.slice(1), 5, 8, false);
-
-  return new Uint8Array(bytes);
-}
-
-function convertBits(data: number[], fromBits: number, toBits: number, pad: boolean): number[] {
-  let acc = 0;
-  let bits = 0;
-  const result: number[] = [];
-  const maxv = (1 << toBits) - 1;
-
-  for (const value of data) {
-    acc = (acc << fromBits) | value;
-    bits += fromBits;
-    while (bits >= toBits) {
-      bits -= toBits;
-      result.push((acc >> bits) & maxv);
-    }
-  }
-
-  if (pad) {
-    if (bits > 0) {
-      result.push((acc << (toBits - bits)) & maxv);
-    }
-  }
-
-  return result;
-}
 
 // =============================================================================
 // Coin Creation

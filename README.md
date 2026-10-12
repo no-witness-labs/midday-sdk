@@ -99,7 +99,10 @@ const AppLayer = ClientFromCluster.pipe(Layer.provide(ClusterLayer));
 
 const program = Effect.gen(function* () {
   const client = yield* Midday.Client.MiddayClientService;
-  const loaded = yield* client.effect.loadContract({ module: CounterContract });
+  const loaded = yield* client.effect.loadContract({
+    module: CounterContract,
+    zkConfig: Midday.ZkConfig.fromPath('./contracts/counter'),
+  });
   const deployed = yield* loaded.effect.deploy();
   yield* deployed.effect.actions.increment();
   return yield* deployed.effect.ledgerState();

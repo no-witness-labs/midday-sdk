@@ -1445,7 +1445,7 @@ export interface CreateContractOptions<M extends ContractModule = ContractModule
   privateStateProvider: PrivateStateProvider;
   /** Proof server URL */
   proofServerUrl: string;
-  /** Enable logging (default: true) */
+  /** Enable debug logging (default: false) */
   logging?: boolean;
 }
 
@@ -1465,7 +1465,7 @@ function createContractEffect<M extends ContractModule>(
     publicDataProvider,
     privateStateProvider,
     proofServerUrl,
-    logging = true,
+    logging = false,
     ...loadOptions
   } = options;
 
@@ -1522,7 +1522,7 @@ function createContractEffect<M extends ContractModule>(
 export async function create<M extends ContractModule>(
   options: CreateContractOptions<M>,
 ): Promise<LoadedContractFor<M>> {
-  const logging = options.logging ?? true;
+  const logging = options.logging ?? false;
   return runEffectWithLogging(createContractEffect(options), logging);
 }
 

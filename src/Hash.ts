@@ -64,10 +64,11 @@ export function stringToBytes32(str: string): Uint8Array {
   const encoder = new TextEncoder();
   const bytes = encoder.encode(str);
   if (bytes.length > 32) {
-    console.warn(`String truncated from ${bytes.length} to 32 bytes`);
+    // Truncating would give distinct inputs the same commitment.
+    throw new RangeError(`stringToBytes32: input is ${bytes.length} bytes UTF-8; at most 32 are allowed`);
   }
   const result = new Uint8Array(32);
-  result.set(bytes.slice(0, 32));
+  result.set(bytes);
   return result;
 }
 

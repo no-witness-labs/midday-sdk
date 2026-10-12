@@ -338,8 +338,8 @@ export const Logger = {
    * Create a logger layer based on enabled flag.
    * Provides backwards compatibility with the `logging: boolean` option.
    *
-   * When enabled: pretty logger + Debug level visible
-   * When disabled: pretty logger only (Debug hidden by default)
+   * When enabled: pretty logger with Debug level visible.
+   * When disabled: nothing is logged by the SDK.
    *
    * @param enabled - Whether debug logging is enabled
    * @returns Logger layer
@@ -349,6 +349,6 @@ export const Logger = {
   fromEnabled(enabled: boolean): Layer.Layer<never> {
     return enabled
       ? Layer.merge(EffectLogger.pretty, EffectLogger.minimumLogLevel(LogLevel.Debug))
-      : EffectLogger.pretty;
+      : EffectLogger.minimumLogLevel(LogLevel.None);
   },
 };
