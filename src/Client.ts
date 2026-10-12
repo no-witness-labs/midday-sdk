@@ -150,7 +150,7 @@ export interface ClientConfig {
   seed?: string;
   /** Private state provider (required) */
   privateStateProvider: PrivateStateProvider;
-  /** Enable logging (default: true) */
+  /** Enable debug logging (default: false) */
   logging?: boolean;
   /**
    * Fee relay — delegate fee payment to a remote HTTP relay server.
@@ -195,7 +195,7 @@ export interface ReadonlyClientConfig {
 export interface FromWalletConfig {
   /** Private state provider (required) */
   privateStateProvider: PrivateStateProvider;
-  /** Enable logging (default: true) */
+  /** Enable debug logging (default: false) */
   logging?: boolean;
   /** Fee relay — delegate fee payment to a remote HTTP relay server.
    *
@@ -502,7 +502,7 @@ function createEffect(config: ClientConfig): Effect.Effect<MiddayClient, ClientE
       wallet: connectedWallet,
       seed,
       privateStateProvider,
-      logging = true,
+      logging = false,
       feeRelay,
       txTtlMs,
       balance,
@@ -590,7 +590,7 @@ function fromWalletEffect(
   config: FromWalletConfig,
 ): Effect.Effect<MiddayClient, ClientError> {
   return Effect.gen(function* () {
-    const { privateStateProvider, logging = true, feeRelay } = config;
+    const { privateStateProvider, logging = false, feeRelay } = config;
     const networkConfig = connectionNetworkConfig(connection);
 
     let { walletProvider, midnightProvider } = Wallet.createWalletProviders(connection.wallet, connection.addresses);
@@ -750,7 +750,7 @@ function createReadonlyHandle(
  * @category constructors
  */
 export async function create(config: ClientConfig): Promise<MiddayClient> {
-  const logging = config.logging ?? true;
+  const logging = config.logging ?? false;
   return Runtime.runEffectWithLogging(createEffect(config), logging);
 }
 
@@ -811,7 +811,7 @@ export async function fromWallet(
   connection: Wallet.WalletConnection,
   config: FromWalletConfig,
 ): Promise<MiddayClient> {
-  const logging = config.logging ?? true;
+  const logging = config.logging ?? false;
   return Runtime.runEffectWithLogging(fromWalletEffect(connection, config), logging);
 }
 
