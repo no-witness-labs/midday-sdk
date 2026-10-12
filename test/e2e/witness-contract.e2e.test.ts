@@ -114,6 +114,37 @@ describe('Witness Contract E2E Tests', () => {
       });
     });
 
+    it('join keeps the stored private state and only replaces it on request', { timeout: 240_000 }, async () => {
+      const privateStateProvider = Midday.PrivateState.inMemoryPrivateStateProvider();
+      await Midday.Client.withClient({
+        seed: GENESIS_SEED,
+        networkConfig: cluster.networkConfig,
+        privateStateProvider,
+        logging: false,
+      }, async (client) => {
+        const loaded = await client.loadContract({
+          module: SecretCounterContract,
+          zkConfig: Midday.ZkConfig.fromPath(SECRET_COUNTER_DIR),
+          privateStateId: 'secret-counter-join-test',
+          witnesses: createWitnesses(SECRET_PASSWORD),
+        });
+        const deployed = await loaded.deploy();
+        await deployed.actions.init(PASSWORD_HASH);
+        // init takes the hash as an argument; the witness (and so the stored
+        // private state) first runs on increment.
+        await deployed.actions.increment(1n);
+        const stored = await deployed.providers.privateStateProvider.get('secret-counter-join-test');
+        expect(stored).toEqual({ password: SECRET_PASSWORD });
+
+        // A restart looks like this: same store, join by address, no initial state given.
+        const joined = await loaded.join(deployed.address);
+        expect(await joined.providers.privateStateProvider.get('secret-counter-join-test')).toEqual({ password: SECRET_PASSWORD });
+
+        const replaced = await loaded.join(deployed.address, { initialPrivateState: { password: 'replaced' } });
+        expect(await replaced.providers.privateStateProvider.get('secret-counter-join-test')).toEqual({ password: 'replaced' });
+      });
+    });
+
     it('cannot be re-initialized after an init with the zero hash (#59)', { timeout: 180_000 }, async () => {
       await Midday.Client.withClient({
         seed: GENESIS_SEED,

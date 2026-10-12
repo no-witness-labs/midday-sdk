@@ -199,8 +199,10 @@ export function inMemoryPrivateStateProvider(): PrivateStateProvider<string, unk
  * a request and the address, so with several contracts on one provider an
  * access can land under another contract's address. Views on the same
  * underlying provider therefore take turns: each operation re-binds its own
- * address and runs to completion before the next one starts. The view also
- * refuses to be switched to another address.
+ * address and runs to completion before the next one starts. Nothing outside
+ * the queue touches the shared address: the view's own `setContractAddress`
+ * only checks the requested address, since midnight-js calls it right before
+ * an access and a real switch there could land under another contract.
  *
  * @since 0.7.0
  * @category combinators
@@ -214,8 +216,11 @@ export function boundToContract(
       provider.setContractAddress(address);
       return op();
     });
+  // Every method is spelled out: spreading the provider would expose operations
+  // that read the shared address outside the queue. Compound operations call the
+  // provider's own implementation with the provider as receiver, inside one turn,
+  // so their internal reads and writes never re-enter this queue.
   return {
-    ...provider,
     setContractAddress(requested: ContractAddress): void {
       if (requested !== address) {
         throw new PrivateStateError({
@@ -223,12 +228,24 @@ export function boundToContract(
           message: `Private state provider is bound to contract ${address}; refusing to switch to ${requested}`,
         });
       }
-      provider.setContractAddress(address);
     },
     get: (id) => run(() => provider.get(id)),
     set: (id, state) => run(() => provider.set(id, state)),
     remove: (id) => run(() => provider.remove(id)),
-    clear: () => run(() => provider.clear()),
+    clear: async () => {
+      throw new PrivateStateError({
+        cause: undefined,
+        message: `clear() on a view bound to ${address} would erase every contract's private state in this store; call clear() on the shared provider if that is intended, or remove() this contract's entries`,
+      });
+    },
+    setSigningKey: (a, key) => provider.setSigningKey(a, key),
+    getSigningKey: (a) => provider.getSigningKey(a),
+    removeSigningKey: (a) => provider.removeSigningKey(a),
+    clearSigningKeys: () => provider.clearSigningKeys(),
+    exportPrivateStates: (o) => run(() => provider.exportPrivateStates(o)),
+    importPrivateStates: (e, o) => run(() => provider.importPrivateStates(e, o)),
+    exportSigningKeys: (o) => provider.exportSigningKeys(o),
+    importSigningKeys: (e, o) => provider.importSigningKeys(e, o),
   };
 }
 
