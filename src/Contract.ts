@@ -45,6 +45,7 @@ import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-p
 
 import { runEffectWithLogging } from './Runtime.js';
 import * as PrivateState from './PrivateState.js';
+import { IndexerQueryTimeoutError } from './Config.js';
 
 // =============================================================================
 // Errors
@@ -89,6 +90,45 @@ export class ContractStateNotFoundError extends Data.TaggedError('ContractStateN
   readonly blockHeight?: number;
   readonly message: string;
 }> {}
+
+/**
+ * The contract's `ledger()` parser threw on a state value: the artifacts and the
+ * on-chain state disagree (wrong contract, wrong compiler cohort, stale build).
+ *
+ * @since 0.7.0
+ * @category errors
+ */
+export class StateDecodeError extends Data.TaggedError('StateDecodeError')<{
+  readonly address: string;
+  readonly cause: unknown;
+  readonly message: string;
+}> {}
+
+/**
+ * Everything a state read can fail with. `IndexerQueryTimeoutError` and
+ * `StateDecodeError` surface as themselves rather than wrapped in `ContractError`.
+ *
+ * @since 0.7.0
+ * @category errors
+ */
+export type StateReadError = ContractError | ContractStateNotFoundError | StateDecodeError | IndexerQueryTimeoutError;
+
+function decodeState<T>(address: string, parser: (data: unknown) => T, data: unknown): Effect.Effect<T, StateDecodeError> {
+  return Effect.try({
+    try: () => parser(data),
+    catch: (cause) =>
+      new StateDecodeError({
+        address,
+        cause,
+        message: `Failed to decode the ledger state of ${address}: ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
+}
+
+/** Keeps an indexer query timeout as itself; wraps anything else. */
+function stateReadFailure(cause: unknown, message: string): ContractError | IndexerQueryTimeoutError {
+  return cause instanceof IndexerQueryTimeoutError ? cause : new ContractError({ cause, message });
+}
 
 /**
  * `loadContract` was called without one of the required argument shapes:
@@ -518,7 +558,7 @@ export interface DeployedContract<
    *
    * @since 0.2.14
    */
-  onStateChange(callback: (state: TLedger) => void, options?: WatchOptions): Unsubscribe;
+  onStateChange(observer: StateObserver<TLedger>, options?: WatchOptions): Unsubscribe;
 
   /**
    * Watch for parsed ledger state changes (async iterator style).
@@ -536,7 +576,7 @@ export interface DeployedContract<
   watchState(options?: WatchOptions): AsyncIterableIterator<TLedger>;
 
   /** Watch for raw state changes (callback). */
-  onStateValueChange(callback: (state: unknown) => void, options?: WatchOptions): Unsubscribe;
+  onStateValueChange(observer: StateObserver<unknown, ContractError>, options?: WatchOptions): Unsubscribe;
 
   /** Watch for raw state changes (async iterator). */
   watchStateValue(options?: WatchOptions): AsyncIterableIterator<unknown>;
@@ -546,12 +586,12 @@ export interface DeployedContract<
     /** Type-safe Effect action methods. */
     readonly actions: ToEffectActions<TActions>;
     call(action: TCircuits, ...args: unknown[]): Effect.Effect<FinalizedReceipt, ContractError>;
-    readStateValue(): Effect.Effect<unknown, ContractError | ContractStateNotFoundError>;
-    readStateValueAt(blockHeight: number): Effect.Effect<unknown, ContractError | ContractStateNotFoundError>;
-    readState(): Effect.Effect<TLedger, ContractError | ContractStateNotFoundError>;
-    readStateAt(blockHeight: number): Effect.Effect<TLedger, ContractError | ContractStateNotFoundError>;
+    readStateValue(): Effect.Effect<unknown, StateReadError>;
+    readStateValueAt(blockHeight: number): Effect.Effect<unknown, StateReadError>;
+    readState(): Effect.Effect<TLedger, StateReadError>;
+    readStateAt(blockHeight: number): Effect.Effect<TLedger, StateReadError>;
     /** Watch parsed state as an Effect.Stream. */
-    watchState(options?: WatchOptions): Stream.Stream<TLedger, ContractError>;
+    watchState(options?: WatchOptions): Stream.Stream<TLedger, ContractError | StateDecodeError>;
     /** Watch raw state as an Effect.Stream. */
     watchStateValue(options?: WatchOptions): Stream.Stream<unknown, ContractError>;
   };
@@ -585,24 +625,24 @@ export interface ReadonlyContract<TLedger = unknown> {
   readStateValueAt(address: string, blockHeight: number): Promise<unknown>;
 
   /** Watch parsed state changes at an address (callback). */
-  onStateChange(address: string, callback: (state: TLedger) => void, options?: WatchOptions): Unsubscribe;
+  onStateChange(address: string, observer: StateObserver<TLedger>, options?: WatchOptions): Unsubscribe;
 
   /** Watch parsed state changes at an address (async iterator). */
   watchState(address: string, options?: WatchOptions): AsyncIterableIterator<TLedger>;
 
   /** Watch raw state changes at an address (callback). */
-  onStateValueChange(address: string, callback: (state: unknown) => void, options?: WatchOptions): Unsubscribe;
+  onStateValueChange(address: string, observer: StateObserver<unknown, ContractError>, options?: WatchOptions): Unsubscribe;
 
   /** Watch raw state changes at an address (async iterator). */
   watchStateValue(address: string, options?: WatchOptions): AsyncIterableIterator<unknown>;
 
   /** Effect versions of read-only methods. */
   readonly effect: {
-    readState(address: string): Effect.Effect<TLedger, ContractError | ContractStateNotFoundError>;
-    readStateAt(address: string, blockHeight: number): Effect.Effect<TLedger, ContractError | ContractStateNotFoundError>;
-    readStateValue(address: string): Effect.Effect<unknown, ContractError | ContractStateNotFoundError>;
-    readStateValueAt(address: string, blockHeight: number): Effect.Effect<unknown, ContractError | ContractStateNotFoundError>;
-    watchState(address: string, options?: WatchOptions): Stream.Stream<TLedger, ContractError>;
+    readState(address: string): Effect.Effect<TLedger, StateReadError>;
+    readStateAt(address: string, blockHeight: number): Effect.Effect<TLedger, StateReadError>;
+    readStateValue(address: string): Effect.Effect<unknown, StateReadError>;
+    readStateValueAt(address: string, blockHeight: number): Effect.Effect<unknown, StateReadError>;
+    watchState(address: string, options?: WatchOptions): Stream.Stream<TLedger, ContractError | StateDecodeError>;
     watchStateValue(address: string, options?: WatchOptions): Stream.Stream<unknown, ContractError>;
   };
 }
@@ -1064,7 +1104,7 @@ function callContractEffect(
 
 function contractStateEffect(
   contractData: DeployedContractData,
-): Effect.Effect<unknown, ContractError | ContractStateNotFoundError> {
+): Effect.Effect<unknown, StateReadError> {
   const address = contractData.address;
   return Effect.tryPromise({
     try: async () => {
@@ -1080,17 +1120,14 @@ function contractStateEffect(
     catch: (cause) =>
       cause instanceof ContractStateNotFoundError
         ? cause
-        : new ContractError({
-            cause,
-            message: `Failed to query contract state: ${cause instanceof Error ? cause.message : String(cause)}`,
-          }),
+        : stateReadFailure(cause, `Failed to query contract state: ${cause instanceof Error ? cause.message : String(cause)}`),
   });
 }
 
 function contractStateAtEffect(
   contractData: DeployedContractData,
   blockHeight: number,
-): Effect.Effect<unknown, ContractError | ContractStateNotFoundError> {
+): Effect.Effect<unknown, StateReadError> {
   const address = contractData.address;
   return Effect.tryPromise({
     try: async () => {
@@ -1110,27 +1147,24 @@ function contractStateAtEffect(
     catch: (cause) =>
       cause instanceof ContractStateNotFoundError
         ? cause
-        : new ContractError({
-            cause,
-            message: `Failed to query contract state at block ${blockHeight}: ${cause instanceof Error ? cause.message : String(cause)}`,
-          }),
+        : stateReadFailure(cause, `Failed to query contract state at block ${blockHeight}: ${cause instanceof Error ? cause.message : String(cause)}`),
   });
 }
 
 function ledgerStateEffect(
   contractData: DeployedContractData,
-): Effect.Effect<unknown, ContractError | ContractStateNotFoundError> {
+): Effect.Effect<unknown, StateReadError> {
   return contractStateEffect(contractData).pipe(
-    Effect.map((data) => contractData.module.ledger(data)),
+    Effect.flatMap((data) => decodeState(contractData.address, contractData.module.ledger, data)),
   );
 }
 
 function ledgerStateAtEffect(
   contractData: DeployedContractData,
   blockHeight: number,
-): Effect.Effect<unknown, ContractError | ContractStateNotFoundError> {
+): Effect.Effect<unknown, StateReadError> {
   return contractStateAtEffect(contractData, blockHeight).pipe(
-    Effect.map((data) => contractData.module.ledger(data)),
+    Effect.flatMap((data) => decodeState(contractData.address, contractData.module.ledger, data)),
   );
 }
 
@@ -1162,6 +1196,18 @@ export type LedgerParser<TLedger> = (state: any) => TLedger;
 export type Unsubscribe = () => void;
 
 /**
+ * Receiver for a state subscription: a plain callback, or `{ next, error }`.
+ * Without `error`, a failed subscription ends silently; pass one to learn
+ * that updates stopped (indexer gone, state no longer decodable).
+ *
+ * @since 0.7.0
+ * @category model
+ */
+export type StateObserver<T, E = ContractError | StateDecodeError> =
+  | ((state: T) => void)
+  | { readonly next: (state: T) => void; readonly error?: (error: E) => void };
+
+/**
  * Options for watching contract state changes.
  *
  * Controls where the subscription stream starts from. Maps to the indexer's
@@ -1188,7 +1234,7 @@ function readRawStateEffect(
   address: string,
   provider: PublicDataProvider,
   atBlock?: number,
-): Effect.Effect<unknown, ContractError | ContractStateNotFoundError> {
+): Effect.Effect<unknown, StateReadError> {
   return Effect.tryPromise({
     try: async () => {
       const opts = atBlock !== undefined
@@ -1210,10 +1256,7 @@ function readRawStateEffect(
     catch: (cause) =>
       cause instanceof ContractStateNotFoundError
         ? cause
-        : new ContractError({
-            cause,
-            message: `Failed to query contract state: ${cause instanceof Error ? cause.message : String(cause)}`,
-          }),
+        : stateReadFailure(cause, `Failed to query contract state: ${cause instanceof Error ? cause.message : String(cause)}`),
   });
 }
 
@@ -1227,9 +1270,9 @@ function readStateEffect<TLedger>(
   provider: PublicDataProvider,
   ledgerParser: LedgerParser<TLedger>,
   atBlock?: number,
-): Effect.Effect<TLedger, ContractError | ContractStateNotFoundError> {
+): Effect.Effect<TLedger, StateReadError> {
   return readRawStateEffect(address, provider, atBlock).pipe(
-    Effect.map((data) => ledgerParser(data)),
+    Effect.flatMap((data) => decodeState(address, ledgerParser, data)),
   );
 }
 
@@ -1385,24 +1428,21 @@ function watchStateStream<TLedger>(
   provider: PublicDataProvider,
   ledgerParser: LedgerParser<TLedger>,
   options?: WatchOptions,
-): Stream.Stream<TLedger, ContractError> {
-  return Stream.map(watchRawStateStream(address, provider, options), (data) => ledgerParser(data));
+): Stream.Stream<TLedger, ContractError | StateDecodeError> {
+  return Stream.mapEffect(watchRawStateStream(address, provider, options), (data) => decodeState(address, ledgerParser, data));
 }
 
 /**
  * Subscribe to a Stream via callback. Returns an unsubscribe function.
  * @internal
  */
-function streamToCallback<A, E>(
-  stream: Stream.Stream<A, E>,
-  onValue: (value: A) => void,
-  onError?: (error: E) => void,
-): Unsubscribe {
+function streamToCallback<A, E>(stream: Stream.Stream<A, E>, observer: StateObserver<A, E>): Unsubscribe {
+  const { next, error } = typeof observer === 'function' ? { next: observer, error: undefined } : observer;
   const fiber = Effect.runFork(
-    Stream.runForEach(stream, (value) => Effect.sync(() => onValue(value))).pipe(
+    Stream.runForEach(stream, (value) => Effect.sync(() => next(value))).pipe(
       Effect.catchAll((err) =>
         Effect.sync(() => {
-          if (onError) onError(err);
+          if (error) error(err);
         }),
       ),
     ),
@@ -1414,12 +1454,12 @@ function streamToCallback<A, E>(
  * Convert a Stream to an AsyncIterableIterator.
  * @internal
  */
-function streamToAsyncIterator<A>(
-  stream: Stream.Stream<A, ContractError>,
+function streamToAsyncIterator<A, E>(
+  stream: Stream.Stream<A, E>,
 ): AsyncIterableIterator<A> {
   const queue: A[] = [];
   let done = false;
-  let error: ContractError | null = null;
+  let error: E | null = null;
   let resolve: (() => void) | null = null;
 
   const fiber = Effect.runFork(
@@ -1493,10 +1533,10 @@ export function watchState<TLedger>(
   address: string,
   provider: PublicDataProvider,
   ledgerParser: LedgerParser<TLedger>,
-  onValue: (state: TLedger) => void,
+  observer: StateObserver<TLedger>,
   options?: WatchOptions,
 ): Unsubscribe {
-  return streamToCallback(watchStateStream(address, provider, ledgerParser, options), onValue);
+  return streamToCallback(watchStateStream(address, provider, ledgerParser, options), observer);
 }
 
 /**
@@ -1507,10 +1547,10 @@ export function watchState<TLedger>(
 export function watchStateValue(
   address: string,
   provider: PublicDataProvider,
-  onValue: (state: unknown) => void,
+  observer: StateObserver<unknown, ContractError>,
   options?: WatchOptions,
 ): Unsubscribe {
-  return streamToCallback(watchRawStateStream(address, provider, options), onValue);
+  return streamToCallback(watchRawStateStream(address, provider, options), observer);
 }
 
 // =============================================================================
