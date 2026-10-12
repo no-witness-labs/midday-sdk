@@ -114,7 +114,7 @@ const privateStateProvider = Midday.PrivateState.inMemoryPrivateStateProvider();
 // Encrypted (AES-GCM, PBKDF2) and scoped per account and per contract.
 // IndexedDB in browsers, LevelDB on disk in Node.
 const privateStateProvider = Midday.PrivateState.persistentPrivateStateProvider({
-  accountId: wallet.address,
+  accountId: wallet.addresses.unshielded,
   password: () => promptForPrivateStatePassword(), // ≥ 16 characters, never derived from public data
 });
 ```
@@ -210,7 +210,7 @@ const wallet = await Midday.Wallet.fromBrowser('preview');
 const client = await Midday.Client.create({
   wallet,
   privateStateProvider: Midday.PrivateState.persistentPrivateStateProvider({
-    accountId: wallet.address,
+    accountId: wallet.addresses.unshielded,
     password: () => promptForPrivateStatePassword(), // ≥ 16 chars, never public data
   }),
 });
@@ -226,7 +226,7 @@ For browser apps where users don't need to hold dust tokens:
 const client = await Midday.Client.create({
   wallet,
   privateStateProvider: Midday.PrivateState.persistentPrivateStateProvider({
-    accountId: wallet.address,
+    accountId: wallet.addresses.unshielded,
     password: () => promptForPrivateStatePassword(), // ≥ 16 chars, never public data
   }),
   feeRelay: { url: 'http://localhost:3002' },

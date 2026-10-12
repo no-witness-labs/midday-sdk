@@ -8,7 +8,7 @@
  * - `Wallet.fromSeed(seed, config)` — create and sync a connected wallet
  * - `wallet.serializeState()` / `Wallet.fromSeed(seed, config, { restoreState })`
  *   — persist and resume sync state across restarts
- * - `Wallet.deriveAddress(seed, networkId)` — derive address without connecting
+ * - `Wallet.deriveUnshieldedAddress(seed, networkId)` — derive the unshielded address without connecting
  *
  * **Browser Wallet** (Lace extension):
  * - `Wallet.fromBrowser(networkId)` — connect to Lace browser extension
@@ -39,6 +39,9 @@ import {
 import { InMemoryTransactionHistoryStorage } from '@midnight-ntwrk/wallet-sdk-abstractions';
 import {
   MidnightBech32m,
+  ShieldedAddress,
+  ShieldedCoinPublicKey,
+  ShieldedEncryptionPublicKey,
   UnshieldedAddress,
 } from '@midnight-ntwrk/wallet-sdk-address-format';
 import type { WalletProvider, MidnightProvider, UnboundTransaction } from '@midnight-ntwrk/midnight-js-types';
@@ -67,7 +70,7 @@ export class WalletError extends Data.TaggedError('WalletError')<{
  * Seed → HDWallet → key-derivation failure. `phase: 'init'` covers
  * `HDWallet.fromSeed` returning a non-`seedOk` variant (invalid seed bytes);
  * `phase: 'derive'` covers `deriveKeysAt(0)` returning a non-`keysDerived`
- * variant. Surfaces from `Wallet.fromSeed` and `Wallet.deriveAddress`.
+ * variant. Surfaces from `Wallet.fromSeed` and `Wallet.deriveUnshieldedAddress`.
  *
  * @since 0.6.3
  * @category errors
@@ -622,7 +625,7 @@ export interface WalletBalance {
  * const wallet = await Midday.Wallet.fromBrowser('testnet');
  *
  * // Same interface regardless of source
- * console.log(wallet.address);            // shielded address
+ * console.log(wallet.addresses.shielded);
  * console.log(wallet.coinPublicKey);      // ZK coin public key
  * console.log(wallet.encryptionPublicKey); // encryption public key
  * const balance = await wallet.getBalance();
@@ -633,6 +636,20 @@ export interface WalletBalance {
  * @since 0.7.0
  * @category model
  */
+/**
+ * A wallet's receiving addresses. Seed and browser wallets both expose both;
+ * which one to use depends on the pool, not on how the wallet was created.
+ *
+ * @since 0.7.0
+ * @category model
+ */
+export interface WalletAddresses {
+  /** bech32m `mn_shield-addr_…` */
+  readonly shielded: string;
+  /** bech32m `mn_addr_…` */
+  readonly unshielded: string;
+}
+
 export interface ConnectedWallet {
   /** Discriminator: a connected wallet (seed or browser) */
   readonly type: 'connected';
@@ -642,8 +659,8 @@ export interface ConnectedWallet {
   readonly networkId: string;
   /** Full endpoints when known (seed wallets); browser wallets expose only `networkId`. */
   readonly networkConfig?: NetworkConfig;
-  /** Primary wallet address */
-  readonly address: string;
+  /** The wallet's receiving addresses, one per pool. Pick explicitly: shielded for private transfers, unshielded for NIGHT/DUST. */
+  readonly addresses: WalletAddresses;
   /** ZK coin public key (for receiving shielded transfers) */
   readonly coinPublicKey: string;
   /** Encryption public key (for encrypted communication) */
@@ -1682,12 +1699,18 @@ function fromSeedEffect(
       yield* waitForSyncEffect(walletContext);
     }
 
-    const address = walletContext.unshieldedKeystore.getBech32Address().asString();
     const coinPublicKey = String(walletContext.shieldedSecretKeys.coinPublicKey);
     const encryptionPublicKey = String(walletContext.shieldedSecretKeys.encryptionPublicKey);
+    const addresses: WalletAddresses = {
+      unshielded: walletContext.unshieldedKeystore.getBech32Address().asString(),
+      shielded: MidnightBech32m.encode(
+        networkConfig.networkId,
+        new ShieldedAddress(ShieldedCoinPublicKey.fromHexString(coinPublicKey), ShieldedEncryptionPublicKey.fromHexString(encryptionPublicKey)),
+      ).asString(),
+    };
     const backend: WalletBackend = { type: 'seed', context: walletContext };
 
-    return createConnectedWalletHandle(backend, address, { coinPublicKey, encryptionPublicKey }, {
+    return createConnectedWalletHandle(backend, addresses, { coinPublicKey, encryptionPublicKey }, {
       networkId: networkConfig.networkId,
       networkConfig,
     });
@@ -1699,18 +1722,26 @@ function fromBrowserEffect(
 ): Effect.Effect<ConnectedWallet, WalletError | LaceUnavailableError> {
   return Effect.gen(function* () {
     const connection = yield* connectEffect(networkId);
-    const address = connection.addresses.shieldedAddress;
+    const { unshieldedAddress } = yield* Effect.tryPromise({
+      try: () => connection.wallet.getUnshieldedAddress(),
+      catch: (cause) =>
+        new WalletError({
+          cause,
+          message: `Failed to read the wallet's unshielded address: ${cause instanceof Error ? cause.message : String(cause)}`,
+        }),
+    });
+    const addresses: WalletAddresses = { shielded: connection.addresses.shieldedAddress, unshielded: unshieldedAddress };
     const coinPublicKey = connection.coinPublicKey;
     const encryptionPublicKey = connection.encryptionPublicKey;
     const backend: WalletBackend = { type: 'browser', connection };
 
-    return createConnectedWalletHandle(backend, address, { coinPublicKey, encryptionPublicKey }, { networkId });
+    return createConnectedWalletHandle(backend, addresses, { coinPublicKey, encryptionPublicKey }, { networkId });
   });
 }
 
 function createConnectedWalletHandle(
   backend: WalletBackend,
-  address: string,
+  addresses: WalletAddresses,
   keys: { coinPublicKey: string; encryptionPublicKey: string },
   network: { networkId: string; networkConfig?: NetworkConfig },
 ): ConnectedWallet {
@@ -1782,7 +1813,7 @@ function createConnectedWalletHandle(
     source: backend.type === 'seed' ? 'seed' : 'browser',
     networkId: network.networkId,
     ...(network.networkConfig ? { networkConfig: network.networkConfig } : {}),
-    address,
+    addresses,
     coinPublicKey: keys.coinPublicKey,
     encryptionPublicKey: keys.encryptionPublicKey,
 
@@ -1888,7 +1919,7 @@ export async function fromBrowser(networkId: string = 'testnet'): Promise<Connec
  * @since 0.2.0
  * @category utilities
  */
-export function deriveAddress(seed: string, networkId: string): string {
+export function deriveUnshieldedAddress(seed: string, networkId: string): string {
   return runEffect(deriveAddressEffect(seed, networkId));
 }
 
@@ -1967,7 +1998,7 @@ export const effect = {
   // Seed wallet lifecycle
   init: initEffect,
   waitForSync: waitForSyncEffect,
-  deriveAddress: deriveAddressEffect,
+  deriveUnshieldedAddress: deriveAddressEffect,
   close: closeEffect,
   providers: providersEffect,
   serializeState: serializeStateEffect,
@@ -2000,7 +2031,7 @@ export interface WalletServiceImpl {
   ) => Effect.Effect<WalletContext, WalletError | WalletKeyDerivationError | WalletSnapshotError>;
   readonly waitForSync: (walletContext: WalletContext) => Effect.Effect<void, WalletError>;
   readonly close: (walletContext: WalletContext) => Effect.Effect<void, WalletError>;
-  readonly deriveAddress: (
+  readonly deriveUnshieldedAddress: (
     seed: string,
     networkId: string,
   ) => Effect.Effect<string, WalletError | WalletKeyDerivationError>;
@@ -2025,7 +2056,7 @@ export const WalletLive: Layer.Layer<WalletService> = Layer.succeed(WalletServic
   init: initEffect,
   waitForSync: waitForSyncEffect,
   close: closeEffect,
-  deriveAddress: deriveAddressEffect,
+  deriveUnshieldedAddress: deriveAddressEffect,
   providers: providersEffect,
 });
 

@@ -17,7 +17,7 @@
  * import * as Midday from '@no-witness-labs/midday-sdk';
  *
  * const psp = Midday.PrivateState.persistentPrivateStateProvider({
- *   accountId: wallet.address,
+ *   accountId: wallet.addresses.unshielded,
  *   password: () => askUserForPassword(), // ≥ 16 characters, kept secret
  * });
  * ```

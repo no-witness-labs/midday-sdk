@@ -58,7 +58,7 @@ describe('devnet helper-server images', () => {
     const res = await fetch(`http://localhost:${FAUCET_PORT}/faucet`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ unshieldedAddress: wallet.address }),
+      body: JSON.stringify({ unshieldedAddress: wallet.addresses.unshielded }),
     });
     const body = (await res.json()) as { txId?: string; error?: string };
     expect(body.error).toBeUndefined();

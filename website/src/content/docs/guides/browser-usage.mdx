@@ -32,7 +32,7 @@ Midday SDK supports browser environments with integration for the [Lace wallet](
    const client = await Midday.Client.create({
      wallet,
      privateStateProvider: Midday.PrivateState.persistentPrivateStateProvider({
-       accountId: wallet.address,
+       accountId: wallet.addresses.unshielded,
        password: () => promptForPrivateStatePassword(), // ≥ 16 chars, never public data
      }),
    });
@@ -66,7 +66,7 @@ async function main() {
   const client = await Midday.Client.create({
     wallet,
     privateStateProvider: Midday.PrivateState.persistentPrivateStateProvider({
-      accountId: wallet.address,
+      accountId: wallet.addresses.unshielded,
       password: () => promptForPrivateStatePassword(), // ≥ 16 chars, never public data
     }),
   });
@@ -96,7 +96,7 @@ For apps where users don't need to hold dust tokens, enable fee relay:
 const client = await Midday.Client.create({
   wallet,
   privateStateProvider: Midday.PrivateState.persistentPrivateStateProvider({
-    accountId: wallet.address,
+    accountId: wallet.addresses.unshielded,
     password: () => promptForPrivateStatePassword(), // ≥ 16 chars, never public data
   }),
   feeRelay: { url: 'http://localhost:3002' },
@@ -155,7 +155,7 @@ The wallet connection provides keys and configuration:
 const wallet = await Midday.Wallet.fromBrowser('preview');
 
 // Access wallet info
-console.log('Address:', wallet.address);
+console.log('Shielded address:', wallet.addresses.shielded);
 
 // Get balance
 const balance = await wallet.getBalance();

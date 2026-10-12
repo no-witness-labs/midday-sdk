@@ -59,7 +59,7 @@ async function connectWallet() {
       wallet,
       privateStateProvider: Midday.PrivateState.persistentPrivateStateProvider({
         privateStateStoreName: 'lace-example',
-        accountId: wallet.address,
+        accountId: wallet.addresses.unshielded,
         password: () => {
           const value = (document.getElementById('private-state-password') as HTMLInputElement).value;
           if (value.length < 16) throw new Error('Enter a private-state password of at least 16 characters');
@@ -69,7 +69,7 @@ async function connectWallet() {
       ...(useFeeRelay ? { feeRelay: { url: 'http://localhost:3002' } } : {}),
     });
 
-    addressDiv.textContent = `Connected: ${wallet.address.slice(0, 16)}...`;
+    addressDiv.textContent = `Connected: ${wallet.addresses.shielded.slice(0, 16)}...`;
     addressDiv.style.display = 'block';
 
     // Show action buttons

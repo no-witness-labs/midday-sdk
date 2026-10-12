@@ -136,7 +136,7 @@ const wallet = await Midday.Wallet.fromBrowser('preview');
 const client = await Midday.Client.create({
   wallet,
   privateStateProvider: Midday.PrivateState.persistentPrivateStateProvider({
-    accountId: wallet.address,
+    accountId: wallet.addresses.unshielded,
     password: () => promptForPrivateStatePassword(), // ≥ 16 chars, never public data
   }),
 });
