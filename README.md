@@ -137,7 +137,7 @@ const client = await Midday.Client.create({
   wallet,
   privateStateProvider: Midday.PrivateState.persistentPrivateStateProvider({
     accountId: wallet.addresses.unshielded,
-    password: () => promptForPrivateStatePassword(), // ≥ 16 chars, never public data
+    password: () => promptForPrivateStatePassword(), // see PrivateState.derivePassword; policy in the API docs
   }),
 });
 
@@ -426,7 +426,7 @@ Check with `pnpm why @midnight-ntwrk/onchain-runtime-v3`: exactly one version sh
 ## Upgrading to 0.7
 
 - `NETWORKS.preprod` is gone; Preprod and mainnet are served by Blockfrost: use `Config.blockfrost(network, projectId)`. Keep the project id out of browser bundles.
-- `PrivateState.persistentPrivateStateProvider` now requires `accountId` (the wallet address) and `password` (≥ 16 characters, a string or a function returning one). It is midnight-js's encrypted level provider; state written by the previous store is not migrated.
+- `PrivateState.persistentPrivateStateProvider` now requires `accountId` (the wallet address) and `password` (a string or a function returning one) meeting midnight-js's policy: ≥ 16 characters, at least 3 of {lowercase, uppercase, digits, other}, no `aaaa` or `abcd`/`4321` runs. `PrivateState.derivePassword(secret)` derives a compliant one from a 32-byte secret. It is midnight-js's encrypted level provider; state written by the previous store is not migrated.
 - `Client.create({ wallet })` follows the wallet's network; a `network`/`networkConfig` that disagrees with the wallet is rejected. The development seed is only implied for the `local` preset.
 - `feeRelay` on `Client.create` now applies to browser wallets and is rejected for seed wallets; `FromWalletConfig.txTtlMs` and the unused `storage` option are removed.
 - `Client.TxTimeoutError` is the same class as `Contract.TxTimeoutError`.

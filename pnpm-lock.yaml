@@ -54,6 +54,9 @@ importers:
       '@midnight-ntwrk/midnight-js-types':
         specifier: 4.1.1
         version: 4.1.1
+      '@midnight-ntwrk/midnight-js-utils':
+        specifier: 4.1.1
+        version: 4.1.1
       '@midnight-ntwrk/onchain-runtime-v3':
         specifier: 3.0.0
         version: 3.0.0
@@ -81,6 +84,9 @@ importers:
       '@midnight-ntwrk/wallet-sdk-utilities':
         specifier: 1.2.1
         version: 1.2.1
+      '@noble/hashes':
+        specifier: 2.4.0
+        version: 2.4.0
       dockerode:
         specifier: ^4.0.10
         version: 4.0.10

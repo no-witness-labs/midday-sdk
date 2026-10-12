@@ -42,6 +42,8 @@ import {
   levelPrivateStateProvider,
   type PrivateStoragePasswordProvider,
 } from '@midnight-ntwrk/midnight-js-level-private-state-provider';
+import { validatePassword } from '@midnight-ntwrk/midnight-js-utils';
+import { sha256 } from '@noble/hashes/sha2.js';
 
 // =============================================================================
 // Errors
@@ -80,8 +82,12 @@ export interface PersistentPrivateStateConfig {
   accountId: string;
   /**
    * Encryption password, or a function returning it (asked for lazily, on the
-   * first access). At least 16 characters, no long runs of one character.
-   * Never derive it from public data such as keys or addresses.
+   * first access). midnight-js's policy: at least 16 characters, at least 3 of
+   * {lowercase, uppercase, digits, other}, no run of more than 3 identical
+   * characters, no ascending or descending run of 4 (`abcd`, `4321`). A string
+   * is checked when the provider is created; a function's result is checked on
+   * first use. Never derive it from public data such as keys or addresses; to
+   * derive one from a secret you already hold, use {@link derivePassword}.
    */
   password: string | PrivateStoragePasswordProvider;
   /** Store name for private state (default: midnight-js's `private-states`). */
@@ -121,6 +127,18 @@ export function persistentPrivateStateProvider(config: PersistentPrivateStateCon
   if (!password) {
     throw new PrivateStateError({ cause: undefined, message: 'persistentPrivateStateProvider: password is required (≥ 16 characters, kept secret)' });
   }
+  if (typeof password === 'string') {
+    // Fail here, not on the first write: that write can come after a deploy has
+    // already been submitted, leaving a contract whose private state was never stored.
+    try {
+      validatePassword(password);
+    } catch (cause) {
+      throw new PrivateStateError({
+        cause,
+        message: `persistentPrivateStateProvider: password rejected: ${cause instanceof Error ? cause.message : String(cause)}`,
+      });
+    }
+  }
   return levelPrivateStateProvider<string, unknown>({
     accountId,
     privateStoragePasswordProvider: typeof password === 'function' ? password : () => password,
@@ -128,6 +146,49 @@ export function persistentPrivateStateProvider(config: PersistentPrivateStateCon
     ...(signingKeyStoreName ? { signingKeyStoreName } : {}),
     ...(dbName ? { midnightDbName: dbName } : {}),
   });
+}
+
+const BASE64URL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+const base64url = (bytes: Uint8Array): string => {
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const n = (bytes[i] << 16) | ((bytes[i + 1] ?? 0) << 8) | (bytes[i + 2] ?? 0);
+    const chars = Math.min(4, Math.ceil(((bytes.length - i) * 8) / 6));
+    for (let c = 0; c < chars; c++) out += BASE64URL[(n >> (18 - 6 * c)) & 63];
+  }
+  return out;
+};
+
+/**
+ * Derives a storage password from a secret the application already holds (at
+ * least 32 bytes), deterministically: the same secret always gives the same
+ * password, and the result always satisfies midnight-js's password policy.
+ * Hashed outputs are tried in turn until one passes the policy (random strings
+ * occasionally contain runs like `aaaa` or `abcd`).
+ *
+ * @since 0.7.1
+ * @category constructors
+ */
+export function derivePassword(secret: Uint8Array): string {
+  if (secret.length < 32) {
+    throw new PrivateStateError({ cause: undefined, message: `derivePassword: secret must be at least 32 bytes, got ${secret.length}` });
+  }
+  const domain = new TextEncoder().encode('midday-sdk/private-state-password/v1');
+  for (let counter = 0; counter < 256; counter++) {
+    const input = new Uint8Array(domain.length + secret.length + 1);
+    input.set(domain);
+    input.set(secret, domain.length);
+    input[input.length - 1] = counter;
+    const candidate = `Md-${base64url(sha256(input))}`;
+    try {
+      validatePassword(candidate);
+      return candidate;
+    } catch {
+      // try the next counter
+    }
+  }
+  // 256 independent 43-character candidates all failing is not a realistic event.
+  throw new PrivateStateError({ cause: undefined, message: 'derivePassword: no policy-compliant password found' });
 }
 
 /**

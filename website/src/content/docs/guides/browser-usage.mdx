@@ -33,7 +33,7 @@ Midday SDK supports browser environments with integration for the [Lace wallet](
      wallet,
      privateStateProvider: Midday.PrivateState.persistentPrivateStateProvider({
        accountId: wallet.addresses.unshielded,
-       password: () => promptForPrivateStatePassword(), // ≥ 16 chars, never public data
+       password: () => promptForPrivateStatePassword(), // see PrivateState.derivePassword; policy in the API docs
      }),
    });
    ```
@@ -67,7 +67,7 @@ async function main() {
     wallet,
     privateStateProvider: Midday.PrivateState.persistentPrivateStateProvider({
       accountId: wallet.addresses.unshielded,
-      password: () => promptForPrivateStatePassword(), // ≥ 16 chars, never public data
+      password: () => promptForPrivateStatePassword(), // see PrivateState.derivePassword; policy in the API docs
     }),
   });
 
@@ -97,7 +97,7 @@ const client = await Midday.Client.create({
   wallet,
   privateStateProvider: Midday.PrivateState.persistentPrivateStateProvider({
     accountId: wallet.addresses.unshielded,
-    password: () => promptForPrivateStatePassword(), // ≥ 16 chars, never public data
+    password: () => promptForPrivateStatePassword(), // see PrivateState.derivePassword; policy in the API docs
   }),
   feeRelay: { url: 'http://localhost:3002' },
 });
