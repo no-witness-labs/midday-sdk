@@ -58,7 +58,7 @@ export class ClientError extends Data.TaggedError('ClientError')<{
 /**
  * The SDK's single timeout error, shared with {@link Contract.TxTimeoutError} so
  * `catchTag('TxTimeoutError')` behaves the same whichever module raised it.
- * `waitForTx` sets `operation: 'waitForTx'` and `txHash`.
+ * `waitForTx` sets `operation: 'waitForTx'` and `txId`.
  *
  * @since 0.2.14
  * @category errors
@@ -274,7 +274,7 @@ export interface MiddayClient {
    * @param options - Optional settings (e.g., timeout)
    * @throws {TxTimeoutError} When the timeout is exceeded
    */
-  waitForTx(txHash: string, options?: WaitForTxOptions): Promise<Contract.FinalizedTxData>;
+  waitForTx(txId: string, options?: WaitForTxOptions): Promise<Contract.FinalizedReceipt>;
 
   /**
    * Close the client and release all resources.
@@ -295,7 +295,7 @@ export interface MiddayClient {
     loadContract<M extends Contract.ContractModule>(
       options: Contract.LoadContractOptions<M>,
     ): Effect.Effect<Contract.LoadedContract<Contract.InferLedger<M>, Contract.InferCircuits<M>, Contract.InferActions<M>>, ClientError>;
-    waitForTx(txHash: string, options?: WaitForTxOptions): Effect.Effect<Contract.FinalizedTxData, ClientError | TxTimeoutError>;
+    waitForTx(txId: string, options?: WaitForTxOptions): Effect.Effect<Contract.FinalizedReceipt, ClientError | TxTimeoutError>;
     close(): Effect.Effect<void, ClientError>;
   };
 }
@@ -653,12 +653,9 @@ function buildClient(args: {
       Effect.mapError((e) => new ClientError({ cause: e, message: e.message })),
     );
 
-  const waitForTxEff = (txHash: string, options?: WaitForTxOptions) => {
+  const waitForTxEff = (txId: string, options?: WaitForTxOptions) => {
     const base = Effect.tryPromise({
-      try: async () => {
-        const data = await providers.publicDataProvider.watchForTxData(txHash);
-        return { txHash: data.txHash, blockHeight: data.blockHeight, blockHash: data.blockHash };
-      },
+      try: async () => Contract.toReceipt(await providers.publicDataProvider.watchForTxData(txId)),
       catch: (cause) =>
         new ClientError({
           cause,
@@ -672,9 +669,9 @@ function buildClient(args: {
         onTimeout: () =>
           new TxTimeoutError({
             operation: 'waitForTx',
-            txHash,
+            txId,
             timeout: options.timeout!,
-            message: `Transaction ${txHash} was not finalized within ${options.timeout}ms`,
+            message: `Transaction ${txId} was not finalized within ${options.timeout}ms`,
           }),
       });
     }
@@ -690,8 +687,8 @@ function buildClient(args: {
       const contractData = await Runtime.runEffectWithLogging(loadContractEff(options), logging);
       return Contract.createLoadedContractHandle(contractData) as Contract.LoadedContract<Contract.InferLedger<M>, Contract.InferCircuits<M>, Contract.InferActions<M>>;
     },
-    waitForTx: (txHash, options?) =>
-      Runtime.runEffectWithLogging(waitForTxEff(txHash, options), logging),
+    waitForTx: (txId, options?) =>
+      Runtime.runEffectWithLogging(waitForTxEff(txId, options), logging),
     close: () => Runtime.runEffectWithLogging(closeEff, logging),
     [Symbol.asyncDispose]: () => Runtime.runEffectWithLogging(closeEff, logging),
 
@@ -700,7 +697,7 @@ function buildClient(args: {
         loadContractEff(options).pipe(
           Effect.map((contractData) => Contract.createLoadedContractHandle(contractData) as Contract.LoadedContract<Contract.InferLedger<M>, Contract.InferCircuits<M>, Contract.InferActions<M>>),
         ),
-      waitForTx: (txHash, options?) => waitForTxEff(txHash, options),
+      waitForTx: (txId, options?) => waitForTxEff(txId, options),
       close: () => closeEff,
     },
   };

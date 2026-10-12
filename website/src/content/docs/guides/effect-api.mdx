@@ -108,7 +108,7 @@ interface DeployedContract<TLedger, TCircuits, TActions> {
   readonly address: string;
   readonly actions: TActions;  // typed action methods
 
-  call(action: TCircuits, ...args: unknown[]): Promise<CallResult>;
+  call(action: TCircuits, ...args: unknown[]): Promise<FinalizedReceipt>;
   readState(): Promise<TLedger>;
   readStateAt(blockHeight: number): Promise<TLedger>;
   readStateValue(): Promise<unknown>;
@@ -120,7 +120,7 @@ interface DeployedContract<TLedger, TCircuits, TActions> {
 
   readonly effect: {
     readonly actions: ToEffectActions<TActions>;
-    call(action: TCircuits, ...args: unknown[]): Effect.Effect<CallResult, ContractError>;
+    call(action: TCircuits, ...args: unknown[]): Effect.Effect<FinalizedReceipt, ContractError>;
     readState(): Effect.Effect<TLedger, ContractError>;
     readStateAt(blockHeight: number): Effect.Effect<TLedger, ContractError>;
     readStateValue(): Effect.Effect<unknown, ContractError>;
