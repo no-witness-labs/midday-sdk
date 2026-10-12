@@ -1,5 +1,33 @@
 # @examples/counter
 
+## 0.0.16
+
+### Patch Changes
+
+- Updated dependencies [0c1cd7d]
+- Updated dependencies [b14788a]
+- Updated dependencies [e92a335]
+- Updated dependencies [5b8cc1a]
+- Updated dependencies [5caa100]
+- Updated dependencies [981fe8b]
+- Updated dependencies [42dedad]
+- Updated dependencies [32119df]
+- Updated dependencies [7a86606]
+- Updated dependencies [cb2f011]
+- Updated dependencies [97c1c44]
+- Updated dependencies [ec8c912]
+- Updated dependencies [f9df358]
+- Updated dependencies [b3e8f26]
+- Updated dependencies [975a692]
+- Updated dependencies [fcc9239]
+- Updated dependencies [6de9441]
+- Updated dependencies [159498a]
+- Updated dependencies [3e3cfdd]
+- Updated dependencies [d5ad36e]
+- Updated dependencies [219857f]
+- Updated dependencies [1107835]
+  - @no-witness-labs/midday-sdk@0.7.0
+
 ## 0.0.15
 
 ### Patch Changes
