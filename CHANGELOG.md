@@ -1,5 +1,84 @@
 # @no-witness-labs/midday-sdk
 
+## 0.7.0
+
+### Minor Changes
+
+- 0c1cd7d: Preprod and mainnet now go through Blockfrost: add `Config.blockfrost(network, projectId)` and `Config.redactUrl()`. The retired `NETWORKS.preprod` preset is removed, and `getNetworkConfig('preprod')` now throws with a pointer to `Config.blockfrost`. Devnet and CI use proof server 8.1.3.
+- 5caa100: The devnet faucet and fee-relay Docker images are now built from the SDK itself (`docker/Dockerfile`, `--build-arg SERVER=faucet|fee-relay`) and run the SDK's own `Faucet.startServer` / `FeeRelay.startServer`. The previous images carried a second implementation pinned to ledger-v7 and wallet-sdk 1.0, and the relay image did not serve `/balance-finalized-tx`, the route `FeeRelay.createRelayProvider` calls; so the documented browser fee-relay flow failed against the shipped image. Images are tagged `midday-<server>:<sdk version>` (`Images.serverImage`) and built on first use (`Images.buildServerImage`), so a new SDK version never reuses a stale `:latest`. `Images.build(image, contextPath)` is replaced by `Images.buildServerImage(server, image?)`; `docker/<server>/build.sh` by `docker/build.sh`. `Faucet.startServer` gains `GET /health`. The new `test/devnet.servers.integration.test.ts` starts both containers next to a devnet cluster and funds a wallet through the faucet container; it runs in the e2e workflow.
+- 981fe8b: Failures keep their identity, and subscriptions can report theirs.
+
+  - New `Contract.StateDecodeError` (`address`, `cause`): a `ledger()` parser that throws on a state value (wrong contract, wrong compiler cohort, stale artifacts) was previously an unhandled defect outside the typed error channel.
+  - State readers fail with `StateReadError = ContractError | ContractStateNotFoundError | StateDecodeError | IndexerQueryTimeoutError`; an indexer query timeout now surfaces as itself instead of wrapped in `ContractError`, so `catchTag('IndexerQueryTimeoutError')` works.
+  - `client.loadContract` passes `ContractLoadArgsError` through instead of wrapping it in `ClientError`.
+  - `onStateChange` / `onStateValueChange` (deployed and read-only handles, and the module functions) accept a plain callback or `{ next, error }`. Without `error`, a failed subscription still ends silently; with it, you learn that updates stopped and why. Async iteration (`watchState`) already throws the failure from `next()`.
+  - A seed wallet whose initial sync fails or is interrupted is closed instead of left running in the background.
+
+- 32119df: - SDK logging is now off by default (`logging: false` on `Client.create`, `Client.fromWallet`, `createReadonly` and contract loading), and `logging: false` is actually silent: it previously still installed a logger at the default level, so informational output kept appearing. Pass `logging: true` for debug output.
+  - `Hash.stringToBytes32` (and therefore `Hash.password`) throws a `RangeError` for input longer than 32 UTF-8 bytes instead of truncating it; truncation gave distinct inputs the same commitment.
+  - Removed `Utils.parseShieldedAddress`, `Utils.ParsedAddress` and the hand-rolled bech32m decoder: unused, keyed on a `midnight` prefix that Midnight addresses do not have, and it discarded the checksum without checking it. Use `MidnightBech32m.parse` from `@midnight-ntwrk/wallet-sdk-address-format` for address parsing.
+  - README: the Effect DI example now passes the required `zkConfig` to `loadContract`.
+- b3e8f26: Private state is now stored securely and per contract.
+
+  - `PrivateState.indexedDBPrivateStateProvider` is midnight-js's `levelPrivateStateProvider`: AES-GCM under a PBKDF2-derived key, `superjson` encoding (so `Uint8Array` and `bigint` round-trip), scoped per account and per contract, with password rotation. It requires `accountId` (use the wallet address) and `password` (a string or a function returning one; at least 16 characters, never derived from public data). The previous store XOR-ed JSON with a default password and is not readable by the new provider; state written by it is not migrated.
+  - Both providers key state as `${contractAddress}:${privateStateId}`, as midnight-js expects (`setContractAddress` was a no-op before, so two contracts on one provider overwrote each other's state), and fail if no address was set.
+  - New `PrivateState.boundToContract(provider, address)`: a view fixed to one contract. Contract handles use it, so several contracts can share a provider without interleaving.
+  - Removed: `PrivateState.makeIndexedDB`, `makeInMemory`, the `PrivateState.get/set/...` module functions, `PrivateStateService`/`PrivateStateLive`, and the unused `storage` client option. The `browser-level` dependency is gone.
+
+- fcc9239: Naming made consistent across handles, while the API is still cheap to change:
+
+  - Deployed contracts: `ledgerState()` → `readState()`, `ledgerStateAt()` → `readStateAt()` (same verbs as the read-only handle); `getState()`/`getStateAt()` → `readStateValue()`/`readStateValueAt()`. Everywhere, the decoded-runtime-value variants `readRawState*`, `onRawStateChange`, `watchRawState` → `readStateValue*`, `onStateValueChange`, `watchStateValue`: what they return is a decoded `StateValue`, and "raw" is reserved for the undecoded state midnight-js 5 introduces.
+  - `PrivateState.indexedDBPrivateStateProvider` → `persistentPrivateStateProvider` (`PersistentPrivateStateConfig`): it is IndexedDB in browsers and LevelDB on disk in Node.
+  - Removed `Wallet.fromAddress`, `ReadonlyWallet` and the `MidnightWallet` union. `fromAddress` wrapped an unvalidated string and could neither query balances nor act as a wallet; `Client.createReadonly()` is the wallet-free way to read contracts.
+
+- 6de9441: Transaction results say what actually happened.
+
+  - Actions and `client.waitForTx` resolve to a `FinalizedReceipt`: `{ phase: 'finalized', txId, identifiers, txHash, blockHeight, blockHash, status }` with `status` typed as `'SucceedEntirely' | 'FailEntirely' | 'FailFallible'`. Previously `CallResult` carried only `txHash`, `blockHeight` and an untyped `status`, `waitForTx` dropped the status entirely (a finalized-but-failed transaction looked like success), and the identifiers the SDK watches by were discarded. `CallResult` remains as a deprecated alias of `FinalizedReceipt`.
+  - `client.waitForTx(txId)` takes the transaction id (what the indexer watches by), not the hash; `TxTimeoutError.txHash` → `txId`.
+  - `DeployOptions.skipFinalization` and `onSubmit` are removed. The two deploy states now have two shapes: `loaded.deploy(options)` submits and waits (its `timeout` bounds the whole pipeline), and `loaded.submitDeploy(options)` returns `{ phase: 'submitted', address, txId, wait(options?) }` so an application can show progress and obtain the usable handle later. `wait()` resolves only for `SucceedEntirely`.
+
+- 159498a: Add seed-wallet balance pool selection, support unshielded devnet faucet requests, and align the wallet/Compact toolchain with the supported Midnight release matrix.
+- 3e3cfdd: Transaction TTLs are now anchored after the wallet has finished syncing, so a slow sync can no longer consume the TTL before balancing (the node then rejected the intent with error 182 after proving). A caller-supplied TTL that has already passed by then fails immediately instead of being submitted.
+
+  Client options that were silently ignored are now wired or rejected: `Client.create({ wallet, feeRelay })` applies the relay for browser wallets (previously only `Client.fromWallet` did, so the documented `create` form paid fees from the user's wallet) and fails for seed wallets, which cannot balance without fees; `txTtlMs` applies on the `create({ wallet })` path (new `Wallet.ProvidersOptions`); `txTtlMs` is removed from `FromWalletConfig` because browser wallets set their own TTL.
+
+  `TxTimeoutError` is one class for the whole SDK (`Client.TxTimeoutError === Contract.TxTimeoutError`) with `operation: 'deploy' | 'join' | 'waitForTx'` and an optional `txHash`, instead of two classes sharing a `_tag`.
+
+- d5ad36e: `ConnectedWallet.address` is replaced by `addresses: { shielded, unshielded }`. The single `address` meant different things by wallet source — the unshielded address for seed wallets and the shielded one for browser wallets — so code written against one source silently sent funds to the wrong pool on the other. Both addresses are now available for both sources (the browser wallet's unshielded address is read from the connector at connect time). `Wallet.deriveAddress` is renamed `deriveUnshieldedAddress` to say which one it derives. Use `addresses.unshielded` as the `accountId` for the persistent private-state provider.
+- 219857f: `ConnectedWallet` now carries `networkId` (and `networkConfig` for seed wallets), and `Client.create({ wallet })` uses the wallet's network instead of defaulting to `local`: the documented browser flow (`Wallet.fromBrowser('preview')` then `Client.create({ wallet, ... })`) previously produced a client pointed at local endpoints. A `network` or `networkConfig` that disagrees with the wallet is rejected, and a wallet on a network without a built-in preset (Preprod) asks for `Config.blockfrost(...)`.
+
+  Docs: README gains a supported-networks and pinned-versions matrix, the consumer `onchain-runtime-v3` requirement, and an "Upgrading to 0.7" section; the installation page states Node 22 and the `compact-runtime` peer dependency; the services table no longer lists the removed `ClientService`/`ClientLive`; `@since` tags that named unreleased versions now carry the version recorded in the changelog or were dropped.
+
+- 1107835: Seed wallets can persist and resume their sync state: `wallet.serializeState()` exports a versioned snapshot (network ID, format version, wallet SDK package versions, shielded/unshielded/DUST state and transaction history), and `Wallet.fromSeed(seed, config, { restoreState })` resumes from it instead of syncing from genesis. Invalid, corrupt, foreign-network or foreign-seed snapshots fail with the new `WalletSnapshotError` rather than silently resyncing. `WalletContext` now carries `txHistoryStorage`. Snapshots contain private wallet data; store them encrypted.
+
+### Patch Changes
+
+- b14788a: CI now runs lint and the Docker-free unit suite (`pnpm test:unit`) on every push and pull request; previously only type-check, build and the devnet e2e ran, so the config, wallet and private-state unit tests were never executed in CI.
+
+  The bundled `secret-counter` example contract tracks initialization with an explicit `initialized` flag. The previous guard compared `password_hash` with its default, so an `init` with the zero hash could be followed by a second `init` with any hash (#59). Artifacts recompiled with Compact 0.31.1.
+
+- e92a335: Fixes two defects that only show up in a fresh consumer install, not in this workspace:
+
+  - Every clean install resolved **two** copies of `@midnight-ntwrk/onchain-runtime-v3` (`midnight-js-protocol` pins 3.0.0, `compact-runtime` accepts `^3.0.0` and got 3.1.2), which breaks contract state decoding with `expected instance of StateValue`. The SDK now declares `@midnight-ntwrk/onchain-runtime-v3@3.0.0` as a peer dependency; package managers that auto-install peers resolve one copy with no extra configuration. The documented fallback is corrected too: with pnpm 10+ an override belongs in `pnpm-workspace.yaml` (the `pnpm.overrides` field in `package.json` is ignored there), or add the pinned version as a direct dependency.
+  - `Images.buildServerImage` could not build the faucet/fee-relay images from an installed package: the Dockerfile copied sources and workspace manifests that are not published. The Dockerfile now builds from `package.json` and `dist/` with dependencies from the registry, so it works from a checkout (after `pnpm build`) and from `node_modules/@no-witness-labs/midday-sdk` alike.
+
+  New `test/consumer.integration.test.ts` packs the SDK, installs it into a clean project and asserts a single runtime copy and a working import; it runs in CI.
+
+- 5b8cc1a: Devnet now runs the ledger-8 compatibility set: `midnight-node:1.0.400` and `indexer-standalone:4.3.7` (proof server 8.1.3). The indexer gets the SPO node settings it now requires, the cluster waits for the node's first block before starting the indexer, and proof server readiness is checked via `/ready` instead of an open port.
+- 42dedad: Indexer queries made through `Config.publicDataProvider` (and so every client) now fail with `IndexerQueryTimeoutError` after 60 s instead of waiting forever on a stalled connection, which could hang a contract call before proving. Set `queryTimeoutMs` to change the bound; `Config.withQueryTimeout` applies it to any provider.
+- 7a86606: `Client.create` no longer implies the public development seed when a custom `networkConfig` is given: the seed is only implied for the built-in `local` preset, and is refused outright (even when passed explicitly) on any network other than `undeployed`. A `network` preset name that contradicts `networkConfig.networkId` is rejected on `create` and `createReadonly` instead of silently using the custom endpoints under the other network's name.
+- cb2f011: The `preview` network preset now uses the documented indexer path `/api/v4/graphql` (and `/api/v4/graphql/ws`). It serves the same GraphQL schema as `/api/v3`.
+- 97c1c44: Closes the remaining way a private-state operation could be redirected to another contract. `boundToContract` views serialize their operations, but the view's own `setContractAddress` (which midnight-js calls right before every access) still moved the shared address outside that queue, so an operation parked on the level provider's internal await could pick up another contract's address. The view's `setContractAddress` now only validates the requested address; the address is bound exclusively inside each queued operation. Regression test uses a provider whose `set` awaits before reading the address, so the interleaving is deterministic.
+- ec8c912: Fixes cross-contract private-state corruption with the persistent provider. `PrivateState.boundToContract` re-bound the shared provider's address synchronously before each call, but midnight-js's level provider awaits a rotation lock before it reads the address in `set`/`remove`, so a concurrent operation from another contract's view could move the address in between and a write for contract A landed under contract B. Views bound to the same underlying provider now take turns: each operation re-binds its address and completes before the next starts.
+- f9df358: Two private-state fixes.
+
+  - `join(address)` no longer wipes stored private state. It passed `initialPrivateState: {}` by default, and midnight-js replaces the stored state whenever that option is present, so an application that persisted state, restarted and joined its contract lost the state. `initialPrivateState` is now only passed when the caller supplies it (a deliberate replacement) or when nothing is stored yet (first join, `{}`).
+  - `PrivateState.boundToContract` views spell out every method instead of spreading the shared provider. `exportPrivateStates`/`importPrivateStates` run inside the view's queue bound to its contract (previously they used whatever address the shared provider happened to hold); `clear()` on a view is refused with an explanation, since the underlying `clear` erases every contract's state in the store; signing-key methods pass through (they take an explicit address).
+
+- 975a692: Browser-wallet submissions now return a real transaction identifier (`tx.identifiers()[0]`, the id the indexer watches by) instead of the serialized transaction hex; this applies to `ConnectedWallet.providers().midnightProvider.submitTx` and to `shield`/`unshield` results. New `Wallet.transactionIdOf(tx)`.
+
+  `deploy()` now checks the finalized status: a deploy transaction that lands with anything other than `SucceedEntirely` fails with a `ContractError` naming the address, tx id and status, instead of returning a handle for a contract that does not exist. The `skipFinalization` option no longer installs a fake `{ status: 'submitted' }` watcher for later calls; midnight-js rejects any call whose watched status is not `SucceedEntirely`, so that stub made every call after a `skipFinalization` deploy fail.
+
 ## 0.6.4
 
 ### Patch Changes

@@ -1,5 +1,0 @@
----
-'@no-witness-labs/midday-sdk': minor
----
-
-The devnet faucet and fee-relay Docker images are now built from the SDK itself (`docker/Dockerfile`, `--build-arg SERVER=faucet|fee-relay`) and run the SDK's own `Faucet.startServer` / `FeeRelay.startServer`. The previous images carried a second implementation pinned to ledger-v7 and wallet-sdk 1.0, and the relay image did not serve `/balance-finalized-tx`, the route `FeeRelay.createRelayProvider` calls; so the documented browser fee-relay flow failed against the shipped image. Images are tagged `midday-<server>:<sdk version>` (`Images.serverImage`) and built on first use (`Images.buildServerImage`), so a new SDK version never reuses a stale `:latest`. `Images.build(image, contextPath)` is replaced by `Images.buildServerImage(server, image?)`; `docker/<server>/build.sh` by `docker/build.sh`. `Faucet.startServer` gains `GET /health`. The new `test/devnet.servers.integration.test.ts` starts both containers next to a devnet cluster and funds a wallet through the faucet container; it runs in the e2e workflow.
