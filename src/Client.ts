@@ -294,7 +294,7 @@ export interface MiddayClient {
   readonly effect: {
     loadContract<M extends Contract.ContractModule>(
       options: Contract.LoadContractOptions<M>,
-    ): Effect.Effect<Contract.LoadedContract<Contract.InferLedger<M>, Contract.InferCircuits<M>, Contract.InferActions<M>>, ClientError>;
+    ): Effect.Effect<Contract.LoadedContract<Contract.InferLedger<M>, Contract.InferCircuits<M>, Contract.InferActions<M>>, ClientError | Contract.ContractLoadArgsError>;
     waitForTx(txId: string, options?: WaitForTxOptions): Effect.Effect<Contract.FinalizedReceipt, ClientError | TxTimeoutError>;
     close(): Effect.Effect<void, ClientError>;
   };
@@ -368,6 +368,7 @@ function initWalletEffect(
       ),
     );
 
+    // A wallet that fails (or is interrupted) while syncing must not keep running.
     yield* Wallet.effect.waitForSync(ctx).pipe(
       Effect.mapError(
         (e) =>
@@ -376,6 +377,7 @@ function initWalletEffect(
             message: `Failed to sync ${label}: ${e.message}`,
           }),
       ),
+      Effect.onError(() => Wallet.effect.close(ctx).pipe(Effect.ignore)),
     );
     yield* Effect.logDebug(`${label} synced`);
     return ctx;
@@ -650,7 +652,8 @@ function buildClient(args: {
 
   const loadContractEff = (options: Contract.LoadContractOptions) =>
     Contract.loadContractModuleEffect(options, networkConfig, providers, logging).pipe(
-      Effect.mapError((e) => new ClientError({ cause: e, message: e.message })),
+      // Keep the actionable leaf (bad load arguments); wrap only unclassified failures.
+      Effect.mapError((e) => (e instanceof Contract.ContractLoadArgsError ? e : new ClientError({ cause: e, message: e.message }))),
     );
 
   const waitForTxEff = (txId: string, options?: WaitForTxOptions) => {

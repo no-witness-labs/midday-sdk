@@ -432,6 +432,12 @@ Check with `pnpm why @midnight-ntwrk/onchain-runtime-v3`: exactly one version sh
 - `Client.TxTimeoutError` is the same class as `Contract.TxTimeoutError`.
 - Removed: `PrivateState.makeIndexedDB`, `makeInMemory`, the `PrivateState.get/set/...` functions, `PrivateStateService`/`PrivateStateLive`, `Images.build` (use `Images.buildServerImage`).
 - Browser-wallet transaction ids are now ledger identifiers instead of the serialized transaction.
+- `wallet.address` → `wallet.addresses.{shielded,unshielded}`; `Wallet.deriveAddress` → `deriveUnshieldedAddress`. Use `addresses.unshielded` as the private-state `accountId`.
+- State readers renamed: `ledgerState()`/`ledgerStateAt()` → `readState()`/`readStateAt()`; `getState()`/`getStateAt()` → `readStateValue()`/`readStateValueAt()`; `readRawState*`, `onRawStateChange`, `watchRawState` → `readStateValue*`, `onStateValueChange`, `watchStateValue`.
+- `PrivateState.indexedDBPrivateStateProvider` → `persistentPrivateStateProvider`; `Wallet.fromAddress`/`ReadonlyWallet` removed (use `Client.createReadonly()`).
+- Actions and `client.waitForTx(txId)` return a `FinalizedReceipt` (`txId`, `identifiers`, `txHash`, `status`); `waitForTx` takes the transaction id. `DeployOptions.skipFinalization`/`onSubmit` are replaced by `loaded.submitDeploy()` + `wait()`.
+- `onStateChange`/`onStateValueChange` accept `{ next, error }`; new `StateDecodeError`; `IndexerQueryTimeoutError` and `ContractLoadArgsError` surface unwrapped.
+- Logging is off by default; pass `logging: true` for debug output. `Hash.stringToBytes32` rejects input over 32 bytes.
 
 ## License
 
