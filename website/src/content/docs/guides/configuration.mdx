@@ -115,7 +115,7 @@ const privateStateProvider = Midday.PrivateState.inMemoryPrivateStateProvider();
 // IndexedDB in browsers, LevelDB on disk in Node.
 const privateStateProvider = Midday.PrivateState.persistentPrivateStateProvider({
   accountId: wallet.addresses.unshielded,
-  password: () => promptForPrivateStatePassword(), // ≥ 16 characters, never derived from public data
+  password: () => promptForPrivateStatePassword(), // ≥ 16 chars, 3 of {lower, upper, digit, other}, no aaaa/abcd runs; or PrivateState.derivePassword(secret)
 });
 ```
 
@@ -211,7 +211,7 @@ const client = await Midday.Client.create({
   wallet,
   privateStateProvider: Midday.PrivateState.persistentPrivateStateProvider({
     accountId: wallet.addresses.unshielded,
-    password: () => promptForPrivateStatePassword(), // ≥ 16 chars, never public data
+    password: () => promptForPrivateStatePassword(), // see PrivateState.derivePassword; policy in the API docs
   }),
 });
 ```
@@ -227,7 +227,7 @@ const client = await Midday.Client.create({
   wallet,
   privateStateProvider: Midday.PrivateState.persistentPrivateStateProvider({
     accountId: wallet.addresses.unshielded,
-    password: () => promptForPrivateStatePassword(), // ≥ 16 chars, never public data
+    password: () => promptForPrivateStatePassword(), // see PrivateState.derivePassword; policy in the API docs
   }),
   feeRelay: { url: 'http://localhost:3002' },
 });

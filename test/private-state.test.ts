@@ -136,10 +136,31 @@ describe('persistent private state provider (level)', () => {
     expect(await other.get('contract')).toBeNull();
   });
 
-  it('rejects a weak password on first use', async () => {
+  it('rejects a weak password from a password function on first use', async () => {
     const dbName = join(await mkdtemp(join(tmpdir(), 'psp-')), 'db');
-    const p = PrivateState.persistentPrivateStateProvider({ accountId: 'acct', password: 'short', dbName });
+    const p = PrivateState.persistentPrivateStateProvider({ accountId: 'acct', password: () => 'short', dbName });
     p.setContractAddress(A);
     await expect(p.set('contract', 1)).rejects.toThrow(/shorter than/);
+  });
+});
+
+describe('private-state passwords', () => {
+  it('rejects a non-compliant string password when the provider is created', () => {
+    const hex = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
+    expect(() => PrivateState.persistentPrivateStateProvider({ accountId: 'acct', password: hex })).toThrow(/at least 3 of/);
+    expect(() => PrivateState.persistentPrivateStateProvider({ accountId: 'acct', password: 'Abcd-efgh-1234-xyz' })).toThrow(/rejected/);
+  });
+
+  it('derives a deterministic, policy-compliant password from a secret', async () => {
+    const secret = new Uint8Array(32).fill(7);
+    const pw = PrivateState.derivePassword(secret);
+    expect(PrivateState.derivePassword(secret)).toBe(pw);
+    expect(PrivateState.derivePassword(new Uint8Array(32).fill(8))).not.toBe(pw);
+    // Many random secrets: every derived password is accepted by the provider.
+    for (let i = 0; i < 300; i++) {
+      const s = crypto.getRandomValues(new Uint8Array(32));
+      expect(() => PrivateState.persistentPrivateStateProvider({ accountId: 'acct', password: PrivateState.derivePassword(s) })).not.toThrow();
+    }
+    expect(() => PrivateState.derivePassword(new Uint8Array(16))).toThrow(/at least 32 bytes/);
   });
 });
