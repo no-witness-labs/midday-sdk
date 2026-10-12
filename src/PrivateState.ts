@@ -192,10 +192,15 @@ export function inMemoryPrivateStateProvider(): PrivateStateProvider<string, unk
 }
 
 /**
- * A view of `provider` fixed to one contract. midnight-js sets the address on
- * the shared provider right before each access; with several contracts on one
- * provider those two steps can interleave. The view re-asserts its own address
- * synchronously before every access and refuses a different one.
+ * A view of `provider` fixed to one contract.
+ *
+ * midnight-js sets the address on the shared provider and then accesses it,
+ * and the persistent provider itself awaits (a rotation lock) between reading
+ * a request and the address, so with several contracts on one provider an
+ * access can land under another contract's address. Views on the same
+ * underlying provider therefore take turns: each operation re-binds its own
+ * address and runs to completion before the next one starts. The view also
+ * refuses to be switched to another address.
  *
  * @since 0.7.0
  * @category combinators
@@ -204,7 +209,11 @@ export function boundToContract(
   provider: PrivateStateProvider<string, unknown>,
   address: ContractAddress,
 ): PrivateStateProvider<string, unknown> {
-  const bind = (): void => provider.setContractAddress(address);
+  const run = <T>(op: () => Promise<T>): Promise<T> =>
+    serialized(provider, () => {
+      provider.setContractAddress(address);
+      return op();
+    });
   return {
     ...provider,
     setContractAddress(requested: ContractAddress): void {
@@ -214,13 +223,23 @@ export function boundToContract(
           message: `Private state provider is bound to contract ${address}; refusing to switch to ${requested}`,
         });
       }
-      bind();
+      provider.setContractAddress(address);
     },
-    get: (id) => { bind(); return provider.get(id); },
-    set: (id, state) => { bind(); return provider.set(id, state); },
-    remove: (id) => { bind(); return provider.remove(id); },
-    clear: () => { bind(); return provider.clear(); },
+    get: (id) => run(() => provider.get(id)),
+    set: (id, state) => run(() => provider.set(id, state)),
+    remove: (id) => run(() => provider.remove(id)),
+    clear: () => run(() => provider.clear()),
   };
+}
+
+/** One queue per underlying provider, shared by every view bound to it. */
+const queues = new WeakMap<object, Promise<unknown>>();
+
+function serialized<T>(provider: object, op: () => Promise<T>): Promise<T> {
+  const previous = queues.get(provider) ?? Promise.resolve();
+  const turn = previous.then(op, op);
+  queues.set(provider, turn.catch(() => undefined));
+  return turn;
 }
 
 // =============================================================================
