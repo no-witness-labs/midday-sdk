@@ -97,6 +97,26 @@ describe('persistent private state provider (level)', () => {
     expect(writes).toEqual([[`${A}:contract`, 'A-after']]);
   });
 
+  it('scopes export to the bound contract and refuses clear() on a view', async () => {
+    const dbName = join(await mkdtemp(join(tmpdir(), 'psp-')), 'db');
+    const shared = PrivateState.indexedDBPrivateStateProvider({ accountId: 'acct', password, dbName });
+    const a = PrivateState.boundToContract(shared, A);
+    const b = PrivateState.boundToContract(shared, B);
+    await a.set('contract', 'A');
+    await b.set('contract', 'B');
+
+    await expect(a.clear()).rejects.toThrow(/would erase every contract/);
+    expect(await b.get('contract')).toBe('B');
+
+    const backup = await a.exportPrivateStates({ password });
+    const freshDb = join(await mkdtemp(join(tmpdir(), 'psp-')), 'db');
+    const fresh = PrivateState.indexedDBPrivateStateProvider({ accountId: 'acct', password, dbName: freshDb });
+    fresh.setContractAddress(A);
+    await fresh.importPrivateStates(backup, { password });
+    expect(await PrivateState.boundToContract(fresh, A).get('contract')).toBe('A');
+    expect(await PrivateState.boundToContract(fresh, B).get('contract')).toBeNull();
+  });
+
   it('requires an account id and a password', () => {
     expect(() => PrivateState.indexedDBPrivateStateProvider({ accountId: '', password })).toThrow(/accountId/);
     expect(() => PrivateState.indexedDBPrivateStateProvider({ accountId: 'acct', password: '' })).toThrow(/password/);

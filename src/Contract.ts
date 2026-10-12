@@ -304,7 +304,10 @@ export interface DeployOptions {
  * @category model
  */
 export interface JoinOptions {
-  /** Initial private state (defaults to {}) */
+  /**
+   * Private state to store for this contract, replacing whatever is stored.
+   * Omit to keep the stored state; when nothing is stored yet, `{}` is used.
+   */
   initialPrivateState?: unknown;
   /** Timeout in milliseconds. Throws `TxTimeoutError` if joining isn't finalized in time. */
   timeout?: number;
@@ -860,7 +863,10 @@ function joinContractEffect(
   options?: JoinOptions,
 ): Effect.Effect<DeployedContractData, ContractError | TxTimeoutError> {
   const base = Effect.gen(function* () {
-    const { initialPrivateState = {} } = options ?? {};
+    // midnight-js replaces the stored private state whenever `initialPrivateState`
+    // is present in its options, so it is only passed when the caller asked for a
+    // replacement, or when nothing is stored yet (first join in this store).
+    const replacement = options && 'initialPrivateState' in options ? { initialPrivateState: options.initialPrivateState } : undefined;
     const { module, providers: sharedProviders, logging } = contractData;
     const providers = {
       ...sharedProviders,
@@ -869,6 +875,17 @@ function joinContractEffect(
 
     yield* Effect.logDebug(`Joining contract at ${address}...`);
 
+    const privateState = yield* Effect.tryPromise({
+      try: async () => {
+        if (replacement) return replacement;
+        if (!module.privateStateId) return {};
+        const stored = await providers.privateStateProvider.get(module.privateStateId);
+        return stored === null ? { initialPrivateState: {} } : {};
+      },
+      catch: (cause) =>
+        new ContractError({ cause, message: `Failed to read stored private state for ${address}: ${cause instanceof Error ? cause.message : String(cause)}` }),
+    });
+
     const deployed = yield* Effect.tryPromise({
       try: () =>
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -876,7 +893,7 @@ function joinContractEffect(
           contractAddress: address,
           compiledContract: module.compiledContract,
           privateStateId: module.privateStateId,
-          initialPrivateState,
+          ...privateState,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } as any),
       catch: (cause) =>
