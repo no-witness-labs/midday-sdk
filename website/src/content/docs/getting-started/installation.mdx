@@ -38,11 +38,20 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
 pnpm add @midnight-ntwrk/compact-runtime@0.16.0 effect
 ```
 
-Your lockfile must also resolve a single copy of `@midnight-ntwrk/onchain-runtime-v3` (3.0.0); two copies break contract state decoding with `expected instance of StateValue`. With pnpm:
+Your install must also resolve a single copy of `@midnight-ntwrk/onchain-runtime-v3`. By default it resolves two (`midnight-js-protocol` pins 3.0.0, `compact-runtime` accepts `^3.0.0` and gets 3.1.2), which breaks contract state decoding with `expected instance of StateValue`. Add the pinned version as a direct dependency (works with pnpm, npm and yarn):
 
-```json
-{ "pnpm": { "overrides": { "@midnight-ntwrk/onchain-runtime-v3": "3.0.0" } } }
+```bash
+pnpm add @midnight-ntwrk/onchain-runtime-v3@3.0.0
 ```
+
+or, with pnpm 10+, an override in `pnpm-workspace.yaml` (the `pnpm.overrides` field in `package.json` is ignored there):
+
+```yaml
+overrides:
+  "@midnight-ntwrk/onchain-runtime-v3": "3.0.0"
+```
+
+`pnpm why @midnight-ntwrk/onchain-runtime-v3` should list exactly one version.
 
 ## TypeScript Configuration
 

@@ -396,11 +396,20 @@ Midday 0.7 targets the **ledger 8** cohort, which is what Preview and Preprod ru
 
 Pinned upstream versions: `@midnight-ntwrk/midnight-js-*` 4.1.1, `compact-runtime` 0.16.0 (peer dependency), `compact-js` 2.5.1, `ledger-v8` 8.1.0, wallet SDK 4.x, Compact compiler 0.31.1. Contracts must be compiled with Compact 0.31.x.
 
-**Consumer requirement:** your lockfile must resolve a single copy of `@midnight-ntwrk/onchain-runtime-v3` (3.0.0). Two copies break contract state decoding with `expected instance of StateValue`. With pnpm, add to your `package.json`:
+**Consumer requirement:** your install must resolve a single copy of `@midnight-ntwrk/onchain-runtime-v3`. Out of the box it does not: `midnight-js-protocol` pins 3.0.0 while `compact-runtime` accepts `^3.0.0` and gets 3.1.2, and two copies break contract state decoding with `expected instance of StateValue`. The simplest fix, which works with pnpm, npm and yarn, is a direct dependency on the pinned version:
 
-```json
-{ "pnpm": { "overrides": { "@midnight-ntwrk/onchain-runtime-v3": "3.0.0" } } }
+```bash
+pnpm add @midnight-ntwrk/onchain-runtime-v3@3.0.0
 ```
+
+Alternatively use an override. With pnpm 10 and later it belongs in `pnpm-workspace.yaml` (`overrides:` in `package.json` under `pnpm` is ignored there):
+
+```yaml
+overrides:
+  "@midnight-ntwrk/onchain-runtime-v3": "3.0.0"
+```
+
+Check with `pnpm why @midnight-ntwrk/onchain-runtime-v3`: exactly one version should appear.
 
 ## Upgrading to 0.7
 
