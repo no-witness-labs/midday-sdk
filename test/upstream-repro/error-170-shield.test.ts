@@ -42,7 +42,7 @@ describe.skipIf(!SEED)('upstream-repro: shield → Error 170 InvalidDustSpendPro
     // observable (this is what the #361 reporter saw too).
     const balanceBefore = await wallet.getBalance();
     const nativeToken = ledger.nativeToken().raw;
-    console.log('[repro] address:', wallet.address);
+    console.log('[repro] address:', wallet.addresses.unshielded);
     console.log('[repro] unshielded NIGHT:', balanceBefore.unshielded[nativeToken] ?? 0n);
     console.log('[repro] shielded   NIGHT:', balanceBefore.shielded[nativeToken] ?? 0n);
     console.log('[repro] DUST balance:', balanceBefore.dust.balance);

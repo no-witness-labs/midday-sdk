@@ -56,6 +56,9 @@ describe('Wallet persistence E2E', () => {
 
   it('syncs a fresh wallet and serializes its state', { timeout: 300_000 }, async () => {
     const wallet = await timed('freshSync', () => Midday.Wallet.fromSeed(GENESIS_SEED, cluster.networkConfig));
+    // Both receiving addresses are exposed, each in its own bech32m form.
+    expect(wallet.addresses.shielded).toMatch(/^mn_shield-addr_/);
+    expect(wallet.addresses.unshielded).toMatch(/^mn_addr_/);
     try {
       snapshotBalance = await wallet.getBalance();
       expect(Object.keys(snapshotBalance.unshielded).length).toBeGreaterThan(0);
