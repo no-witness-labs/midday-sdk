@@ -32,6 +32,8 @@ import {
 } from '@midnight-ntwrk/midnight-js-contracts';
 import { CompiledContract } from '@midnight-ntwrk/compact-js';
 import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
+import { CostModel } from '@midnight-ntwrk/ledger-v8';
+import type * as Wallet from './Wallet.js';
 import type {
   WalletProvider,
   MidnightProvider,
@@ -701,6 +703,29 @@ export function toReceipt(data: UpstreamFinalizedTxData): FinalizedReceipt {
   };
 }
 
+/**
+ * Transaction-level proving on top of a wallet's circuit-level proving
+ * provider, the same adapter midnight-js builds over an HTTP proof server.
+ *
+ * @internal
+ */
+export function walletProofProvider(
+  walletProving: (keys: Wallet.KeyMaterialProvider) => Promise<Wallet.ProvingProvider>,
+  zkConfig: ZKConfigProvider<string>,
+): ProofProvider {
+  let provider: Promise<Wallet.ProvingProvider> | undefined;
+  return {
+    async proveTx(unprovenTx) {
+      // Asked for once per contract; a failed request is retried on the next call.
+      provider ??= walletProving(zkConfig).catch((error: unknown) => {
+        provider = undefined;
+        throw error;
+      });
+      return unprovenTx.prove(await provider, CostModel.initialCostModel());
+    },
+  };
+}
+
 interface DeployedContractInstance {
   callTx: Record<string, (...args: unknown[]) => Promise<{ public: UpstreamFinalizedTxData }>>;
 }
@@ -723,6 +748,7 @@ export function loadContractModuleEffect(
     publicDataProvider: ReturnType<typeof indexerPublicDataProvider>;
     privateStateProvider: PrivateStateProvider;
     networkConfig: { proofServer: string };
+    walletProving?: (keys: Wallet.KeyMaterialProvider) => Promise<Wallet.ProvingProvider>;
   },
   logging: boolean,
 ): Effect.Effect<LoadedContractData, ContractError | ContractLoadArgsError> {
@@ -769,10 +795,9 @@ export function loadContractModuleEffect(
         compiledContract: compiledContractWithWitnesses,
       };
 
-      const proofProvider = httpClientProofProvider(
-        networkConfig.proofServer,
-        zkConfig,
-      );
+      const proofProvider = baseProviders.walletProving
+        ? walletProofProvider(baseProviders.walletProving, zkConfig)
+        : httpClientProofProvider(networkConfig.proofServer, zkConfig);
 
       const providers: ContractProviders = {
         walletProvider: baseProviders.walletProvider,

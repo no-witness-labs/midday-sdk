@@ -659,6 +659,11 @@ export interface ConnectedWallet {
   readonly networkId: string;
   /** Full endpoints when known (seed wallets); browser wallets expose only `networkId`. */
   readonly networkConfig?: NetworkConfig;
+  /**
+   * Proves circuits in the wallet (DApp connector `getProvingProvider`), so the
+   * DApp needs no proof server. Present on browser wallets.
+   */
+  readonly provingProvider?: (keys: KeyMaterialProvider) => Promise<ProvingProvider>;
   /** The wallet's receiving addresses, one per pool. Pick explicitly: shielded for private transfers, unshielded for NIGHT/DUST. */
   readonly addresses: WalletAddresses;
   /** ZK coin public key (for receiving shielded transfers) */
@@ -1813,6 +1818,9 @@ function createConnectedWalletHandle(
     source: backend.type === 'seed' ? 'seed' : 'browser',
     networkId: network.networkId,
     ...(network.networkConfig ? { networkConfig: network.networkConfig } : {}),
+    ...(backend.type === 'browser'
+      ? { provingProvider: (keyMaterial: KeyMaterialProvider) => getWalletProvingProvider(backend.connection.wallet, keyMaterial) }
+      : {}),
     addresses,
     coinPublicKey: keys.coinPublicKey,
     encryptionPublicKey: keys.encryptionPublicKey,

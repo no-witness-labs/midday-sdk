@@ -132,7 +132,9 @@ import * as Midday from '@no-witness-labs/midday-sdk';
 // Connect to Lace wallet
 const wallet = await Midday.Wallet.fromBrowser('preview');
 
-// Create client with connected wallet; the client uses the wallet's network
+// Create client with connected wallet; the client uses the wallet's network.
+// Contract calls are proved by the wallet (connector getProvingProvider), so the
+// DApp needs no proof server; pass proving: 'proof-server' to use one instead.
 const client = await Midday.Client.create({
   wallet,
   privateStateProvider: Midday.PrivateState.persistentPrivateStateProvider({
