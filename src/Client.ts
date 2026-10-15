@@ -98,6 +98,11 @@ export interface BaseProviders {
   privateStateProvider: PrivateStateProvider;
   /** Network configuration for creating per-contract proof providers */
   networkConfig: Config.NetworkConfig;
+  /**
+   * Proves through the connected wallet instead of `networkConfig.proofServer`.
+   * Set by `fromWallet` unless it is told to use the proof server.
+   */
+  walletProving?: (keys: Wallet.KeyMaterialProvider) => Promise<Wallet.ProvingProvider>;
 }
 
 /**
@@ -164,6 +169,12 @@ export interface ClientConfig {
   txTtlMs?: number;
   /** Seed-wallet balancing policy, for example `['unshielded', 'dust']`. */
   balance?: Wallet.BalanceOptions;
+  /**
+   * Who proves contract calls. Default: the wallet when it can (browser
+   * wallets, through the connector's `getProvingProvider`), otherwise the
+   * network's proof server. `'proof-server'` forces the proof server.
+   */
+  proving?: 'wallet' | 'proof-server';
 }
 
 /**
@@ -203,6 +214,12 @@ export interface FromWalletConfig {
    * The wallet balances with `{ payFees: false }`, the relay adds dust only.
    */
   feeRelay?: { url: string };
+  /**
+   * Who proves contract calls (default `'wallet'`): the wallet through the
+   * connector's `getProvingProvider`, so the DApp needs no proof server of its
+   * own, or the HTTP proof server at the wallet's (deprecated) `proverServerUri`.
+   */
+  proving?: 'wallet' | 'proof-server';
 }
 
 // =============================================================================
@@ -508,6 +525,7 @@ function createEffect(config: ClientConfig): Effect.Effect<MiddayClient, ClientE
       feeRelay,
       txTtlMs,
       balance,
+      proving,
     } = config;
 
     const asClientError = (e: unknown): ClientError =>
@@ -520,9 +538,20 @@ function createEffect(config: ClientConfig): Effect.Effect<MiddayClient, ClientE
         try: () => networkForWallet(connectedWallet, network, customNetworkConfig),
         catch: asClientError,
       });
+      if (proving === 'wallet' && !connectedWallet.provingProvider) {
+        return yield* Effect.fail(
+          new ClientError({
+            cause: new Error('Wallet cannot prove'),
+            message: "proving: 'wallet' needs a browser wallet; a seed wallet proves through the network's proof server.",
+          }),
+        );
+      }
       const providers = yield* createConnectedWalletProviders(
         connectedWallet, networkConfig, privateStateProvider, { txTtlMs, feeRelay, ...balance },
       );
+      if (proving !== 'proof-server' && connectedWallet.provingProvider) {
+        providers.walletProving = connectedWallet.provingProvider;
+      }
       return buildClient({
         networkConfig,
         providers,
@@ -592,8 +621,16 @@ function fromWalletEffect(
   config: FromWalletConfig,
 ): Effect.Effect<MiddayClient, ClientError> {
   return Effect.gen(function* () {
-    const { privateStateProvider, logging = false, feeRelay } = config;
+    const { privateStateProvider, logging = false, feeRelay, proving = 'wallet' } = config;
     const networkConfig = connectionNetworkConfig(connection);
+    if (proving === 'proof-server' && !networkConfig.proofServer) {
+      return yield* Effect.fail(
+        new ClientError({
+          cause: new Error('No proof server'),
+          message: "proving: 'proof-server' needs a wallet that reports proverServerUri; use proving: 'wallet'.",
+        }),
+      );
+    }
 
     let { walletProvider, midnightProvider } = Wallet.createWalletProviders(connection.wallet, connection.addresses);
 
@@ -619,6 +656,9 @@ function fromWalletEffect(
       publicDataProvider,
       privateStateProvider,
       networkConfig,
+      ...(proving === 'wallet'
+        ? { walletProving: (keys: Wallet.KeyMaterialProvider) => Wallet.getWalletProvingProvider(connection.wallet, keys) }
+        : {}),
     };
 
     return buildClient({
