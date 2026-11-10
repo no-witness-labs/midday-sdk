@@ -27,8 +27,9 @@
  */
 
 import { Context, Data, Duration, Effect, Layer, Scope } from 'effect';
-import { setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
+import { createLedger9WalletProvider } from '@midnight-ntwrk/midnight-js-types';
 import type {
+  MidnightConfig,
   WalletProvider,
   MidnightProvider,
   PrivateStateProvider,
@@ -98,6 +99,13 @@ export interface BaseProviders {
   privateStateProvider: PrivateStateProvider;
   /** Network configuration for creating per-contract proof providers */
   networkConfig: Config.NetworkConfig;
+  /** Network id and transaction lifetime midnight-js builds transactions with. */
+  config: MidnightConfig;
+}
+
+/** midnight-js provider config for a network; `txTtlMs` defaults to {@link Config.DEFAULT_TX_TTL_MS}. */
+function midnightConfig(networkId: string, txTtlMs: number = Config.DEFAULT_TX_TTL_MS): MidnightConfig {
+  return { networkId, ttlSeconds: Math.ceil(txTtlMs / 1000) };
 }
 
 /**
@@ -123,10 +131,6 @@ export interface CreateBaseProvidersOptions {
 
 /**
  * Configuration for creating a client.
- *
- * **Constraint:** Only one network ID is supported per process. The Midnight SDK
- * uses a global `setNetworkId` call internally, so creating two clients targeting
- * different networks in the same process will cause undefined behaviour.
  *
  * @since 0.2.0
  * @category model
@@ -319,8 +323,6 @@ function createBaseProvidersEffect(
     Effect.map(({ walletProvider, midnightProvider }) => {
       const { networkConfig, privateStateProvider } = options;
 
-      setNetworkId(networkConfig.networkId as 'undeployed');
-
       const publicDataProvider = Config.publicDataProvider(networkConfig);
 
       return {
@@ -329,6 +331,7 @@ function createBaseProvidersEffect(
         publicDataProvider,
         privateStateProvider,
         networkConfig,
+        config: midnightConfig(networkConfig.networkId, options.txTtlMs),
       } satisfies BaseProviders;
     }),
     Effect.mapError(
@@ -411,7 +414,6 @@ function createConnectedWalletProviders(
       ),
     );
 
-    setNetworkId(networkConfig.networkId as 'undeployed');
     const publicDataProvider = Config.publicDataProvider(networkConfig);
 
     return {
@@ -420,6 +422,7 @@ function createConnectedWalletProviders(
       publicDataProvider,
       privateStateProvider,
       networkConfig,
+      config: midnightConfig(networkConfig.networkId, options?.txTtlMs),
     };
   });
 }
@@ -600,15 +603,16 @@ function fromWalletEffect(
     if (feeRelay) {
       yield* Effect.logDebug(`Using fee relay server at ${feeRelay.url}`);
       // User's wallet balances value with { payFees: false }
-      walletProvider = {
-        ...walletProvider,
+      const base = walletProvider;
+      walletProvider = createLedger9WalletProvider({
+        getCoinPublicKey: () => base.getCoinPublicKey(),
+        getEncryptionPublicKey: () => base.getEncryptionPublicKey(),
         balanceTx: (tx) => Wallet.balanceWithoutFees(connection.wallet, tx),
-      };
+      });
       // Relay adds dust and submits
       midnightProvider = FeeRelay.createRelayProvider(feeRelay.url);
     }
 
-    setNetworkId(networkConfig.networkId as 'undeployed');
     const publicDataProvider = Config.publicDataProvider(networkConfig);
 
     yield* Effect.logDebug('Connected to wallet');
@@ -619,6 +623,7 @@ function fromWalletEffect(
       publicDataProvider,
       privateStateProvider,
       networkConfig,
+      config: midnightConfig(networkConfig.networkId),
     };
 
     return buildClient({

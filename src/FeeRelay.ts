@@ -10,7 +10,7 @@
  * @module
  */
 
-import type { MidnightProvider } from '@midnight-ntwrk/midnight-js-types';
+import { createLedger9MidnightProvider, type MidnightProvider } from '@midnight-ntwrk/midnight-js-types';
 
 import { bytesToHex } from './Utils.js';
 
@@ -32,8 +32,7 @@ import { bytesToHex } from './Utils.js';
 export function createRelayProvider(relayUrl: string): MidnightProvider {
   const url = relayUrl.replace(/\/$/, '');
 
-  return {
-    submitTx: async (tx) => {
+  return createLedger9MidnightProvider(async (tx) => {
       // Add dust (fees) via relay
       const txHex = bytesToHex(tx.serialize());
       const balanceResponse = await fetch(`${url}/balance-finalized-tx`, {
@@ -64,6 +63,5 @@ export function createRelayProvider(relayUrl: string): MidnightProvider {
 
       const { txId } = await submitResponse.json();
       return txId;
-    },
-  };
+  });
 }

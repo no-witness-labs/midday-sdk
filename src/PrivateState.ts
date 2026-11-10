@@ -2,10 +2,9 @@
  * Private state providers for contract private state and signing keys.
  *
  * Both providers implement midnight-js's `PrivateStateProvider` and scope
- * state by contract: midnight-js calls `setContractAddress(address)` before
- * every deploy, call and join, and state is stored under
- * `${contractAddress}:${privateStateId}`, so two contracts that share a
- * provider cannot read or overwrite each other's state.
+ * state by contract: private states are reached through
+ * `forContract(address)`, so two contracts that share a provider cannot read
+ * or overwrite each other's state.
  *
  * - {@link persistentPrivateStateProvider}: persistent and encrypted
  *   (midnight-js `levelPrivateStateProvider`: AES-GCM under a PBKDF2-derived
@@ -28,11 +27,8 @@
 
 import { Context, Data } from 'effect';
 import type {
+  ContractPrivateStates,
   PrivateStateProvider,
-  PrivateStateExport,
-  ExportPrivateStatesOptions,
-  ImportPrivateStatesOptions,
-  ImportPrivateStatesResult,
   SigningKeyExport,
   ExportSigningKeysOptions,
   ImportSigningKeysOptions,
@@ -64,9 +60,8 @@ export class PrivateStateError extends Data.TaggedError('PrivateStateError')<{
 // Types
 // =============================================================================
 
-// String aliases so this module does not import compact-runtime.
 type ContractAddress = string;
-type SigningKey = string;
+type SigningKey = Parameters<PrivateStateProvider['setSigningKey']>[1];
 
 /**
  * Configuration for {@link persistentPrivateStateProvider}.
@@ -97,8 +92,6 @@ export interface PersistentPrivateStateConfig {
   /** Database name: the IndexedDB database in browsers, a directory in Node (default: `midnight-level-db`). */
   dbName?: string;
 }
-
-const NO_ADDRESS = 'Contract address not set. Call setContractAddress() before accessing private state.';
 
 const unsupported = (what: string) => async (): Promise<never> => {
   throw new PrivateStateError({ cause: undefined, message: `${what} is not supported by the in-memory private state provider` });
@@ -199,125 +192,57 @@ export function derivePassword(secret: Uint8Array): string {
  * @category constructors
  */
 export function inMemoryPrivateStateProvider(): PrivateStateProvider<string, unknown> {
-  const states = new Map<string, unknown>();
+  // Keyed by lower-case address, as midnight-js compares addresses.
+  const states = new Map<ContractAddress, Map<string, unknown>>();
   const signingKeys = new Map<ContractAddress, SigningKey>();
-  let contractAddress: ContractAddress | null = null;
 
-  // Composed synchronously at the start of each call, so a concurrent
-  // setContractAddress on a shared provider cannot redirect an access in flight.
-  const scopedKey = (privateStateId: string): string => {
-    if (contractAddress === null) throw new PrivateStateError({ cause: undefined, message: NO_ADDRESS });
-    return `${contractAddress}:${privateStateId}`;
+  const forContract = (contractAddress: ContractAddress): ContractPrivateStates<string, unknown> => {
+    const key = contractAddress.toLowerCase();
+    const scoped = () => {
+      let map = states.get(key);
+      if (!map) states.set(key, (map = new Map()));
+      return map;
+    };
+    return {
+      contractAddress,
+      get: async (privateStateId) => scoped().get(privateStateId) ?? null,
+      set: async (privateStateId, state) => {
+        scoped().set(privateStateId, state);
+      },
+      remove: async (privateStateId) => {
+        scoped().delete(privateStateId);
+      },
+      clear: async () => {
+        states.delete(key);
+      },
+      exportPrivateStates: unsupported('exportPrivateStates') as ContractPrivateStates['exportPrivateStates'],
+      importPrivateStates: unsupported('importPrivateStates') as ContractPrivateStates['importPrivateStates'],
+    };
   };
 
   return {
-    setContractAddress(address: ContractAddress): void {
-      contractAddress = address;
-    },
-    async get(privateStateId: string): Promise<unknown | null> {
-      return states.get(scopedKey(privateStateId)) ?? null;
-    },
-    async set(privateStateId: string, state: unknown): Promise<void> {
-      states.set(scopedKey(privateStateId), state);
-    },
-    async remove(privateStateId: string): Promise<void> {
-      states.delete(scopedKey(privateStateId));
-    },
-    async clear(): Promise<void> {
-      if (contractAddress === null) throw new PrivateStateError({ cause: undefined, message: NO_ADDRESS });
+    forContract,
+    async clearAll(): Promise<void> {
       states.clear();
     },
     async setSigningKey(address: ContractAddress, signingKey: SigningKey): Promise<void> {
-      signingKeys.set(address, signingKey);
+      signingKeys.set(address.toLowerCase(), signingKey);
     },
     async getSigningKey(address: ContractAddress): Promise<SigningKey | null> {
-      return signingKeys.get(address) ?? null;
+      return signingKeys.get(address.toLowerCase()) ?? null;
     },
     async removeSigningKey(address: ContractAddress): Promise<void> {
-      signingKeys.delete(address);
+      signingKeys.delete(address.toLowerCase());
     },
     async clearSigningKeys(): Promise<void> {
       signingKeys.clear();
     },
-    exportPrivateStates: unsupported('exportPrivateStates') as (o?: ExportPrivateStatesOptions) => Promise<PrivateStateExport>,
-    importPrivateStates: unsupported('importPrivateStates') as (
-      e: PrivateStateExport,
-      o?: ImportPrivateStatesOptions,
-    ) => Promise<ImportPrivateStatesResult>,
     exportSigningKeys: unsupported('exportSigningKeys') as (o?: ExportSigningKeysOptions) => Promise<SigningKeyExport>,
     importSigningKeys: unsupported('importSigningKeys') as (
       e: SigningKeyExport,
       o?: ImportSigningKeysOptions,
     ) => Promise<ImportSigningKeysResult>,
   };
-}
-
-/**
- * A view of `provider` fixed to one contract.
- *
- * midnight-js sets the address on the shared provider and then accesses it,
- * and the persistent provider itself awaits (a rotation lock) between reading
- * a request and the address, so with several contracts on one provider an
- * access can land under another contract's address. Views on the same
- * underlying provider therefore take turns: each operation re-binds its own
- * address and runs to completion before the next one starts. Nothing outside
- * the queue touches the shared address: the view's own `setContractAddress`
- * only checks the requested address, since midnight-js calls it right before
- * an access and a real switch there could land under another contract.
- *
- * @since 0.7.0
- * @category combinators
- */
-export function boundToContract(
-  provider: PrivateStateProvider<string, unknown>,
-  address: ContractAddress,
-): PrivateStateProvider<string, unknown> {
-  const run = <T>(op: () => Promise<T>): Promise<T> =>
-    serialized(provider, () => {
-      provider.setContractAddress(address);
-      return op();
-    });
-  // Every method is spelled out: spreading the provider would expose operations
-  // that read the shared address outside the queue. Compound operations call the
-  // provider's own implementation with the provider as receiver, inside one turn,
-  // so their internal reads and writes never re-enter this queue.
-  return {
-    setContractAddress(requested: ContractAddress): void {
-      if (requested !== address) {
-        throw new PrivateStateError({
-          cause: undefined,
-          message: `Private state provider is bound to contract ${address}; refusing to switch to ${requested}`,
-        });
-      }
-    },
-    get: (id) => run(() => provider.get(id)),
-    set: (id, state) => run(() => provider.set(id, state)),
-    remove: (id) => run(() => provider.remove(id)),
-    clear: async () => {
-      throw new PrivateStateError({
-        cause: undefined,
-        message: `clear() on a view bound to ${address} would erase every contract's private state in this store; call clear() on the shared provider if that is intended, or remove() this contract's entries`,
-      });
-    },
-    setSigningKey: (a, key) => provider.setSigningKey(a, key),
-    getSigningKey: (a) => provider.getSigningKey(a),
-    removeSigningKey: (a) => provider.removeSigningKey(a),
-    clearSigningKeys: () => provider.clearSigningKeys(),
-    exportPrivateStates: (o) => run(() => provider.exportPrivateStates(o)),
-    importPrivateStates: (e, o) => run(() => provider.importPrivateStates(e, o)),
-    exportSigningKeys: (o) => provider.exportSigningKeys(o),
-    importSigningKeys: (e, o) => provider.importSigningKeys(e, o),
-  };
-}
-
-/** One queue per underlying provider, shared by every view bound to it. */
-const queues = new WeakMap<object, Promise<unknown>>();
-
-function serialized<T>(provider: object, op: () => Promise<T>): Promise<T> {
-  const previous = queues.get(provider) ?? Promise.resolve();
-  const turn = previous.then(op, op);
-  queues.set(provider, turn.catch(() => undefined));
-  return turn;
 }
 
 // =============================================================================

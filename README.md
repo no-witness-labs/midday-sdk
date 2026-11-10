@@ -396,32 +396,38 @@ import type {
 
 ## Supported Networks and Versions
 
-Midday 0.7 targets the **ledger 8** cohort, which is what Preview and Preprod run today:
+Midday 0.8 targets **ledger 9**. Preview, Preprod and mainnet run it since their hard forks (mainnet on 6 November 2026, Preprod on 9 November 2026):
 
 | Network | How to configure | Status |
 |---------|------------------|--------|
-| Local devnet | `NETWORKS.local` / `Cluster.make()` (node 1.0.400, indexer 4.3.7, proof server 8.1.3) | Supported, tested in CI |
+| Local devnet | `NETWORKS.local` / `Cluster.make()` (node 2.1.101, indexer 4.4.101, proof server 9.0.1) | Supported, tested in CI |
 | Preview | `NETWORKS.preview` | Supported |
 | Preprod | `Config.blockfrost('preprod', projectId)` | Supported |
 | Mainnet | `Config.blockfrost('mainnet', projectId)` | Configurable; not tested |
-| Public devnet (ledger 9) | — | Not supported by 0.7; ledger-9 support is planned for 0.8 |
 
-Pinned upstream versions: `@midnight-ntwrk/midnight-js-*` 4.1.1, `compact-runtime` 0.16.0 (peer dependency), `compact-js` 2.5.1, `ledger-v8` 8.1.0, wallet SDK 4.x, Compact compiler 0.31.1. Contracts must be compiled with Compact 0.31.x.
+Pinned upstream versions: `@midnight-ntwrk/midnight-js-*` 5.0.0, `compact-runtime` 0.21.0 (peer dependency), `@midnightntwrk/ledger-v9` 1.0.0, wallet SDK 2.0.0 (`@midnightntwrk/wallet-sdk-facade` 5.0.0), Compact compiler 0.36.0. Contracts must be compiled with Compact 0.36.0. Proving needs proof server 9.0.0 or later.
 
-**Consumer requirement:** your install must resolve a single copy of `@midnight-ntwrk/onchain-runtime-v3`. Out of the box it does not: `midnight-js-protocol` pins 3.0.0 while `compact-runtime` accepts `^3.0.0` and gets 3.1.2, and two copies break contract state decoding with `expected instance of StateValue`. The simplest fix, which works with pnpm, npm and yarn, is a direct dependency on the pinned version:
-
-```bash
-pnpm add @midnight-ntwrk/onchain-runtime-v3@3.0.0
-```
-
-Alternatively use an override. With pnpm 10 and later it belongs in `pnpm-workspace.yaml` (`overrides:` in `package.json` under `pnpm` is ignored there):
+**Consumer requirement:** your install must resolve a single copy of each protocol package. `midnight-js-protocol` pins `@midnightntwrk/ledger-v9` 1.0.0 and `@midnightntwrk/onchain-runtime-v4` 4.0.0, while `compact-runtime` and the wallet SDK accept caret ranges that resolve newer releases, and two copies break contract state decoding with `expected instance of StateValue`. Pin them with overrides (with pnpm 10 and later they belong in `pnpm-workspace.yaml`):
 
 ```yaml
 overrides:
-  "@midnight-ntwrk/onchain-runtime-v3": "3.0.0"
+  "@midnightntwrk/ledger-v9": "1.0.0"
+  "@midnightntwrk/onchain-runtime-v4": "4.0.0"
+  "@midnight-ntwrk/platform-js": "3.0.0"
 ```
 
-Check with `pnpm why @midnight-ntwrk/onchain-runtime-v3`: exactly one version should appear.
+Check with `pnpm why @midnightntwrk/onchain-runtime-v4`: exactly one version should appear.
+
+## Upgrading to 0.8
+
+- Recompile contracts with Compact 0.36.0 and depend on `@midnight-ntwrk/compact-runtime` 0.21.0. Contracts deployed before a network's ledger 9 fork keep the verifier keys of their old build and are not served by 0.8; deploy them again.
+- Serve the `compiler/` directory compactc writes next to `keys/` and `zkir/`. `HttpZkConfigProvider` reads the runtime version from `{baseUrl}/compiler/contract-info.json`.
+- Run proof server 9.0.0 or later and indexer 4.4.0-rc.6 or later.
+- `Contract.create` requires `networkId` (and takes `txTtlMs`): midnight-js no longer reads a global network id.
+- Private state is reached per contract through `provider.forContract(address)`; `setContractAddress` is gone and `PrivateState.boundToContract` is removed. `clearAll()` clears every contract.
+- Signing keys are `{ tag: 'schnorr', value }` objects.
+- Wallet providers serve ledger 9 transaction handles (`supportedEras: ['v9']`). Code that calls `walletProvider.balanceTx` or `midnightProvider.submitTx` itself passes `LedgerTransaction` handles from `@midnight-ntwrk/midnight-js-types`. `Wallet.balanceAndFinalize` returns the finalized transaction's bytes.
+- Wallet snapshots are written by wallet SDK 2.0 and cannot be read by 0.7. A 0.7 snapshot is handed to wallet SDK 2.0, which upgrades 1.x states; if it is refused (`WalletSnapshotError`, `'restore-failed'`), sync from the seed without `restoreState`.
 
 ## Upgrading to 0.7
 

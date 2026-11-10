@@ -1,6 +1,7 @@
 import { Effect } from 'effect';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Wallet from '../src/Wallet.js';
+import { unboundHandle } from './helpers/ledger.js';
 
 /**
  * Seed-wallet `balanceTx` with a fake wallet whose sync wait takes a long time.
@@ -16,7 +17,8 @@ function fakeContext(recorded: { ttl?: Date }) {
     waitForSyncedState: async () => {
       vi.setSystemTime(T0 + SYNC_MS);
     },
-    balanceUnboundTransaction: async (_tx: unknown, _keys: unknown, opts: { ttl: Date }) => {
+    adoptTransaction: (bytes: Uint8Array) => bytes,
+    balanceUnboundTransaction: async (_tx: unknown, opts: { ttl: Date }) => {
       recorded.ttl = opts.ttl;
       throw sentinel;
     },
@@ -35,7 +37,7 @@ describe('seed wallet balanceTx TTL', () => {
     const recorded: { ttl?: Date } = {};
     const { walletProvider } = await Effect.runPromise(Wallet.effect.providers(fakeContext(recorded)));
 
-    await expect(walletProvider.balanceTx({} as never)).rejects.toBe(sentinel);
+    await expect(walletProvider.balanceTx(await unboundHandle())).rejects.toBe(sentinel);
     // Old behaviour: T0 + 30 min, already 10 minutes in the past once the sync finished.
     expect(recorded.ttl!.getTime()).toBe(T0 + SYNC_MS + 30 * 60_000);
   });
@@ -45,7 +47,7 @@ describe('seed wallet balanceTx TTL', () => {
     const { walletProvider } = await Effect.runPromise(
       Wallet.effect.providers(fakeContext(recorded), { txTtlMs: 5 * 60_000 }),
     );
-    await expect(walletProvider.balanceTx({} as never)).rejects.toBe(sentinel);
+    await expect(walletProvider.balanceTx(await unboundHandle())).rejects.toBe(sentinel);
     expect(recorded.ttl!.getTime()).toBe(T0 + SYNC_MS + 5 * 60_000);
   });
 
@@ -53,7 +55,7 @@ describe('seed wallet balanceTx TTL', () => {
     const recorded: { ttl?: Date } = {};
     const { walletProvider } = await Effect.runPromise(Wallet.effect.providers(fakeContext(recorded)));
 
-    await expect(walletProvider.balanceTx({} as never, new Date(T0 + 60_000))).rejects.toThrow(
+    await expect(walletProvider.balanceTx(await unboundHandle(), new Date(T0 + 60_000))).rejects.toThrow(
       /TTL .* expired while waiting for the wallet to sync/,
     );
     expect(recorded.ttl).toBeUndefined();

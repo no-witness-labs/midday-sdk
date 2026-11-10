@@ -361,6 +361,18 @@ export const effect = {
 // HttpZkConfigProvider Class (midnight-js compatibility)
 // =============================================================================
 
+async function getRuntimeVersion(data: HttpZkConfigProviderData): Promise<string> {
+  const bytes = await runEffectPromise(fetchBytesEffect(data, `${data.baseUrl}/compiler/contract-info.json`));
+  const version = (JSON.parse(new TextDecoder().decode(bytes)) as { 'runtime-version'?: unknown })['runtime-version'];
+  if (typeof version !== 'string') {
+    throw new ZkConfigError({
+      cause: null,
+      message: `${data.baseUrl}/compiler/contract-info.json has no runtime-version`,
+    });
+  }
+  return version;
+}
+
 /**
  * HTTP-based ZK configuration provider class.
  *
@@ -397,6 +409,21 @@ export class HttpZkConfigProvider<K extends string = string> extends ZKConfigPro
   async getVerifierKey(circuitId: K): Promise<VerifierKey> {
     return getVerifierKey(this.data, circuitId);
   }
+
+  /**
+   * The compact runtime version the artifacts were compiled for, read from
+   * `{baseUrl}/compiler/contract-info.json`. midnight-js places the contract
+   * on a ledger era by it.
+   */
+  override async getArtifactRuntimeVersion(): Promise<string> {
+    this.runtimeVersion ??= getRuntimeVersion(this.data).catch((cause: unknown) => {
+      this.runtimeVersion = undefined;
+      throw cause;
+    });
+    return this.runtimeVersion;
+  }
+
+  private runtimeVersion: Promise<string> | undefined;
 
   clearCache(circuitId?: K): void {
     clearCache(this.data, circuitId);

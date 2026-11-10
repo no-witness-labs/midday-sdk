@@ -30,22 +30,24 @@ import {
   submitTxAsync,
   createCircuitCallTxInterface,
 } from '@midnight-ntwrk/midnight-js-contracts';
-import { CompiledContract } from '@midnight-ntwrk/compact-js';
+import { CompiledContract } from '@midnight-ntwrk/midnight-js-protocol/v9/compact-js';
+import { ContractState } from '@midnight-ntwrk/compact-runtime';
 import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
 import type {
   WalletProvider,
+  MidnightConfig,
   MidnightProvider,
   ZKConfigProvider,
   PrivateStateProvider,
   ProofProvider,
+  SerializedContractState,
 } from '@midnight-ntwrk/midnight-js-types';
 import type { ContractStateObservableConfig } from '@midnight-ntwrk/midnight-js-types';
 import { SucceedEntirely } from '@midnight-ntwrk/midnight-js-types';
 import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
 
 import { runEffectWithLogging } from './Runtime.js';
-import * as PrivateState from './PrivateState.js';
-import { IndexerQueryTimeoutError } from './Config.js';
+import { DEFAULT_TX_TTL_MS, IndexerQueryTimeoutError } from './Config.js';
 
 // =============================================================================
 // Errors
@@ -427,6 +429,7 @@ export interface ContractProviders {
   privateStateProvider: PrivateStateProvider;
   zkConfigProvider: ZKConfigProvider<string>;
   proofProvider: ProofProvider;
+  config: MidnightConfig;
 }
 
 // =============================================================================
@@ -723,6 +726,7 @@ export function loadContractModuleEffect(
     publicDataProvider: ReturnType<typeof indexerPublicDataProvider>;
     privateStateProvider: PrivateStateProvider;
     networkConfig: { proofServer: string };
+    config: MidnightConfig;
   },
   logging: boolean,
 ): Effect.Effect<LoadedContractData, ContractError | ContractLoadArgsError> {
@@ -781,6 +785,7 @@ export function loadContractModuleEffect(
         privateStateProvider: baseProviders.privateStateProvider,
         zkConfigProvider: zkConfig,
         proofProvider,
+        config: baseProviders.config,
       };
 
       return {
@@ -884,8 +889,6 @@ function submitDeployEffect(
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const address = (unprovenDeployTxData as any).public.contractAddress as string;
-    const boundPrivateState = PrivateState.boundToContract(providers.privateStateProvider, address);
-    const boundProviders = { ...providers, privateStateProvider: boundPrivateState };
     yield* Effect.logDebug(`Contract address: ${address}`);
 
     // Step 2: Prove, balance, and submit (non-blocking — no watchForTxData)
@@ -909,14 +912,14 @@ function submitDeployEffect(
     // yet known.
     yield* Effect.tryPromise({
       try: async () => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        boundPrivateState.setContractAddress(address as any);
         if (module.privateStateId) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          await boundPrivateState.set(module.privateStateId, (unprovenDeployTxData as any).private.initialPrivateState);
+          await providers.privateStateProvider
+            .forContract(address)
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            .set(module.privateStateId, (unprovenDeployTxData as any).private.initialPrivateState);
         }
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await boundPrivateState.setSigningKey(address as any, (unprovenDeployTxData as any).private.signingKey);
+        await providers.privateStateProvider.setSigningKey(address, (unprovenDeployTxData as any).private.signingKey);
       },
       catch: (cause) =>
         new ContractError({
@@ -926,12 +929,12 @@ function submitDeployEffect(
     });
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const callTx = createCircuitCallTxInterface((logging ? instrumentProviders(boundProviders) : boundProviders) as any, module.compiledContract as any, address as any, module.privateStateId);
+    const callTx = createCircuitCallTxInterface(instrumentedProviders as any, module.compiledContract as any, address as any, module.privateStateId);
     const deployed: DeployedContractData = {
       address,
       instance: { callTx } as unknown as DeployedContractInstance,
       module,
-      providers: boundProviders,
+      providers,
       logging,
     };
 
@@ -1002,11 +1005,7 @@ function joinContractEffect(
     // is present in its options, so it is only passed when the caller asked for a
     // replacement, or when nothing is stored yet (first join in this store).
     const replacement = options && 'initialPrivateState' in options ? { initialPrivateState: options.initialPrivateState } : undefined;
-    const { module, providers: sharedProviders, logging } = contractData;
-    const providers = {
-      ...sharedProviders,
-      privateStateProvider: PrivateState.boundToContract(sharedProviders.privateStateProvider, address),
-    };
+    const { module, providers, logging } = contractData;
 
     yield* Effect.logDebug(`Joining contract at ${address}...`);
 
@@ -1014,7 +1013,7 @@ function joinContractEffect(
       try: async () => {
         if (replacement) return replacement;
         if (!module.privateStateId) return {};
-        const stored = await providers.privateStateProvider.get(module.privateStateId);
+        const stored = await providers.privateStateProvider.forContract(address).get(module.privateStateId);
         return stored === null ? { initialPrivateState: {} } : {};
       },
       catch: (cause) =>
@@ -1042,7 +1041,7 @@ function joinContractEffect(
 
     return {
       address,
-      instance: deployed as DeployedContractInstance,
+      instance: deployed as unknown as DeployedContractInstance,
       module,
       providers,
       logging,
@@ -1102,6 +1101,14 @@ function callContractEffect(
   });
 }
 
+/**
+ * Decode an on-chain state with this package's compact-runtime, the copy the
+ * contract module's `ledger()` accepts (it checks with `instanceof`).
+ */
+function decodeContractState(state: SerializedContractState): unknown {
+  return state.deserialize({ v9: ContractState }).data;
+}
+
 function contractStateEffect(
   contractData: DeployedContractData,
 ): Effect.Effect<unknown, StateReadError> {
@@ -1115,7 +1122,7 @@ function contractStateEffect(
           message: `Contract state not found at ${address}`,
         });
       }
-      return contractState.data;
+      return decodeContractState(contractState.contractState);
     },
     catch: (cause) =>
       cause instanceof ContractStateNotFoundError
@@ -1142,7 +1149,7 @@ function contractStateAtEffect(
           message: `Contract state not found at ${address} at block ${blockHeight}`,
         });
       }
-      return contractState.data;
+      return decodeContractState(contractState.contractState);
     },
     catch: (cause) =>
       cause instanceof ContractStateNotFoundError
@@ -1251,7 +1258,7 @@ function readRawStateEffect(
               : `Contract state not found at ${address}`,
         });
       }
-      return contractState.data;
+      return decodeContractState(contractState.contractState);
     },
     catch: (cause) =>
       cause instanceof ContractStateNotFoundError
@@ -1401,7 +1408,21 @@ function watchRawStateStream(
       Effect.sync(() => {
         const config = toObservableConfig(options);
         const sub = provider.contractStateObservable(address, config).subscribe({
-          next: (state) => emit.single(state.data),
+          next: (record) => {
+            let state: unknown;
+            try {
+              state = decodeContractState(record.value.contractState);
+            } catch (cause) {
+              emit.fail(
+                new ContractError({
+                  cause,
+                  message: `Failed to decode contract state: ${cause instanceof Error ? cause.message : String(cause)}`,
+                }),
+              );
+              return;
+            }
+            emit.single(state);
+          },
           error: (err) =>
             emit.fail(
               new ContractError({
@@ -1579,6 +1600,10 @@ export interface CreateContractOptions<M extends ContractModule = ContractModule
   privateStateProvider: PrivateStateProvider;
   /** Proof server URL */
   proofServerUrl: string;
+  /** Network id transactions are built for (`undeployed`, `preview`, `preprod`, ...). */
+  networkId: string;
+  /** Transaction lifetime in milliseconds (default {@link DEFAULT_TX_TTL_MS}). */
+  txTtlMs?: number;
   /** Enable debug logging (default: false) */
   logging?: boolean;
 }
@@ -1599,6 +1624,8 @@ function createContractEffect<M extends ContractModule>(
     publicDataProvider,
     privateStateProvider,
     proofServerUrl,
+    networkId,
+    txTtlMs = DEFAULT_TX_TTL_MS,
     logging = false,
     ...loadOptions
   } = options;
@@ -1609,6 +1636,7 @@ function createContractEffect<M extends ContractModule>(
     publicDataProvider,
     privateStateProvider,
     networkConfig: { proofServer: proofServerUrl },
+    config: { networkId, ttlSeconds: Math.ceil(txTtlMs / 1000) },
   };
 
   return loadContractModuleEffect(

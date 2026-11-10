@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import * as ledger from '@midnight-ntwrk/ledger-v8';
+import * as ledger from '@midnightntwrk/ledger-v9';
 import * as Midday from '../../src/index.js';
 
 // Minimal repro for midnight-wallet#361 (Error 170 = InvalidDustSpendProof).

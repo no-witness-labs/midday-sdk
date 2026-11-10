@@ -222,28 +222,31 @@ export class IndexerQueryTimeoutError extends Data.TaggedError('IndexerQueryTime
  * @category combinators
  */
 export function withQueryTimeout<P extends object>(provider: P, timeoutMs: number): P {
-  const bounded: Record<string, unknown> = { ...(provider as Record<string, unknown>) };
-  for (const [name, value] of Object.entries(provider)) {
-    if (!name.startsWith('query') || typeof value !== 'function') continue;
-    bounded[name] = (...args: unknown[]): Promise<unknown> => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const timeout = new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () =>
-            reject(
-              new IndexerQueryTimeoutError({
-                method: name,
-                timeout: timeoutMs,
-                message: `Indexer ${name} did not answer within ${timeoutMs}ms`,
-              }),
-            ),
-          timeoutMs,
-        );
-      });
-      return Promise.race([Promise.resolve(value.apply(provider, args)), timeout]).finally(() => clearTimeout(timer));
-    };
-  }
-  return bounded as P;
+  const bound = (name: string, method: (...args: unknown[]) => unknown) => (...args: unknown[]): Promise<unknown> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () =>
+          reject(
+            new IndexerQueryTimeoutError({
+              method: name,
+              timeout: timeoutMs,
+              message: `Indexer ${name} did not answer within ${timeoutMs}ms`,
+            }),
+          ),
+        timeoutMs,
+      );
+    });
+    return Promise.race([Promise.resolve(method.apply(provider, args)), timeout]).finally(() => clearTimeout(timer));
+  };
+  // A proxy, not a copy: the provider's methods may live on its prototype.
+  return new Proxy(provider, {
+    get(target, name, receiver) {
+      const value: unknown = Reflect.get(target, name, receiver);
+      if (typeof name !== 'string' || !name.startsWith('query') || typeof value !== 'function') return value;
+      return bound(name, value as (...args: unknown[]) => unknown);
+    },
+  });
 }
 
 // =============================================================================

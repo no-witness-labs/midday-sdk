@@ -4,12 +4,15 @@ import * as Contract from '../src/Contract.js';
 
 const ADDRESS = '0'.repeat(63) + 'c';
 
+/** A serialized contract state whose decoded `data` is `data`. */
+const stateOf = (data: unknown) => ({ contractState: { deserialize: () => ({ data }) } });
+
 /** A public data provider that answers state queries from a stub. */
 const providerWith = (impl: Partial<Record<string, unknown>>) => impl as unknown as Contract.PublicDataProvider;
 
 describe('state read failures keep their identity', () => {
   it('reports a parser failure as StateDecodeError with the address', async () => {
-    const provider = providerWith({ queryContractState: async () => ({ data: { not: 'ledger' } }) });
+    const provider = providerWith({ queryContractState: async () => stateOf({ not: 'ledger' }) });
     const parser = () => {
       throw new Error('unexpected shape');
     };
@@ -52,7 +55,7 @@ describe('subscriptions report failures to the observer', () => {
     const provider = providerWith({
       contractStateObservable: () => ({
         subscribe: (o: { next: (v: unknown) => void; error: (e: unknown) => void }) => {
-          setTimeout(() => o.next({ data: 'x' }), 0);
+          setTimeout(() => o.next({ value: stateOf('x'), blockHeight: 1, blockHash: 'h' }), 0);
           return { unsubscribe: () => undefined };
         },
       }),
