@@ -20,31 +20,39 @@
 
 import { Context, Data, Effect, Layer, Schema } from 'effect';
 import * as Rx from 'rxjs';
-import * as ledger from '@midnight-ntwrk/ledger-v8';
-import { Transaction, type FinalizedTransaction, type TransactionId } from '@midnight-ntwrk/ledger-v8';
+import * as ledger from '@midnightntwrk/ledger-v9';
+import { Transaction, type FinalizedTransaction, type TransactionId } from '@midnightntwrk/ledger-v9';
 import {
   WalletFacade,
   WalletEntrySchema,
+  isAwaiting,
   mergeWalletEntries,
   type WalletEntry,
-} from '@midnight-ntwrk/wallet-sdk-facade';
-import { HDWallet, Roles } from '@midnight-ntwrk/wallet-sdk-hd';
-import { ShieldedWallet } from '@midnight-ntwrk/wallet-sdk-shielded';
-import { DustWallet } from '@midnight-ntwrk/wallet-sdk-dust-wallet';
+} from '@midnightntwrk/wallet-sdk-facade';
+import { HDWallet, Roles, WalletSeeds } from '@midnightntwrk/wallet-sdk-hd';
+import { ShieldedWallet } from '@midnightntwrk/wallet-sdk-shielded';
+import { DustWallet } from '@midnightntwrk/wallet-sdk-dust-wallet';
 import {
   createKeystore,
   PublicKey as UnshieldedPublicKey,
   UnshieldedWallet,
-} from '@midnight-ntwrk/wallet-sdk-unshielded-wallet';
-import { InMemoryTransactionHistoryStorage } from '@midnight-ntwrk/wallet-sdk-abstractions';
+} from '@midnightntwrk/wallet-sdk-unshielded-wallet';
+import { InMemoryTransactionHistoryStorage } from '@midnightntwrk/wallet-sdk-abstractions';
 import {
   MidnightBech32m,
   ShieldedAddress,
   ShieldedCoinPublicKey,
   ShieldedEncryptionPublicKey,
   UnshieldedAddress,
-} from '@midnight-ntwrk/wallet-sdk-address-format';
-import type { WalletProvider, MidnightProvider, UnboundTransaction } from '@midnight-ntwrk/midnight-js-types';
+} from '@midnightntwrk/wallet-sdk-address-format';
+import {
+  createLedger9MidnightProvider,
+  createLedger9WalletProvider,
+  type FinalizedTx,
+  type MidnightProvider,
+  type UnboundTx,
+  type WalletProvider,
+} from '@midnight-ntwrk/midnight-js-types';
 
 import { DEFAULT_TX_TTL_MS, type NetworkConfig } from './Config.js';
 import { hexToBytes, bytesToHex } from './Utils.js';
@@ -189,12 +197,12 @@ export const WALLET_SNAPSHOT_VERSION = 1;
  * @category constants
  */
 export const WALLET_SNAPSHOT_PACKAGES: Readonly<Record<string, string>> = {
-  '@midnight-ntwrk/ledger-v8': '8.1.0',
-  '@midnight-ntwrk/wallet-sdk-abstractions': '2.1.0',
-  '@midnight-ntwrk/wallet-sdk-dust-wallet': '4.2.0',
-  '@midnight-ntwrk/wallet-sdk-facade': '4.1.0',
-  '@midnight-ntwrk/wallet-sdk-shielded': '3.0.2',
-  '@midnight-ntwrk/wallet-sdk-unshielded-wallet': '3.1.0',
+  '@midnightntwrk/ledger-v9': '1.0.0',
+  '@midnightntwrk/wallet-sdk-abstractions': '3.0.0',
+  '@midnightntwrk/wallet-sdk-dust-wallet': '5.0.0',
+  '@midnightntwrk/wallet-sdk-facade': '5.0.0',
+  '@midnightntwrk/wallet-sdk-shielded': '4.0.0',
+  '@midnightntwrk/wallet-sdk-unshielded-wallet': '4.0.0',
 };
 
 const SNAPSHOT_FORMAT = 'midday-wallet-snapshot';
@@ -242,12 +250,18 @@ const ShieldedComponentSchema = Schema.Struct({
 });
 const UnshieldedComponentSchema = Schema.Struct({
   networkId: Schema.String,
-  publicKey: Schema.Struct({ publicKey: Schema.String }),
+  // A ledger 9 wallet writes the key tagged; a state not yet on ledger 9 writes the bare hex.
+  publicKey: Schema.Struct({
+    publicKey: Schema.Union(Schema.String, Schema.Struct({ tag: Schema.String, value: Schema.String })),
+  }),
 });
 const DustComponentSchema = Schema.Struct({
   networkId: Schema.String,
   publicKey: Schema.Struct({ publicKey: Schema.BigInt }),
 });
+
+const unshieldedKeyHex = (key: string | { readonly value: string }): string =>
+  typeof key === 'string' ? key : key.value;
 
 const snapshotError = (reason: WalletSnapshotError['reason'], message: string, cause?: unknown) =>
   new WalletSnapshotError({ reason, message, cause });
@@ -318,7 +332,7 @@ function decodeSnapshotEffect(
       const mismatched = [
         shielded.publicKeys.coinPublicKey !== keys.coinPublicKey ? 'shielded coin key' : undefined,
         shielded.publicKeys.encryptionPublicKey !== keys.encryptionPublicKey ? 'shielded encryption key' : undefined,
-        unshielded.publicKey.publicKey !== keys.unshieldedPublicKey ? 'unshielded key' : undefined,
+        unshieldedKeyHex(unshielded.publicKey.publicKey) !== keys.unshieldedPublicKey ? 'unshielded key' : undefined,
         dust.publicKey.publicKey !== keys.dustPublicKey ? 'dust key' : undefined,
       ].filter((m) => m !== undefined);
       if (mismatched.length > 0) {
@@ -340,22 +354,22 @@ function serializeStateEffect(
 ): Effect.Effect<string, WalletError | WalletSnapshotError> {
   return Effect.gen(function* () {
     const { wallet } = walletContext;
-    const pending = yield* Effect.tryPromise({
-      try: () => Rx.firstValueFrom(wallet.pendingTransactionsService.state()),
+    const awaiting = yield* Effect.tryPromise({
+      try: async () => (await Rx.firstValueFrom(wallet.state())).lifecycle.filter(isAwaiting).length,
       catch: (cause) =>
         new WalletError({
           cause,
           message: `Failed to read pending transactions: ${cause instanceof Error ? cause.message : String(cause)}`,
         }),
     });
-    // Submitted-but-unconfirmed transactions live in the facade's pending
+    // Transactions still awaiting inclusion live in the facade's lifecycle
     // service, which is not part of the snapshot. Restoring a snapshot taken
     // now could leave their coins locked if the transaction later fails.
-    if (pending.all.length > 0) {
+    if (awaiting > 0) {
       return yield* Effect.fail(
         snapshotError(
           'pending-transactions',
-          `Cannot snapshot wallet state while ${pending.all.length} submitted transaction(s) are pending; retry after they settle`,
+          `Cannot snapshot wallet state while ${awaiting} submitted transaction(s) are pending; retry after they settle`,
         ),
       );
     }
@@ -825,16 +839,13 @@ export interface InitOptions {
  */
 export async function balanceAndFinalize(
   walletContext: WalletContext,
-  tx: UnboundTransaction,
+  tx: UnboundTx,
   ttl: Date,
   options?: BalanceOptions,
-): Promise<ledger.FinalizedTransaction> {
+): Promise<Uint8Array> {
+  // The facade runs its own ledger copy, so the transaction crosses as bytes.
   const recipe = await walletContext.wallet.balanceUnboundTransaction(
-    tx,
-    {
-      shieldedSecretKeys: walletContext.shieldedSecretKeys,
-      dustSecretKey: walletContext.dustSecretKey,
-    },
+    walletContext.wallet.adoptTransaction(tx.serialize(), 'Unbound'),
     {
       ttl,
       ...(options?.tokenKindsToBalance === undefined
@@ -843,11 +854,14 @@ export async function balanceAndFinalize(
     },
   );
 
-  const signedRecipe = await walletContext.wallet.signRecipe(recipe, (payload: Uint8Array) =>
-    walletContext.unshieldedKeystore.signData(payload),
-  );
+  const signedRecipe = await walletContext.wallet.signRecipe(recipe, walletContext.unshieldedKeystore.signDataAsync);
 
-  return walletContext.wallet.finalizeRecipe(signedRecipe);
+  return (await walletContext.wallet.finalizeRecipe(signedRecipe)).serialize();
+}
+
+/** Submit a finalized midnight-js transaction through the seed wallet's facade. */
+function submitFinalized(walletContext: WalletContext, tx: FinalizedTx): Promise<TransactionId> {
+  return walletContext.wallet.submitTransaction(walletContext.wallet.adoptTransaction(tx.serialize(), 'Finalized'));
 }
 
 // =============================================================================
@@ -877,12 +891,10 @@ function providersEffect(
   }
   return Effect.try({
     try: () => {
-      const walletProvider: WalletProvider = {
-        getCoinPublicKey: () =>
-          walletContext.shieldedSecretKeys.coinPublicKey as unknown as ledger.CoinPublicKey,
-        getEncryptionPublicKey: () =>
-          walletContext.shieldedSecretKeys.encryptionPublicKey as unknown as ledger.EncPublicKey,
-        balanceTx: async (tx: UnboundTransaction, ttl?: Date): Promise<ledger.FinalizedTransaction> => {
+      const walletProvider = createLedger9WalletProvider({
+        getCoinPublicKey: () => walletContext.shieldedSecretKeys.coinPublicKey,
+        getEncryptionPublicKey: () => walletContext.shieldedSecretKeys.encryptionPublicKey,
+        balanceTx: async (tx, ttl) => {
           // Anchor the TTL after the sync wait: a slow sync (hours on a fresh
           // Preprod wallet) would otherwise consume it before balancing and the
           // node rejects the expired intent (error 182) after proving.
@@ -893,11 +905,9 @@ function providersEffect(
           }
           return balanceAndFinalize(walletContext, tx, txTtl, options);
         },
-      };
+      });
 
-      const midnightProvider: MidnightProvider = {
-        submitTx: async (tx: ledger.FinalizedTransaction) => walletContext.wallet.submitTransaction(tx),
-      };
+      const midnightProvider = createLedger9MidnightProvider((tx) => submitFinalized(walletContext, tx));
 
       return { walletProvider, midnightProvider };
     },
@@ -920,6 +930,41 @@ function closeEffect(walletContext: WalletContext): Effect.Effect<void, WalletEr
   });
 }
 
+/**
+ * Derive the shielded, unshielded and Dust wallet seeds from a master seed
+ * (account 0, index 0). Throws `WalletKeyDerivationError`.
+ */
+function deriveWalletSeeds(seed: string): WalletSeeds {
+  const hdWallet = HDWallet.fromSeed(hexToBytes(seed));
+  if (hdWallet.type !== 'seedOk') {
+    throw new WalletKeyDerivationError({
+      phase: 'init',
+      cause: hdWallet,
+      message: `HDWallet.fromSeed returned non-seedOk variant: ${hdWallet.type}`,
+    });
+  }
+
+  const derivationResult = hdWallet.hdWallet
+    .selectAccount(0)
+    .selectRoles([Roles.Zswap, Roles.NightExternal, Roles.Dust])
+    .deriveKeysAt(0);
+  hdWallet.hdWallet.clear();
+
+  if (derivationResult.type !== 'keysDerived') {
+    throw new WalletKeyDerivationError({
+      phase: 'derive',
+      cause: derivationResult,
+      message: `deriveKeysAt(0) returned non-keysDerived variant: ${derivationResult.type}`,
+    });
+  }
+
+  return {
+    shielded: derivationResult.keys[Roles.Zswap],
+    unshielded: derivationResult.keys[Roles.NightExternal],
+    dust: derivationResult.keys[Roles.Dust],
+  };
+}
+
 function initEffect(
   seed: string,
   networkConfig: NetworkConfig,
@@ -936,41 +981,20 @@ function initEffect(
   return Effect.gen(function* () {
     const keys = yield* Effect.try({
       try: () => {
-        const hdWallet = HDWallet.fromSeed(hexToBytes(seed));
-        if (hdWallet.type !== 'seedOk') {
-          throw new WalletKeyDerivationError({
-            phase: 'init',
-            cause: hdWallet,
-            message: `HDWallet.fromSeed returned non-seedOk variant: ${hdWallet.type}`,
-          });
-        }
-
-        const derivationResult = hdWallet.hdWallet
-          .selectAccount(0)
-          .selectRoles([Roles.Zswap, Roles.NightExternal, Roles.Dust])
-          .deriveKeysAt(0);
-
-        if (derivationResult.type !== 'keysDerived') {
-          throw new WalletKeyDerivationError({
-            phase: 'derive',
-            cause: derivationResult,
-            message: `deriveKeysAt(0) returned non-keysDerived variant: ${derivationResult.type}`,
-          });
-        }
-        hdWallet.hdWallet.clear();
-
+        const seeds = deriveWalletSeeds(seed);
         return {
-          shieldedSecretKeys: ledger.ZswapSecretKeys.fromSeed(derivationResult.keys[Roles.Zswap]),
-          dustSecretKey: ledger.DustSecretKey.fromSeed(derivationResult.keys[Roles.Dust]),
+          seeds,
+          shieldedSecretKeys: ledger.ZswapSecretKeys.fromSeed(seeds.shielded),
+          dustSecretKey: ledger.DustSecretKey.fromSeed(seeds.dust),
           unshieldedKeystore: createKeystore(
-            derivationResult.keys[Roles.NightExternal],
+            { kind: 'schnorr', secret: seeds.unshielded },
             networkConfig.networkId as 'undeployed',
           ),
         };
       },
       catch: toInitError,
     });
-    const { shieldedSecretKeys, dustSecretKey, unshieldedKeystore } = keys;
+    const { seeds, shieldedSecretKeys, dustSecretKey, unshieldedKeystore } = keys;
     const unshieldedPublicKey = UnshieldedPublicKey.fromKeyStore(unshieldedKeystore);
 
     const snapshot =
@@ -981,7 +1005,7 @@ function initEffect(
             keys: {
               coinPublicKey: String(shieldedSecretKeys.coinPublicKey),
               encryptionPublicKey: String(shieldedSecretKeys.encryptionPublicKey),
-              unshieldedPublicKey: unshieldedPublicKey.publicKey,
+              unshieldedPublicKey: unshieldedPublicKey.publicKey.value,
               dustPublicKey: dustSecretKey.publicKey,
             },
           });
@@ -993,7 +1017,7 @@ function initEffect(
         })
       : new InMemoryTransactionHistoryStorage(WalletEntrySchema, mergeWalletEntries);
 
-    const configuration = {
+    const configuration = WalletFacade.resolveConfiguration({
       networkId: networkConfig.networkId as 'undeployed',
       costParameters: {
         additionalFeeOverhead: 300_000_000_000_000_000n,
@@ -1005,30 +1029,26 @@ function initEffect(
         indexerHttpUrl: networkConfig.indexer,
         indexerWsUrl: networkConfig.indexerWS,
       },
-      indexerUrl: networkConfig.indexerWS,
       txHistoryStorage,
-    };
+    });
 
     // Components are built before the facade so a snapshot the wallet SDK
     // rejects surfaces as WalletSnapshotError, with nothing left running.
-    const components = yield* Effect.try({
-      try: () => {
+    const components = yield* Effect.tryPromise({
+      try: async () => {
         const built: Array<{ stop(): Promise<void> }> = [];
         try {
           const shielded = snapshot
             ? ShieldedWallet(configuration).restore(snapshot.shielded)
-            : ShieldedWallet(configuration).startWithSecretKeys(shieldedSecretKeys);
+            : await ShieldedWallet(configuration).startWithSeed(seeds.shielded);
           built.push(shielded);
           const unshielded = snapshot
             ? UnshieldedWallet(configuration).restore(snapshot.unshielded)
-            : UnshieldedWallet(configuration).startWithPublicKey(unshieldedPublicKey);
+            : await UnshieldedWallet(configuration).startWithPublicKey(unshieldedPublicKey);
           built.push(unshielded);
           const dust = snapshot
             ? DustWallet(configuration).restore(snapshot.dust)
-            : DustWallet(configuration).startWithSecretKey(
-                dustSecretKey,
-                ledger.LedgerParameters.initialParameters().dust,
-              );
+            : await DustWallet(configuration).startWithSeed(seeds.dust);
           return { shielded, unshielded, dust };
         } catch (cause) {
           for (const component of built) void component.stop().catch(() => undefined);
@@ -1049,7 +1069,7 @@ function initEffect(
           unshielded: () => components.unshielded,
           dust: () => components.dust,
         });
-        await facade.start(shieldedSecretKeys, dustSecretKey);
+        await facade.start(seeds);
         return facade;
       },
       catch: toInitError,
@@ -1083,32 +1103,8 @@ function deriveAddressEffect(
 ): Effect.Effect<string, WalletError | WalletKeyDerivationError> {
   return Effect.try({
     try: () => {
-      const seedBytes = hexToBytes(seed);
-
-      const hdWallet = HDWallet.fromSeed(seedBytes);
-      if (hdWallet.type !== 'seedOk') {
-        throw new WalletKeyDerivationError({
-          phase: 'init',
-          cause: hdWallet,
-          message: `HDWallet.fromSeed returned non-seedOk variant: ${hdWallet.type}`,
-        });
-      }
-
-      const derivationResult = hdWallet.hdWallet
-        .selectAccount(0)
-        .selectRoles([Roles.NightExternal])
-        .deriveKeysAt(0);
-
-      if (derivationResult.type !== 'keysDerived') {
-        throw new WalletKeyDerivationError({
-          phase: 'derive',
-          cause: derivationResult,
-          message: `deriveKeysAt(0) returned non-keysDerived variant: ${derivationResult.type}`,
-        });
-      }
-      hdWallet.hdWallet.clear();
-
-      const unshieldedKeystore = createKeystore(derivationResult.keys[Roles.NightExternal], networkId as 'undeployed');
+      const { unshielded } = deriveWalletSeeds(seed);
+      const unshieldedKeystore = createKeystore({ kind: 'schnorr', secret: unshielded }, networkId as 'undeployed');
       return unshieldedKeystore.getBech32Address().asString();
     },
     catch: (cause) =>
@@ -1273,7 +1269,7 @@ function getProvingProviderEffect(
 
 function balanceTxEffect(
   wallet: ConnectedAPI,
-  tx: UnboundTransaction,
+  tx: UnboundTx,
 ): Effect.Effect<FinalizedTransaction, WalletError | LaceTransferError | TransactionDeserializeError> {
   return Effect.tryPromise({
     try: async () => {
@@ -1292,12 +1288,12 @@ function balanceTxEffect(
           err.type && `type=${err.type}`,
           err.message && `message=${err.message}`,
         ].filter(Boolean).join(', ') || JSON.stringify(e);
-        console.error('[midday-sdk] Lace balanceUnsealedTransaction error:', e);
+        console.error('[midday-sdk] wallet balanceUnsealedTransaction error:', e);
         throw new LaceTransferError({
           operation: 'balance',
           detail: details,
           cause: e,
-          message: `Lace balanceUnsealedTransaction failed: ${details}`,
+          message: `Wallet balanceUnsealedTransaction failed: ${details}`,
         });
       }
 
@@ -1338,7 +1334,7 @@ function balanceTxEffect(
  */
 export async function balanceWithoutFees(
   wallet: ConnectedAPI,
-  tx: UnboundTransaction,
+  tx: UnboundTx,
 ): Promise<FinalizedTransaction> {
   const txHex = bytesToHex(tx.serialize());
   const result = await wallet.balanceUnsealedTransaction(txHex, { payFees: false });
@@ -1397,7 +1393,7 @@ function getBalanceFromSeedEffect(walletContext: WalletContext): Effect.Effect<W
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const s = state as any;
 
-      // DustWalletState (from @midnight-ntwrk/wallet-sdk-dust-wallet) exposes:
+      // DustWalletState (from @midnightntwrk/wallet-sdk-dust-wallet) exposes:
       //   balance(time: Date): bigint                                  — current DUST
       //   availableCoinsWithFullInfo(time: Date): readonly DustFullInfo[]  — per-UTXO info
       // Earlier versions of this code called `walletBalance` / `walletCap` which are
@@ -1491,16 +1487,10 @@ function shieldFromSeedEffect(
       const recipe = await walletContext.wallet.initSwap(
         desiredInputs,
         desiredOutputs,
-        {
-          shieldedSecretKeys: walletContext.shieldedSecretKeys,
-          dustSecretKey: walletContext.dustSecretKey,
-        },
         { ttl, payFees: true },
       );
 
-      const signed = await walletContext.wallet.signRecipe(recipe, (payload: Uint8Array) =>
-        walletContext.unshieldedKeystore.signData(payload),
-      );
+      const signed = await walletContext.wallet.signRecipe(recipe, walletContext.unshieldedKeystore.signDataAsync);
       const finalized = await walletContext.wallet.finalizeRecipe(signed);
       const txId = await walletContext.wallet.submitTransaction(finalized);
 
@@ -1617,7 +1607,7 @@ function registerDustFromSeedEffect(
       }
 
       const verifyingKey = walletContext.unshieldedKeystore.getPublicKey();
-      const signFn = (payload: Uint8Array) => walletContext.unshieldedKeystore.signData(payload);
+      const signFn = walletContext.unshieldedKeystore.signDataAsync;
 
       const recipe = direction === 'register'
         ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1767,7 +1757,11 @@ function createConnectedWalletHandle(
               if (!options?.feeRelay) return base;
               // Same wiring as Client.fromWallet: the wallet pays value, the relay pays dust.
               return {
-                walletProvider: { ...base.walletProvider, balanceTx: (tx) => balanceWithoutFees(connection.wallet, tx) },
+                walletProvider: createLedger9WalletProvider({
+                  getCoinPublicKey: () => base.walletProvider.getCoinPublicKey(),
+                  getEncryptionPublicKey: () => base.walletProvider.getEncryptionPublicKey(),
+                  balanceTx: (tx) => balanceWithoutFees(connection.wallet, tx),
+                }),
                 midnightProvider: FeeRelay.createRelayProvider(options.feeRelay.url),
               };
             },
@@ -1962,21 +1956,17 @@ export function createWalletProviders(
   wallet: ConnectedAPI,
   addresses: ShieldedAddresses,
 ): WalletProviders {
-  const walletProvider: WalletProvider = {
+  // The connector keeps its own transaction lifetime, so the framework's TTL is not passed on.
+  const walletProvider = createLedger9WalletProvider({
     getCoinPublicKey: () => addresses.shieldedCoinPublicKey as unknown as ReturnType<WalletProvider['getCoinPublicKey']>,
     getEncryptionPublicKey: () =>
       addresses.shieldedEncryptionPublicKey as unknown as ReturnType<WalletProvider['getEncryptionPublicKey']>,
+    balanceTx: (tx) => runEffectPromise(balanceTxEffect(wallet, tx)),
+  });
 
-    async balanceTx(tx: UnboundTransaction, _ttl?: Date): Promise<FinalizedTransaction> {
-      return runEffectPromise(balanceTxEffect(wallet, tx));
-    },
-  };
-
-  const midnightProvider: MidnightProvider = {
-    async submitTx(tx: FinalizedTransaction): Promise<TransactionId> {
-      return runEffectPromise(submitTxEffect(wallet, tx));
-    },
-  };
+  const midnightProvider = createLedger9MidnightProvider((tx) =>
+    runEffectPromise(submitTxEffect(wallet, tx.deserialize({ v9: Transaction }) as FinalizedTransaction)),
+  );
 
   return { walletProvider, midnightProvider };
 }
@@ -2117,7 +2107,7 @@ export const WalletConnectorLive: Layer.Layer<WalletConnectorService> = Layer.su
 export interface WalletProviderServiceImpl {
   readonly balanceTx: (
     wallet: ConnectedAPI,
-    tx: UnboundTransaction,
+    tx: UnboundTx,
   ) => Effect.Effect<FinalizedTransaction, WalletError | LaceTransferError | TransactionDeserializeError>;
   readonly submitTx: (wallet: ConnectedAPI, tx: FinalizedTransaction) => Effect.Effect<TransactionId, WalletError>;
 }

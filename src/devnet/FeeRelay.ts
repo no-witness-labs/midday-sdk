@@ -9,19 +9,16 @@
  */
 
 import { createServer, type Server } from 'http';
-import * as ledger from '@midnight-ntwrk/ledger-v8';
-import { WalletFacade, WalletEntrySchema, mergeWalletEntries } from '@midnight-ntwrk/wallet-sdk-facade';
-import { HDWallet, Roles } from '@midnight-ntwrk/wallet-sdk-hd';
-import { ShieldedWallet } from '@midnight-ntwrk/wallet-sdk-shielded';
-import { DustWallet } from '@midnight-ntwrk/wallet-sdk-dust-wallet';
+import { WalletFacade, WalletEntrySchema, mergeWalletEntries } from '@midnightntwrk/wallet-sdk-facade';
+import { HDWallet, Roles, type WalletSeeds } from '@midnightntwrk/wallet-sdk-hd';
+import { ShieldedWallet } from '@midnightntwrk/wallet-sdk-shielded';
+import { DustWallet } from '@midnightntwrk/wallet-sdk-dust-wallet';
 import {
   createKeystore,
   PublicKey as UnshieldedPublicKey,
   UnshieldedWallet,
-} from '@midnight-ntwrk/wallet-sdk-unshielded-wallet';
-import { InMemoryTransactionHistoryStorage } from '@midnight-ntwrk/wallet-sdk-abstractions';
-import { Transaction, type FinalizedTransaction } from '@midnight-ntwrk/ledger-v8';
-import type { UnboundTransaction } from '@midnight-ntwrk/midnight-js-types';
+} from '@midnightntwrk/wallet-sdk-unshielded-wallet';
+import { InMemoryTransactionHistoryStorage } from '@midnightntwrk/wallet-sdk-abstractions';
 
 import { DEFAULT_TX_TTL_MS, type NetworkConfig } from '../Config.js';
 import { hexToBytes, bytesToHex } from '../Utils.js';
@@ -38,8 +35,7 @@ const GENESIS_WALLET_SEED = '000000000000000000000000000000000000000000000000000
 // =============================================================================
 
 interface DerivedKeys {
-  shieldedSecretKeys: ledger.ZswapSecretKeys;
-  dustSecretKey: ledger.DustSecretKey;
+  seeds: WalletSeeds;
   unshieldedKeystore: ReturnType<typeof createKeystore>;
 }
 
@@ -60,14 +56,14 @@ function deriveKeys(seed: string, networkId: string): DerivedKeys {
   }
   hdWallet.hdWallet.clear();
 
-  const shieldedSecretKeys = ledger.ZswapSecretKeys.fromSeed(derivationResult.keys[Roles.Zswap]);
-  const dustSecretKey = ledger.DustSecretKey.fromSeed(derivationResult.keys[Roles.Dust]);
-  const unshieldedKeystore = createKeystore(
-    derivationResult.keys[Roles.NightExternal],
-    networkId as 'undeployed',
-  );
+  const seeds: WalletSeeds = {
+    shielded: derivationResult.keys[Roles.Zswap],
+    unshielded: derivationResult.keys[Roles.NightExternal],
+    dust: derivationResult.keys[Roles.Dust],
+  };
+  const unshieldedKeystore = createKeystore({ kind: 'schnorr', secret: seeds.unshielded }, networkId as 'undeployed');
 
-  return { shieldedSecretKeys, dustSecretKey, unshieldedKeystore };
+  return { seeds, unshieldedKeystore };
 }
 
 async function createWallet(keys: DerivedKeys, networkConfig: NetworkConfig): Promise<WalletFacade> {
@@ -83,24 +79,17 @@ async function createWallet(keys: DerivedKeys, networkConfig: NetworkConfig): Pr
       indexerHttpUrl: networkConfig.indexer,
       indexerWsUrl: networkConfig.indexerWS,
     },
-    indexerUrl: networkConfig.indexerWS,
     txHistoryStorage: new InMemoryTransactionHistoryStorage(WalletEntrySchema, mergeWalletEntries),
   };
 
   const wallet = await WalletFacade.init({
     configuration,
-    shielded: () => ShieldedWallet(configuration).startWithSecretKeys(keys.shieldedSecretKeys),
-    unshielded: () =>
-      UnshieldedWallet(configuration).startWithPublicKey(
-        UnshieldedPublicKey.fromKeyStore(keys.unshieldedKeystore),
-      ),
-    dust: () =>
-      DustWallet(configuration).startWithSecretKey(
-        keys.dustSecretKey,
-        ledger.LedgerParameters.initialParameters().dust,
-      ),
+    shielded: (config) => ShieldedWallet(config).startWithSeed(keys.seeds.shielded),
+    unshielded: (config) =>
+      UnshieldedWallet(config).startWithPublicKey(UnshieldedPublicKey.fromKeyStore(keys.unshieldedKeystore)),
+    dust: (config) => DustWallet(config).startWithSeed(keys.seeds.dust),
   });
-  await wallet.start(keys.shieldedSecretKeys, keys.dustSecretKey);
+  await wallet.start(keys.seeds);
 
   // Wait for sync
   await wallet.waitForSyncedState();
@@ -208,30 +197,17 @@ export function startServer(networkConfig: NetworkConfig, options: ServerOptions
 
           const { wallet, keys } = await getWallet();
 
-          // Deserialize UnboundTransaction from hex
-          // UnboundTransaction = Transaction<SignatureEnabled, Proof, PreBinding>
-          const txBytes = hexToBytes(txHex);
-          const unboundTx = Transaction.deserialize(
-            'signature' as ledger.SignatureEnabled['instance'],
-            'proof' as ledger.Proof['instance'],
-            'pre-binding' as ledger.PreBinding['instance'],
-            txBytes,
-          ) as unknown as UnboundTransaction;
+          // The facade runs its own ledger copy, so the transaction crosses as bytes.
+          const unboundTx = wallet.adoptTransaction(hexToBytes(txHex), 'Unbound');
 
           // Balance and finalize using genesis wallet
           const ttl = new Date(Date.now() + txTtlMs);
           const recipe = await wallet.balanceUnboundTransaction(
             unboundTx,
-            {
-              shieldedSecretKeys: keys.shieldedSecretKeys,
-              dustSecretKey: keys.dustSecretKey,
-            },
             { ttl },
           );
 
-          const signedRecipe = await wallet.signRecipe(recipe, (payload: Uint8Array) =>
-            keys.unshieldedKeystore.signData(payload),
-          );
+          const signedRecipe = await wallet.signRecipe(recipe, keys.unshieldedKeystore.signDataAsync);
 
           const finalized = await wallet.finalizeRecipe(signedRecipe);
 
@@ -265,30 +241,17 @@ export function startServer(networkConfig: NetworkConfig, options: ServerOptions
 
           const { wallet, keys } = await getWallet();
 
-          // Deserialize FinalizedTransaction from hex
-          // FinalizedTransaction = Transaction<SignatureEnabled, Proof, Binding>
-          const txBytes = hexToBytes(txHex);
-          const finalizedTx = Transaction.deserialize(
-            'signature' as ledger.SignatureEnabled['instance'],
-            'proof' as ledger.Proof['instance'],
-            'binding' as ledger.Binding['instance'],
-            txBytes,
-          ) as unknown as FinalizedTransaction;
+          // The facade runs its own ledger copy, so the transaction crosses as bytes.
+          const finalizedTx = wallet.adoptTransaction(hexToBytes(txHex), 'Finalized');
 
           // Balance with dust only — relay covers fees, user already added value inputs
           const ttl = new Date(Date.now() + txTtlMs);
           const recipe = await wallet.balanceFinalizedTransaction(
             finalizedTx,
-            {
-              shieldedSecretKeys: keys.shieldedSecretKeys,
-              dustSecretKey: keys.dustSecretKey,
-            },
             { ttl, tokenKindsToBalance: ['dust'] },
           );
 
-          const signedRecipe = await wallet.signRecipe(recipe, (payload: Uint8Array) =>
-            keys.unshieldedKeystore.signData(payload),
-          );
+          const signedRecipe = await wallet.signRecipe(recipe, keys.unshieldedKeystore.signDataAsync);
 
           const finalized = await wallet.finalizeRecipe(signedRecipe);
 
@@ -322,15 +285,8 @@ export function startServer(networkConfig: NetworkConfig, options: ServerOptions
 
           const { wallet } = await getWallet();
 
-          // Deserialize FinalizedTransaction from hex
-          // FinalizedTransaction = Transaction<SignatureEnabled, Proof, Binding>
-          const txBytes = hexToBytes(txHex);
-          const finalizedTx = Transaction.deserialize(
-            'signature' as ledger.SignatureEnabled['instance'],
-            'proof' as ledger.Proof['instance'],
-            'binding' as ledger.Binding['instance'],
-            txBytes,
-          ) as unknown as FinalizedTransaction;
+          // The facade runs its own ledger copy, so the transaction crosses as bytes.
+          const finalizedTx = wallet.adoptTransaction(hexToBytes(txHex), 'Finalized');
 
           // Submit via genesis wallet
           const txId = await wallet.submitTransaction(finalizedTx);

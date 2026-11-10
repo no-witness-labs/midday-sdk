@@ -133,15 +133,15 @@ describe('Witness Contract E2E Tests', () => {
         // init takes the hash as an argument; the witness (and so the stored
         // private state) first runs on increment.
         await deployed.actions.increment(1n);
-        const stored = await deployed.providers.privateStateProvider.get('secret-counter-join-test');
+        const stored = await deployed.providers.privateStateProvider.forContract(deployed.address).get('secret-counter-join-test');
         expect(stored).toEqual({ password: SECRET_PASSWORD });
 
         // A restart looks like this: same store, join by address, no initial state given.
         const joined = await loaded.join(deployed.address);
-        expect(await joined.providers.privateStateProvider.get('secret-counter-join-test')).toEqual({ password: SECRET_PASSWORD });
+        expect(await joined.providers.privateStateProvider.forContract(joined.address).get('secret-counter-join-test')).toEqual({ password: SECRET_PASSWORD });
 
         const replaced = await loaded.join(deployed.address, { initialPrivateState: { password: 'replaced' } });
-        expect(await replaced.providers.privateStateProvider.get('secret-counter-join-test')).toEqual({ password: 'replaced' });
+        expect(await replaced.providers.privateStateProvider.forContract(replaced.address).get('secret-counter-join-test')).toEqual({ password: 'replaced' });
       });
     });
 

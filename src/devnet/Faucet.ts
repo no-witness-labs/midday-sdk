@@ -10,24 +10,24 @@
 
 import { Effect } from 'effect';
 import { createServer, type Server } from 'http';
-import * as ledger from '@midnight-ntwrk/ledger-v8';
-import { WalletFacade, WalletEntrySchema, mergeWalletEntries } from '@midnight-ntwrk/wallet-sdk-facade';
-import { HDWallet, Roles } from '@midnight-ntwrk/wallet-sdk-hd';
-import { ShieldedWallet } from '@midnight-ntwrk/wallet-sdk-shielded';
-import { DustWallet } from '@midnight-ntwrk/wallet-sdk-dust-wallet';
+import * as ledger from '@midnightntwrk/ledger-v9';
+import { WalletFacade, WalletEntrySchema, mergeWalletEntries } from '@midnightntwrk/wallet-sdk-facade';
+import { HDWallet, Roles, type WalletSeeds } from '@midnightntwrk/wallet-sdk-hd';
+import { ShieldedWallet } from '@midnightntwrk/wallet-sdk-shielded';
+import { DustWallet } from '@midnightntwrk/wallet-sdk-dust-wallet';
 import {
   createKeystore,
   PublicKey as UnshieldedPublicKey,
   UnshieldedWallet,
-} from '@midnight-ntwrk/wallet-sdk-unshielded-wallet';
-import { InMemoryTransactionHistoryStorage } from '@midnight-ntwrk/wallet-sdk-abstractions';
+} from '@midnightntwrk/wallet-sdk-unshielded-wallet';
+import { InMemoryTransactionHistoryStorage } from '@midnightntwrk/wallet-sdk-abstractions';
 import {
   MidnightBech32m,
   ShieldedAddress,
   ShieldedCoinPublicKey,
   ShieldedEncryptionPublicKey,
   UnshieldedAddress,
-} from '@midnight-ntwrk/wallet-sdk-address-format';
+} from '@midnightntwrk/wallet-sdk-address-format';
 
 import type { NetworkConfig } from '../Config.js';
 import { hexToBytes } from '../Utils.js';
@@ -65,8 +65,7 @@ export interface FundResult {
 }
 
 interface DerivedKeys {
-  shieldedSecretKeys: ledger.ZswapSecretKeys;
-  dustSecretKey: ledger.DustSecretKey;
+  seeds: WalletSeeds;
   unshieldedKeystore: ReturnType<typeof createKeystore>;
 }
 
@@ -90,14 +89,14 @@ function deriveKeys(seed: string, networkId: string): DerivedKeys {
   }
   hdWallet.hdWallet.clear();
 
-  const shieldedSecretKeys = ledger.ZswapSecretKeys.fromSeed(derivationResult.keys[Roles.Zswap]);
-  const dustSecretKey = ledger.DustSecretKey.fromSeed(derivationResult.keys[Roles.Dust]);
-  const unshieldedKeystore = createKeystore(
-    derivationResult.keys[Roles.NightExternal],
-    networkId as 'undeployed',
-  );
+  const seeds: WalletSeeds = {
+    shielded: derivationResult.keys[Roles.Zswap],
+    unshielded: derivationResult.keys[Roles.NightExternal],
+    dust: derivationResult.keys[Roles.Dust],
+  };
+  const unshieldedKeystore = createKeystore({ kind: 'schnorr', secret: seeds.unshielded }, networkId as 'undeployed');
 
-  return { shieldedSecretKeys, dustSecretKey, unshieldedKeystore };
+  return { seeds, unshieldedKeystore };
 }
 
 /**
@@ -116,24 +115,17 @@ async function createWallet(keys: DerivedKeys, networkConfig: NetworkConfig): Pr
       indexerHttpUrl: networkConfig.indexer,
       indexerWsUrl: networkConfig.indexerWS,
     },
-    indexerUrl: networkConfig.indexerWS,
     txHistoryStorage: new InMemoryTransactionHistoryStorage(WalletEntrySchema, mergeWalletEntries),
   };
 
   const wallet = await WalletFacade.init({
     configuration,
-    shielded: () => ShieldedWallet(configuration).startWithSecretKeys(keys.shieldedSecretKeys),
-    unshielded: () =>
-      UnshieldedWallet(configuration).startWithPublicKey(
-        UnshieldedPublicKey.fromKeyStore(keys.unshieldedKeystore),
-      ),
-    dust: () =>
-      DustWallet(configuration).startWithSecretKey(
-        keys.dustSecretKey,
-        ledger.LedgerParameters.initialParameters().dust,
-      ),
+    shielded: (config) => ShieldedWallet(config).startWithSeed(keys.seeds.shielded),
+    unshielded: (config) =>
+      UnshieldedWallet(config).startWithPublicKey(UnshieldedPublicKey.fromKeyStore(keys.unshieldedKeystore)),
+    dust: (config) => DustWallet(config).startWithSeed(keys.seeds.dust),
   });
-  await wallet.start(keys.shieldedSecretKeys, keys.dustSecretKey);
+  await wallet.start(keys.seeds);
 
   // Wait for sync
   await wallet.waitForSyncedState();
@@ -192,17 +184,11 @@ export async function fundShielded(
           ],
         },
       ],
-      {
-        shieldedSecretKeys: genesisKeys.shieldedSecretKeys,
-        dustSecretKey: genesisKeys.dustSecretKey,
-      },
       { ttl, payFees: true },
     );
 
     // Sign the transaction
-    const signedRecipe = await genesisWallet.signRecipe(recipe, (payload: Uint8Array) =>
-      genesisKeys.unshieldedKeystore.signData(payload),
-    );
+    const signedRecipe = await genesisWallet.signRecipe(recipe, genesisKeys.unshieldedKeystore.signDataAsync);
 
     // Finalize and submit
     const finalized = await genesisWallet.finalizeRecipe(signedRecipe);
@@ -265,17 +251,11 @@ export async function fundUnshielded(
           ],
         },
       ],
-      {
-        shieldedSecretKeys: genesisKeys.shieldedSecretKeys,
-        dustSecretKey: genesisKeys.dustSecretKey,
-      },
       { ttl, payFees: true },
     );
 
     // Sign the transaction
-    const signedRecipe = await genesisWallet.signRecipe(recipe, (payload: Uint8Array) =>
-      genesisKeys.unshieldedKeystore.signData(payload),
-    );
+    const signedRecipe = await genesisWallet.signRecipe(recipe, genesisKeys.unshieldedKeystore.signDataAsync);
 
     // Finalize and submit
     const finalized = await genesisWallet.finalizeRecipe(signedRecipe);

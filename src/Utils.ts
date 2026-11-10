@@ -112,7 +112,7 @@ export function hexToPublicKey(hex: string): Uint8Array {
 // Coin Creation
 // =============================================================================
 
-import { encodeRawTokenType, nativeToken } from '@midnight-ntwrk/ledger-v8';
+import { encodeRawTokenType, nativeToken } from '@midnightntwrk/ledger-v9';
 
 /**
  * Coin information containing nonce, color, and value.

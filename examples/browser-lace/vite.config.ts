@@ -76,9 +76,8 @@ export default defineConfig({
     // but include deps that contain Wasm so vite-plugin-wasm can handle them
     exclude: ['@no-witness-labs/midday-sdk'],
     include: [
-      '@midnight-ntwrk/ledger-v8',
+      '@midnightntwrk/ledger-v9',
       '@midnight-ntwrk/compact-runtime',
-      '@midnight-ntwrk/compact-js',
     ],
   },
   resolve: {

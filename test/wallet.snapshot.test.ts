@@ -1,13 +1,13 @@
 import { readFileSync } from 'fs';
 import { Effect, Either } from 'effect';
 import { beforeAll, describe, expect, it } from 'vitest';
-import * as ledger from '@midnight-ntwrk/ledger-v8';
-import { HDWallet, Roles } from '@midnight-ntwrk/wallet-sdk-hd';
-import { ShieldedWallet } from '@midnight-ntwrk/wallet-sdk-shielded';
-import { DustWallet } from '@midnight-ntwrk/wallet-sdk-dust-wallet';
-import { createKeystore, PublicKey, UnshieldedWallet } from '@midnight-ntwrk/wallet-sdk-unshielded-wallet';
-import { InMemoryTransactionHistoryStorage } from '@midnight-ntwrk/wallet-sdk-abstractions';
-import { WalletEntrySchema, mergeWalletEntries } from '@midnight-ntwrk/wallet-sdk-facade';
+import * as ledger from '@midnightntwrk/ledger-v9';
+import { HDWallet, Roles, type WalletSeeds } from '@midnightntwrk/wallet-sdk-hd';
+import { ShieldedWallet } from '@midnightntwrk/wallet-sdk-shielded';
+import { DustWallet } from '@midnightntwrk/wallet-sdk-dust-wallet';
+import { createKeystore, PublicKey, UnshieldedWallet } from '@midnightntwrk/wallet-sdk-unshielded-wallet';
+import { InMemoryTransactionHistoryStorage } from '@midnightntwrk/wallet-sdk-abstractions';
+import { WalletEntrySchema, WalletFacade, mergeWalletEntries } from '@midnightntwrk/wallet-sdk-facade';
 import type { NetworkConfig } from '../src/Config.js';
 import * as Wallet from '../src/Wallet.js';
 
@@ -30,10 +30,16 @@ function deriveKeys(seedHex: string) {
   if (hd.type !== 'seedOk') throw new Error('bad seed');
   const derived = hd.hdWallet.selectAccount(0).selectRoles([Roles.Zswap, Roles.NightExternal, Roles.Dust]).deriveKeysAt(0);
   if (derived.type !== 'keysDerived') throw new Error('derive failed');
+  const seeds: WalletSeeds = {
+    shielded: derived.keys[Roles.Zswap],
+    unshielded: derived.keys[Roles.NightExternal],
+    dust: derived.keys[Roles.Dust],
+  };
   return {
-    shielded: ledger.ZswapSecretKeys.fromSeed(derived.keys[Roles.Zswap]),
-    dust: ledger.DustSecretKey.fromSeed(derived.keys[Roles.Dust]),
-    keystore: createKeystore(derived.keys[Roles.NightExternal], NETWORK_ID),
+    seeds,
+    shielded: ledger.ZswapSecretKeys.fromSeed(seeds.shielded),
+    dust: ledger.DustSecretKey.fromSeed(seeds.dust),
+    keystore: createKeystore({ kind: 'schnorr', secret: seeds.unshielded }, NETWORK_ID),
   };
 }
 
@@ -41,18 +47,17 @@ function deriveKeys(seedHex: string) {
 async function componentStates(seedHex: string) {
   const keys = deriveKeys(seedHex);
   const txHistoryStorage = new InMemoryTransactionHistoryStorage(WalletEntrySchema, mergeWalletEntries);
-  const configuration = {
+  const configuration = WalletFacade.resolveConfiguration({
     networkId: NETWORK_ID,
     costParameters: { additionalFeeOverhead: 0n, feeBlocksMargin: 5 },
     relayURL: new URL(OFFLINE_CONFIG.node),
     provingServerUrl: new URL(OFFLINE_CONFIG.proofServer),
     indexerClientConnection: { indexerHttpUrl: OFFLINE_CONFIG.indexer, indexerWsUrl: OFFLINE_CONFIG.indexerWS },
-    indexerUrl: OFFLINE_CONFIG.indexerWS,
     txHistoryStorage,
-  } as const;
-  const shielded = ShieldedWallet(configuration).startWithSecretKeys(keys.shielded);
-  const unshielded = UnshieldedWallet(configuration).startWithPublicKey(PublicKey.fromKeyStore(keys.keystore));
-  const dust = DustWallet(configuration).startWithSecretKey(keys.dust, ledger.LedgerParameters.initialParameters().dust);
+  } as const);
+  const shielded = await ShieldedWallet(configuration).startWithSeed(keys.seeds.shielded);
+  const unshielded = await UnshieldedWallet(configuration).startWithPublicKey(PublicKey.fromKeyStore(keys.keystore));
+  const dust = await DustWallet(configuration).startWithSeed(keys.seeds.dust);
   try {
     return {
       shielded: await shielded.serializeState(),
@@ -62,7 +67,7 @@ async function componentStates(seedHex: string) {
       expectedKeys: {
         coinPublicKey: String(keys.shielded.coinPublicKey),
         encryptionPublicKey: String(keys.shielded.encryptionPublicKey),
-        unshieldedPublicKey: PublicKey.fromKeyStore(keys.keystore).publicKey,
+        unshieldedPublicKey: PublicKey.fromKeyStore(keys.keystore).publicKey.value,
         dustPublicKey: keys.dust.publicKey,
       } satisfies Wallet.SnapshotExpectedKeys,
     };
